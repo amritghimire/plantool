@@ -11,12 +11,18 @@ mkdir -p "$TMP/repo" && cd "$TMP/repo"
 git init -q -b main && git config user.email t@t && git config user.name t
 echo hi > a.txt && git add . && git commit -qm init
 
-expect() { local out; out="$("${@:2}")"; grep -q -- "$1" <<<"$out" || { echo "FAIL: expected '$1' in output of: ${*:2}"; echo "$out"; exit 1; }; }
+expect() {
+  local flag="" pat="$1"; shift
+  if [ "$pat" = "-E" ]; then flag="-E"; pat="$1"; shift; fi
+  local out; out="$("$@")"
+  grep -q $flag -- "$pat" <<<"$out" || { echo "FAIL: expected '$pat' in output of: $*"; echo "$out"; exit 1; }
+}
 
 expect "created repo/smoke-test" "$BIN" new smoke-test --title "Smoke" --no-open
 PLAN="$("$BIN" session doc path --session smoke-test --kind plan)"
 printf '# Plan\n\nalpha\n\n### Phase 1: A\n- [ ] one\n' > "$PLAN"
-expect captured "$BIN" session doc touch --session smoke-test --kind plan
+# The watcher may capture the file before the explicit touch; either way a sha must be reported.
+expect -E "^(captured|unchanged) [0-9a-f]{64}$" "$BIN" session doc touch --session smoke-test --kind plan
 expect plan-review "$BIN" session get --session smoke-test
 ID="$("$BIN" session comment add --session smoke-test --kind plan --match alpha --body hello | cut -d' ' -f1)"
 expect "\"id\": \"$ID\"" "$BIN" session comment list --session smoke-test --json
