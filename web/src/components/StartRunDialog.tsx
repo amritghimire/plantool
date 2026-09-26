@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { PERMISSION_MODES, type PermissionMode, type Run } from "../types";
+import { PERMISSION_MODES, type ImplementationMode, type PermissionMode, type Run } from "../types";
 import { relTime } from "../lib/format";
 
 export type RunStage = "research" | "plan" | "implement" | "critique";
@@ -14,7 +14,7 @@ interface ProviderInfo {
   models: { id: string; label: string }[];
 }
 
-export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId, onClose, onStarted }: { stage: RunStage; sessionKey: string; runs: Run[]; resumeId?: string; onClose: () => void; onStarted: (id: string) => void }) {
+export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId, initialMode, onClose, onStarted }: { stage: RunStage; sessionKey: string; runs: Run[]; resumeId?: string; initialMode?: ImplementationMode; onClose: () => void; onStarted: (id: string) => void }) {
   const resumeTarget = resumeId ? runs.find((r) => r.id === resumeId) : undefined;
   const [stage, setStage] = useState<RunStage>(initialStage);
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
@@ -40,6 +40,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   });
   const [preview, setPreview] = useState<string | null>(null);
   const [worktree, setWorktree] = useState(true);
+  const [implementationMode, setImplementationMode] = useState<ImplementationMode>(resumeTarget?.implementation_mode ?? initialMode ?? "all-at-once");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -47,10 +48,11 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   }, []);
   useEffect(() => {
     const t = window.setTimeout(() => {
-      api.prompt(sessionKey, resume ? "resume" : stage, prompt || undefined).then((r) => setPreview(r.prompt)).catch(() => setPreview(null));
+      const mode = resume ? runs.find((r) => r.id === resume)?.implementation_mode ?? implementationMode : implementationMode;
+      api.prompt(sessionKey, resume && mode !== "step-by-step" ? "resume" : stage, prompt || undefined, stage === "implement" ? mode : undefined, resume || undefined).then((r) => setPreview(r.prompt)).catch(() => setPreview(null));
     }, 250);
     return () => window.clearTimeout(t);
-  }, [sessionKey, stage, prompt, resume]);
+  }, [sessionKey, stage, prompt, resume, implementationMode, runs]);
   useEffect(() => {
     if (resume && !resumable.some((r) => r.id === resume)) setResume("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -66,7 +68,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
       // ignore
     }
     try {
-      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined });
+      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
       onStarted(r.run.id);
       onClose();
     } catch (e) {
@@ -105,7 +107,12 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         {resumable.length > 0 && (
           <label>
             Continue from
-            <select value={resume} onChange={(e) => setResume(e.target.value)}>
+            <select value={resume} onChange={(e) => {
+              const id = e.target.value;
+              setResume(id);
+              const previous = runs.find((r) => r.id === id);
+              if (previous?.implementation_mode) setImplementationMode(previous.implementation_mode);
+            }}>
               <option value="">a fresh session (full stage prompt)</option>
               {resumable.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -142,6 +149,16 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           </select>
           <span className="muted small">{PERMISSION_MODES.find((m) => m.id === permission)?.hint}</span>
         </label>
+        {stage === "implement" && (
+          <label>
+            Implementation pace
+            <select value={implementationMode} disabled={!!resume} onChange={(e) => setImplementationMode(e.target.value as ImplementationMode)}>
+              <option value="all-at-once">All at once</option>
+              <option value="step-by-step">Step by step</option>
+            </select>
+            <span className="muted small">{implementationMode === "step-by-step" ? "One plan ticket per turn. Review and commit each milestone before continuing." : "Work through the full plan, then review the whole change."}</span>
+          </label>
+        )}
         {stage === "implement" && (
           <label className="check">
             <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />

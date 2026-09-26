@@ -172,7 +172,7 @@ async fn brief_and_prompt() {
 
     let (st, _) = call(app, "DELETE", &format!("/api/sessions/{key}/runs/nope"), None, true, "127.0.0.1").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
-    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, task: None, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
+    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, implementation_mode: Default::default(), milestone_pending: false, milestone_review: None, task: None, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
     live.upsert_run(stopped, |r| plantool_daemon::events::LiveEvent::RunStarted { run: r }).unwrap();
     live.append_run_event("r1", 1, json!({ "type": "status", "label": "x" })).unwrap();
     assert!(live.store.run_log_path("r1").is_file());
@@ -204,6 +204,40 @@ async fn brief_and_prompt() {
     let (st, _) = call(app, "GET", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     assert!(h.state.registry.get_key(&key).is_none());
+}
+
+#[tokio::test]
+async fn step_mode_previews_one_ticket_and_reviews_uncommitted_changes() {
+    let h = harness();
+    let app = &h.app;
+    let (_, v) = call(app, "POST", "/api/sessions", Some(json!({ "slug": "steps", "cwd": h.repo })), false, "127.0.0.1").await;
+    let key = v["session"]["key"].as_str().unwrap().to_string();
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/implement?implementation_mode=step-by-step"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["prompt"].as_str().unwrap().contains("exactly one unchecked plan ticket"));
+
+    let live = h.state.registry.get_key(&key).unwrap();
+    live.set_stage(plantool_core::Stage::Implementing, plantool_core::Actor::Human).unwrap();
+    let run = plantool_core::Run {
+        id: "step-run".into(), provider: plantool_core::Provider::Claude,
+        provider_session_id: None, stage: plantool_core::Stage::Implementing,
+        implementation_mode: plantool_core::ImplementationMode::StepByStep,
+        milestone_pending: true, milestone_review: None,
+        task: Some("implement".into()), cwd: h.repo.clone(), status: plantool_core::RunStatus::Idle,
+        model: None, permission_mode: Default::default(), started_at: plantool_core::now(),
+        ended_at: None, error: None, seq: 0,
+    };
+    live.upsert_run(run, |r| plantool_daemon::events::LiveEvent::RunStarted { run: r }).unwrap();
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/changes"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["base"], "HEAD");
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/implement?implementation_mode=step-by-step&resume_run=step-run"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["prompt"].as_str().unwrap().contains("Do not start another plan ticket yet"));
+    let (st, _) = call(app, "POST", &format!("/api/sessions/{key}/runs/step-run/milestone/approve"), Some(json!({})), false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, _) = call(app, "POST", &format!("/api/sessions/{key}/runs/step-run/milestone/approve"), Some(json!({})), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::CONFLICT);
 }
 
 #[tokio::test]

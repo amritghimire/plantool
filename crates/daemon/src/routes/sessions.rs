@@ -166,6 +166,10 @@ async fn worktree(State(state): State<AppState>, Path((repo, slug)): Path<(Strin
 pub struct PromptQuery {
     #[serde(default)]
     pub extra: Option<String>,
+    #[serde(default)]
+    pub implementation_mode: plantool_core::ImplementationMode,
+    #[serde(default)]
+    pub resume_run: Option<String>,
 }
 
 async fn prompt(State(state): State<AppState>, Path((repo, slug, stage)): Path<(String, String, String)>, Query(q): Query<PromptQuery>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -175,7 +179,16 @@ async fn prompt(State(state): State<AppState>, Path((repo, slug, stage)): Path<(
         st if crate::prompts::STAGES.contains(&st) => st,
         other => return Err(bad_request(format!("stage must be research, plan, implement, review, resume, critique or next (got {other})"))),
     };
-    let text = crate::prompts::render_at(&state.config.home, stage, &s.session(), &s.store.dir, q.extra.as_deref(), s.stage());
+    let reviewing = if stage == "implement" && q.implementation_mode == plantool_core::ImplementationMode::StepByStep {
+        q.resume_run.as_deref().and_then(|id| s.run(id)).or_else(|| s.runs().into_iter()
+            .filter(|r| r.task.as_deref() == Some("implement") && r.implementation_mode == plantool_core::ImplementationMode::StepByStep && r.milestone_pending)
+            .max_by(|a, b| a.started_at.cmp(&b.started_at)))
+    } else { None };
+    let text = if let Some(r) = reviewing.filter(|r| r.milestone_pending) {
+        crate::prompts::render_milestone_review(&s.session(), &s.store.dir, r.milestone_review.as_ref(), q.extra.as_deref())
+    } else {
+        crate::prompts::render_run(&state.config.home, stage, &s.session(), &s.store.dir, q.extra.as_deref(), s.stage(), q.implementation_mode)
+    };
     Ok(Json(json!({ "stage": stage, "prompt": text, "session_stage": s.stage() })))
 }
 

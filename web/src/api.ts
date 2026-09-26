@@ -67,11 +67,17 @@ export const api = {
   navigate: (key: string, target: Partial<NavTarget>) => request<{ viewers: number }>("POST", `/api/sessions/${key}/navigate`, target),
   changes: (key: string) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes`),
   openChanges: (key: string) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, {}),
-  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
-  prompt: (key: string, stage: PromptStage, extra?: string) =>
-    request<{ stage: Exclude<PromptStage, "next">; prompt: string; session_stage: Stage }>("GET", `/api/sessions/${key}/prompt/${stage}${extra ? `?extra=${encodeURIComponent(extra)}` : ""}`),
+  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  prompt: (key: string, stage: PromptStage, extra?: string, implementationMode?: string, resumeRun?: string) => {
+    const query = new URLSearchParams();
+    if (extra) query.set("extra", extra);
+    if (implementationMode) query.set("implementation_mode", implementationMode);
+    if (resumeRun) query.set("resume_run", resumeRun);
+    return request<{ stage: Exclude<PromptStage, "next">; prompt: string; session_stage: Stage }>("GET", `/api/sessions/${key}/prompt/${stage}${query.size ? `?${query}` : ""}`);
+  },
   setBrief: (key: string, brief: string | null) => request<{ brief: string | null; session: Session }>("POST", `/api/sessions/${key}/brief`, { brief }),
   runInput: (key: string, id: string, body: unknown) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/input`, body),
+  approveMilestone: (key: string, id: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/milestone/approve`, {}),
   stopRun: (key: string, id: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/stop`, {}),
   removeRun: (key: string, id: string) => request<{ ok: boolean; removed: string }>("DELETE", `/api/sessions/${key}/runs/${id}`),
   runEvents: (key: string, id: string, since = 0) => request<{ events: { seq: number; at: string; event: unknown }[] }>("GET", `/api/sessions/${key}/runs/${id}/events?since=${since}`),

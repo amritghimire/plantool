@@ -116,12 +116,22 @@ mid-run with `set_permission_mode`); `allow-all` also makes the daemon answer an
 `can_use_tool` request with allow. Codex gets it as `approvalPolicy` and the sandbox policy on the
 next `turn/start`.
 
+Implementation runs also store `implementation_mode` (`all-at-once` by default, or
+`step-by-step`). Step mode adds a one-ticket stop to the implement prompt. The agent leaves the
+stage at `implementing` between tickets. On turn completion, the daemon opens or refreshes a
+milestone review and watches difftool for human comments. It sends new comment ids to the same
+provider run. The sidebar approves a milestone only when the run is idle and difftool has no open
+human comments; approval sends the next turn. A stopped run can resume its provider session, or
+start a fresh step run with its pending review.
+
 ## Change review
 
 `changes.rs` prefers `difftool` (`PLANTOOL_DIFFTOOL_PATH`, then `PATH`). The first time it runs
 `difftool diff -C <checkout> <base> --design <plan.md> --no-open`, stores the review URL on the
 session, and then `difftool open <review>` so difftool's own daemon opens the browser tab. Later
-clicks run `difftool refresh <review>` and `open` again. The page never navigates to the review
+clicks run `difftool refresh <review>` and `open` again. Step mode opens a new review against
+`HEAD` for each milestone and refreshes that review during feedback, so committed milestones drop
+out of the next diff. The page never navigates to the review
 itself, because a navigation from the plantool origin is rejected by difftool as cross-site.
 An implement run creates the session's worktree first (`ensure_worktree`, also
 `POST …/worktree` and `plantool session worktree`) unless the run says `worktree: false`. Without difftool it launches `git difftool --dir-diff --no-prompt <base>` (retrying

@@ -1,4 +1,4 @@
-use plantool_core::{DocKind, Session};
+use plantool_core::{ChangeReview, DocKind, ImplementationMode, Session};
 use std::path::Path;
 
 pub const STAGES: [&str; 6] = ["research", "plan", "implement", "review", "resume", "critique"];
@@ -133,6 +133,21 @@ pub fn render_at(home: &Path, stage: &str, session: &Session, session_dir: &Path
     )
 }
 
+pub fn render_run(home: &Path, stage: &str, session: &Session, session_dir: &Path, extra: Option<&str>, current: plantool_core::Stage, mode: ImplementationMode) -> String {
+    let mut prompt = render_at(home, stage, session, session_dir, extra, current);
+    if mode == ImplementationMode::StepByStep && matches!(stage, "implement" | "resume") {
+        prompt.push_str("\n\nImplementation mode: step by step. Work on exactly one unchecked plan ticket in this turn. If the plan has no checkboxes, write the ticket list first and then complete only its first ticket. Tick only the work you finished and run the relevant checks. Summarize the milestone and leave the stage at implementing, even when it was the final ticket. Plantool opens or refreshes the difftool review after your turn and forwards new human comments to this run. Finish each turn after addressing comments; do not start a blocking difftool watch yourself. Wait for explicit milestone approval in plantool before starting another ticket. After approval, if tickets remain, implement exactly the next ticket. If none remain, run the full project checks and set the stage to implementation-review.\n");
+    }
+    prompt
+}
+
+pub fn render_milestone_review(session: &Session, session_dir: &Path, review: Option<&ChangeReview>, extra: Option<&str>) -> String {
+    let reference = match review { Some(ChangeReview::Difftool { review: Some(id), .. }) => format!("The difftool review is `{id}`."), _ => "Open the current changes with `plantool changes` if the review is missing.".into() };
+    let mut prompt = format!("Continue reviewing the current implementation milestone for plantool session `{}`.\n\nRun `plantool skill` and `plantool skill implement`. The plan is at `{}` and the checkout is `{}`. {reference} Read the open human comments with `difftool review comment list --review <ref> --kind human --unresolved --context --json` when difftool is available. Fix the current milestone, refresh the review, and reply to comments. Remain at stage `implementing`. Plantool forwards new human comments to this run, so finish your turn without starting a blocking difftool watch. Wait for the human to approve this milestone in plantool. Do not start another plan ticket yet.", session.key(), session_dir.join(DocKind::Plan.file_name()).display(), session.cwd().display());
+    if let Some(extra) = extra.map(str::trim).filter(|e| !e.is_empty()) { prompt.push_str(&format!("\n\nAdditional instructions from the user:\n{extra}")); }
+    prompt
+}
+
 fn collapse_blank_lines(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut blank = false;
@@ -207,6 +222,17 @@ mod tests {
         assert!(p.contains("/d/plan.md"), "{p}");
         assert!(p.contains("comment apply --session repo/fix-it"), "{p}");
         assert!(p.contains("do not edit the document"), "{p}");
+    }
+
+    #[test]
+    fn step_by_step_prompt_stops_after_one_ticket() {
+        let s = session(None);
+        let dir = Path::new("/d");
+        let step = render_run(Path::new("/nonexistent"), "implement", &s, dir, None, Stage::Approved, ImplementationMode::StepByStep);
+        assert!(step.contains("exactly one unchecked plan ticket"));
+        assert!(step.contains("leave the stage at implementing, even when it was the final ticket"));
+        let bulk = render_run(Path::new("/nonexistent"), "implement", &s, dir, None, Stage::Approved, ImplementationMode::AllAtOnce);
+        assert!(!bulk.contains("exactly one unchecked plan ticket"));
     }
 
     #[test]

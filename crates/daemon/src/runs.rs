@@ -1,7 +1,7 @@
 use crate::events::LiveEvent;
 use crate::providers::{self, ProviderEvent, RunInput, RunOptions};
 use crate::registry::LiveSession;
-use plantool_core::{PermissionMode, Provider, Run, RunStatus, Stage};
+use plantool_core::{ChangeReview, ImplementationMode, PermissionMode, Provider, Run, RunStatus, Stage};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -25,13 +25,16 @@ impl RunManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, resume: Option<String>, permission_mode: PermissionMode) -> anyhow::Result<Run> {
+    pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, resume: Option<String>, permission_mode: PermissionMode, implementation_mode: ImplementationMode, previous_run: Option<&Run>) -> anyhow::Result<Run> {
         let sess = session.session();
         let run = Run {
             id: short_id(),
             provider,
             provider_session_id: resume.clone(),
             stage,
+            implementation_mode,
+            milestone_pending: previous_run.is_some_and(|r| r.milestone_pending),
+            milestone_review: previous_run.and_then(|r| r.milestone_review.clone()),
             task: Some(stage_name.to_string()),
             cwd: sess.cwd().clone(),
             status: RunStatus::Starting,
@@ -53,10 +56,12 @@ impl RunManager {
 
         let consumer_session = session.clone();
         let consumer_id = run_id.clone();
+        let consumer_manager = self.clone();
         let consumer = tokio::spawn(async move {
             let mut seq = 0u64;
             let mut current = consumer_session.run(&consumer_id).unwrap_or_else(|| panic!("run {consumer_id} vanished"));
             while let Some(ev) = ev_rx.recv().await {
+                if let Some(saved) = consumer_session.run(&consumer_id) { current = saved; }
                 seq += 1;
                 let status = match &ev {
                     ProviderEvent::TurnStarted { .. } => Some(RunStatus::Running),
@@ -81,9 +86,38 @@ impl RunManager {
                         let _ = consumer_session.upsert_run(current.clone(), |r| LiveEvent::RunUpdated { run: r });
                     }
                 }
+                if let ProviderEvent::TurnCompleted { status: turn_status, .. } = &ev {
+                    if turn_status == "completed" && current.implementation_mode == ImplementationMode::StepByStep && consumer_session.stage() == Stage::Implementing {
+                        current.milestone_pending = true;
+                        let existing = current.milestone_review.clone();
+                        let review_session = consumer_session.session();
+                        let plan = consumer_session.doc_path(plantool_core::DocKind::Plan);
+                        let opened = tokio::task::spawn_blocking(move || crate::changes::open_review(&review_session, "HEAD", Some(plan), existing.as_ref())).await;
+                        match opened {
+                            Ok(Ok((review, _))) => {
+                                let new_review = current.milestone_review.as_ref().and_then(review_ref) != review_ref(&review);
+                                current.milestone_review = Some(review.clone());
+                                let _ = consumer_session.set_review(review.clone());
+                                if new_review {
+                                    if let Some(reference) = review_ref(&review) {
+                                        tokio::spawn(watch_review(consumer_manager.clone(), consumer_session.clone(), consumer_id.clone(), reference.to_string()));
+                                    }
+                                }
+                            }
+                            Ok(Err(e)) => tracing::warn!("milestone review {consumer_id}: {e}"),
+                            Err(e) => tracing::warn!("milestone review task {consumer_id}: {e}"),
+                        }
+                        let _ = consumer_session.upsert_run(current.clone(), |r| LiveEvent::RunUpdated { run: r });
+                    }
+                }
             }
             seq
         });
+        if run.milestone_pending {
+            if let Some(reference) = run.milestone_review.as_ref().and_then(review_ref) {
+                tokio::spawn(watch_review(self.clone(), session.clone(), run.id.clone(), reference.to_string()));
+            }
+        }
 
         tokio::spawn(async move {
             let result = providers::run_provider(provider, opts, in_rx, ev_tx).await;
@@ -121,6 +155,36 @@ impl RunManager {
                 r.error = Some("the daemon restarted; start a new run to resume the provider session".into());
                 let _ = session.upsert_run(r, |r| LiveEvent::RunUpdated { run: r });
             }
+        }
+    }
+}
+
+pub(crate) fn review_ref(review: &ChangeReview) -> Option<&str> {
+    match review { ChangeReview::Difftool { review, .. } => review.as_deref(), _ => None }
+}
+
+pub(crate) async fn watch_review(manager: Arc<RunManager>, session: Arc<LiveSession>, run_id: String, reference: String) {
+    let crate::changes::ChangeTool::Difftool { path } = crate::changes::detect_change_tool() else { return };
+    let mut cursor = "2000-01-01T00:00:00Z".to_string();
+    while let Some(run) = session.run(&run_id) {
+        if !run.milestone_pending || session.stage() != Stage::Implementing || !manager.is_live(&run_id) || run.milestone_review.as_ref().and_then(review_ref) != Some(reference.as_str()) { break; }
+        let output = tokio::process::Command::new(&path)
+            .args(["review", "watch", "--review", &reference, "--since", &cursor, "--kind", "human", "--timeout", "10", "--json"])
+            .output().await;
+        match output {
+            Ok(out) if out.status.success() => {
+                let comments: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap_or_default();
+                if let Some(last) = comments.last().and_then(|c| c.get("id")).and_then(|v| v.as_str()) { cursor = last.to_string(); }
+                if !comments.is_empty() {
+                    if !session.run(&run_id).is_some_and(|r| r.milestone_pending) { break; }
+                    let ids = comments.iter().filter_map(|c| c.get("id").and_then(|v| v.as_str())).collect::<Vec<_>>().join(", ");
+                    let message = format!("New human comments on difftool review {reference}: {ids}. Read the whole open comment board with `difftool review comment list --review {reference} --kind human --unresolved --context --json`. Address these comments in this same milestone, refresh the review, and reply where useful. Keep waiting for milestone approval; do not start the next plan ticket.");
+                    if manager.send(&run_id, RunInput::Text(message)).await.is_err() { break; }
+                }
+            }
+            Ok(out) if out.status.code() == Some(124) => {}
+            Ok(out) => { tracing::warn!("difftool watch {reference} exited with {}", out.status); tokio::time::sleep(std::time::Duration::from_secs(3)).await; }
+            Err(e) => { tracing::warn!("difftool watch {reference}: {e}"); break; }
         }
     }
 }

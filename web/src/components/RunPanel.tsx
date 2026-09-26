@@ -52,6 +52,7 @@ export function phaseOf(run: Run, items: Item[], pending: Pending[]): Phase {
       return { kind: "working", title: a ? `Working · ${a.title}` : "Working…" };
     }
     case "idle":
+      if (run.milestone_pending) return { kind: "idle", title: "Milestone ready for review", detail: "If difftool is available, new comments reach this run. Approve the milestone in the sidebar when the review is done." };
       return { kind: "idle", title: "Turn finished. Your move.", detail: "Comment on the document, use “Send comments to the running agent”, or type below." };
     case "failed":
       return { kind: "failed", title: "Failed", detail: run.error ?? undefined };

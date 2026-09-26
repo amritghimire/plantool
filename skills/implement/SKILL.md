@@ -56,7 +56,16 @@ and tick each one as you finish it.
   shows the progress live. Do not tick tasks you did not do.
 - Follow the codebase's existing patterns, style and naming. No unnecessary comments.
 - Run the project's typecheck, lint and tests as you go, and once more at the end.
-- Do not stop until every task is done or blocked; say clearly what is blocked and why.
+- In all-at-once mode, do not stop until every task is done or blocked; say clearly what is blocked and why.
+- In step-by-step mode, complete one unchecked ticket per turn. Tick it, run the relevant checks,
+  and pause with the stage at `implementing`, including after the last ticket. Plantool opens or
+  refreshes the change review. If difftool is available, the run watches its human comments and
+  sends them back to you in this same provider session. Read the whole open board with the
+  difftool-review skill, make the requested fixes, refresh the review, and reply. Stay on this
+  ticket while feedback is open. The human approves the milestone in plantool after review and
+  may commit it before approval. Only then start the next ticket. After the final approval, run
+  the full checks and move to `implementation-review`. For hosted runs, finish each turn instead of
+  starting a blocking difftool watch; plantool watches difftool and sends new comments to this run.
 - Stay on the route the plan drew. Work that turns out to be beyond the plan goes into the
   plan's "Out of scope" section as one line, not into the diff.
 - If a decision comes up that the plan does not cover, add it as a comment on the relevant plan

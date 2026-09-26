@@ -14,6 +14,8 @@ export interface SidebarProps {
   onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
   onStartRun: (stage: "research" | "plan" | "implement" | "critique", resumeId?: string) => void;
+  onContinueMilestone: (run: Run) => void;
+  onApproveMilestone: (run: Run) => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
@@ -43,6 +45,8 @@ export function Sidebar(p: SidebarProps) {
 
   const finished = p.view.runs.filter((r) => !isLive(r));
   const liveRun = p.view.runs.find(isLive) ?? null;
+  const latestImplementation = p.view.runs.filter((r) => r.task === "implement").sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
+  const stepMode = latestImplementation?.implementation_mode === "step-by-step";
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
   const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
 
@@ -134,9 +138,23 @@ export function Sidebar(p: SidebarProps) {
             <button className="btn ghost" onClick={p.onOpenChanges} disabled={p.busy} type="button">
               Review changes
             </button>
+            {stage === "implementing" && stepMode && latestImplementation?.milestone_pending && (
+              <>
+                <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Resolve open comments and commit the milestone if you want a separate commit.</div>
+                {latestImplementation.status === "idle" ? (
+                  <button className="btn primary" onClick={() => p.onApproveMilestone(latestImplementation)} disabled={p.busy} type="button">
+                    Approve milestone and continue
+                  </button>
+                ) : !isLive(latestImplementation) ? (
+                  <button className="btn primary" onClick={() => p.onContinueMilestone(latestImplementation)} disabled={p.busy} type="button">
+                    Resume milestone review
+                  </button>
+                ) : null}
+              </>
+            )}
             <button
               className="btn primary"
-              disabled={p.busy}
+              disabled={p.busy || (stepMode && stage !== "implementation-review")}
               onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}
               type="button"
             >

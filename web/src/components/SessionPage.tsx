@@ -39,7 +39,7 @@ export function SessionPage() {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [dialog, setDialog] = useState<{ stage: "research" | "plan" | "implement" | "critique"; resumeId?: string } | null>(null);
+  const [dialog, setDialog] = useState<{ stage: "research" | "plan" | "implement" | "critique"; resumeId?: string; initialMode?: "step-by-step" } | null>(null);
   const [selectedRun, setSelectedRun] = useState<string | null>(params.get("run"));
   const [runLines, setRunLines] = useState<Record<string, RunLine[]>>({});
   const [changesNonce, setChangesNonce] = useState(0);
@@ -295,6 +295,35 @@ export function SessionPage() {
     }
   };
 
+  const onContinueMilestone = async (milestoneRun: Run) => {
+    if (milestoneRun.status !== "idle") {
+      setDialog({ stage: "implement", resumeId: milestoneRun.provider_session_id ? milestoneRun.id : undefined, initialMode: "step-by-step" });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.runInput(key, milestoneRun.id, { text: "I reviewed the completed milestone. Continue with exactly the next unchecked plan ticket, then pause for review again. If no tickets remain, run the final checks and move to implementation-review." });
+      setSelectedRun(milestoneRun.id);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onApproveMilestone = async (milestoneRun: Run) => {
+    setBusy(true);
+    try {
+      await api.approveMilestone(key, milestoneRun.id);
+      setSelectedRun(milestoneRun.id);
+      toast("Milestone approved; the agent is continuing");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onDelete = async (removeWorktree: boolean) => {
     setBusy(true);
     try {
@@ -393,6 +422,8 @@ export function SessionPage() {
         onDelete={onDelete}
         onJump={onJump}
         onStartRun={(s, resumeId) => setDialog({ stage: s, resumeId })}
+        onContinueMilestone={(r) => void onContinueMilestone(r)}
+        onApproveMilestone={(r) => void onApproveMilestone(r)}
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
         onRemoveRun={onRemoveRun}
@@ -431,7 +462,7 @@ export function SessionPage() {
           onResume={(r) => setDialog({ stage: r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", resumeId: r.id })}
         />
       )}
-      {dialog && <StartRunDialog stage={dialog.stage} sessionKey={key} runs={view.runs} resumeId={dialog.resumeId} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
+      {dialog && <StartRunDialog stage={dialog.stage} sessionKey={key} runs={view.runs} resumeId={dialog.resumeId} initialMode={dialog.initialMode} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind ?? "info"}`}>

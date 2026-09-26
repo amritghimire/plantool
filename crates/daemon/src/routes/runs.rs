@@ -1,12 +1,12 @@
 use super::sessions::resolve;
-use super::{bad_request, ApiError};
+use super::{actor_from, bad_request, ApiError};
 use crate::providers::RunInput;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use plantool_core::{Actor, PermissionMode, Provider, Stage};
+use plantool_core::{Actor, ImplementationMode, PermissionMode, Provider, Stage};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -26,6 +26,8 @@ pub struct StartBody {
     /// For implement runs: work in a git worktree (default true). Ignored for other stages.
     #[serde(default)]
     pub worktree: Option<bool>,
+    #[serde(default)]
+    pub implementation_mode: ImplementationMode,
 }
 
 fn parse_mode(s: &str) -> Result<PermissionMode, ApiError> {
@@ -47,15 +49,10 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
     if stage_name == "implement" && !matches!(current, Stage::Approved | Stage::Implementing | Stage::ImplementationReview) {
         return Err(ApiError(StatusCode::FORBIDDEN, format!("the plan must be approved before implementation starts (stage is {current})")));
     }
-    if target.index() > current.index() {
-        let _ = s.set_stage(target, Actor::Agent);
-    }
-    if stage_name == "implement" && body.worktree.unwrap_or(true) {
-        let ws = s.clone();
-        tokio::task::spawn_blocking(move || ws.ensure_worktree(None)).await.map_err(|e| anyhow::anyhow!(e))??;
-    }
-    let sess = s.session();
     let resume_from = body.resume_run.as_deref().and_then(|rid| s.run(rid));
+    if body.resume_run.is_some() && resume_from.is_none() {
+        return Err(bad_request("unknown run to resume"));
+    }
     if let Some(r) = &resume_from {
         if r.provider != provider {
             return Err(bad_request(format!("run {} was a {} run; it can only be resumed with the same provider", r.id, r.provider.as_str())));
@@ -67,11 +64,34 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
             return Err(ApiError(StatusCode::CONFLICT, format!("run {} is still live; talk to it in the run panel", r.id)));
         }
     }
+    if stage_name == "implement" && body.worktree.unwrap_or(true) {
+        let ws = s.clone();
+        tokio::task::spawn_blocking(move || ws.ensure_worktree(None)).await.map_err(|e| anyhow::anyhow!(e))??;
+    }
+    if target.index() > current.index() {
+        s.set_stage(target, Actor::Agent)?;
+    }
+    let sess = s.session();
     let extra = body.prompt.as_deref().filter(|p| !p.trim().is_empty());
-    let prompt = crate::prompts::render_at(&state.config.home, if resume_from.is_some() { "resume" } else { stage_name }, &sess, &s.store.dir, extra, s.stage());
-    let resume = resume_from.and_then(|r| r.provider_session_id);
+    let implementation_mode = if stage_name == "implement" {
+        resume_from.as_ref().map(|r| r.implementation_mode).unwrap_or(body.implementation_mode)
+    } else {
+        ImplementationMode::AllAtOnce
+    };
+    let previous_milestone = if implementation_mode == ImplementationMode::StepByStep {
+        resume_from.clone().or_else(|| s.runs().into_iter()
+            .filter(|r| r.task.as_deref() == Some("implement") && r.implementation_mode == ImplementationMode::StepByStep && r.milestone_pending)
+            .max_by(|a, b| a.started_at.cmp(&b.started_at)))
+    } else { None };
+    let prompt_stage = if resume_from.is_some() && implementation_mode != ImplementationMode::StepByStep { "resume" } else { stage_name };
+    let prompt = if let Some(reviewing) = previous_milestone.as_ref().filter(|r| r.milestone_pending) {
+        crate::prompts::render_milestone_review(&sess, &s.store.dir, reviewing.milestone_review.as_ref(), extra)
+    } else {
+        crate::prompts::render_run(&state.config.home, prompt_stage, &sess, &s.store.dir, extra, s.stage(), implementation_mode)
+    };
+    let resume = resume_from.as_ref().and_then(|r| r.provider_session_id.clone());
     let mode = body.permission_mode.as_deref().map(parse_mode).transpose()?.unwrap_or_default();
-    let run = state.runs.start(s.clone(), provider, target, stage_name, prompt.clone(), body.model.clone(), resume, mode)?;
+    let run = state.runs.start(s.clone(), provider, target, stage_name, prompt.clone(), body.model.clone(), resume, mode, implementation_mode, previous_milestone.as_ref())?;
     Ok((StatusCode::CREATED, Json(json!({ "run": run, "prompt": prompt }))))
 }
 
@@ -122,6 +142,32 @@ async fn input(State(state): State<AppState>, Path((repo, slug, id)): Path<(Stri
     Ok(Json(json!({ "ok": true })))
 }
 
+async fn approve_milestone(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug, id)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    if actor_from(&headers, &state) != Actor::Human {
+        return Err(ApiError(StatusCode::FORBIDDEN, "only a human can approve a milestone in the browser".into()));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let mut run = s.run(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown run {id}")))?;
+    if run.implementation_mode != ImplementationMode::StepByStep || !run.milestone_pending || run.status != plantool_core::RunStatus::Idle {
+        return Err(ApiError(StatusCode::CONFLICT, "the milestone is not ready for approval".into()));
+    }
+    if let Some(review) = run.milestone_review.clone() {
+        let open = tokio::task::spawn_blocking(move || crate::changes::unresolved_human_comments(&review)).await.map_err(|e| anyhow::anyhow!(e))??;
+        if open > 0 {
+            return Err(ApiError(StatusCode::CONFLICT, format!("{open} human difftool comment(s) are still open; resolve them in difftool before approving")));
+        }
+    }
+    let previous = run.clone();
+    run.milestone_pending = false;
+    run.milestone_review = None;
+    s.upsert_run(run, |r| crate::events::LiveEvent::RunUpdated { run: r })?;
+    if let Err(e) = state.runs.send(&id, RunInput::Text("This milestone is approved. If unchecked plan tickets remain, implement exactly the next one and pause for review again. If every ticket is complete, run the full project checks and move to implementation-review.".into())).await {
+        s.upsert_run(previous, |r| crate::events::LiveEvent::RunUpdated { run: r })?;
+        return Err(ApiError(StatusCode::CONFLICT, e.to_string()));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn stop(State(state): State<AppState>, Path((repo, slug, id)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     s.run(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown run {id}")))?;
@@ -164,6 +210,7 @@ pub fn routes() -> Router<AppState> {
         .route("/providers", get(providers))
         .route("/sessions/{repo}/{slug}/runs", post(start))
         .route("/sessions/{repo}/{slug}/runs/{id}/input", post(input))
+        .route("/sessions/{repo}/{slug}/runs/{id}/milestone/approve", post(approve_milestone))
         .route("/sessions/{repo}/{slug}/runs/{id}/stop", post(stop))
         .route("/sessions/{repo}/{slug}/runs/{id}", delete(remove))
         .route("/sessions/{repo}/{slug}/runs/{id}/remove", post(remove))

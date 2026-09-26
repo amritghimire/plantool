@@ -124,12 +124,16 @@ export const PERMISSION_MODES: { id: PermissionMode; label: string; hint: string
   { id: "allow-all", label: "Allow all", hint: "Nothing asks. Only for a sandboxed checkout." },
 ];
 export type RunStatus = "starting" | "running" | "waiting" | "idle" | "stopped" | "failed";
+export type ImplementationMode = "all-at-once" | "step-by-step";
 
 export interface Run {
   id: string;
   provider: Provider;
   provider_session_id: string | null;
   stage: Stage;
+  implementation_mode?: ImplementationMode;
+  milestone_pending?: boolean;
+  milestone_review?: ChangeReview | null;
   task?: string;
   cwd: string;
   status: RunStatus;

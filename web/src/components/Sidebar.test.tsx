@@ -30,12 +30,14 @@ const question: Comment = {
   seq: 2,
 };
 
-function setup() {
+function setup(currentView = view) {
   const actions = { reply: vi.fn(async () => {}), resolve: vi.fn(async () => {}), edit: vi.fn(async () => {}), remove: vi.fn(async () => {}) };
   const onSendToRun = vi.fn(async () => {});
+  const onContinueMilestone = vi.fn();
+  const onApproveMilestone = vi.fn();
   render(
     <Sidebar
-      view={view}
+      view={currentView}
       comments={[question]}
       activeTab="research"
       onTab={() => {}}
@@ -44,6 +46,8 @@ function setup() {
       onDelete={async () => {}}
       onJump={() => {}}
       onStartRun={() => {}}
+      onContinueMilestone={onContinueMilestone}
+      onApproveMilestone={onApproveMilestone}
       onOpenChanges={() => {}}
       onSelectRun={() => {}}
       onRemoveRun={async () => {}}
@@ -54,7 +58,7 @@ function setup() {
       onSendToRun={onSendToRun}
     />,
   );
-  return { actions, onSendToRun };
+  return { actions, onSendToRun, onContinueMilestone, onApproveMilestone };
 }
 
 describe("Sidebar comments", () => {
@@ -82,4 +86,13 @@ describe("Sidebar comments", () => {
     fireEvent.click(screen.getByText("Send comments to the running agent"));
     await vi.waitFor(() => expect(onSendToRun).toHaveBeenCalledWith("Act on the review comments"));
   });
+});
+
+it("offers milestone approval after a step-by-step turn", () => {
+  const run = { ...view.runs[0], stage: "implementing" as const, task: "implement", status: "idle" as const, implementation_mode: "step-by-step" as const, milestone_pending: true };
+  const currentView = { ...view, state: { ...view.state, stage: "implementing" as const }, runs: [run] };
+  const { onApproveMilestone } = setup(currentView);
+  fireEvent.click(screen.getByText("Approve milestone and continue"));
+  expect(onApproveMilestone).toHaveBeenCalledWith(run);
+  expect(screen.getByText("Accept implementation")).toBeDisabled();
 });

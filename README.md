@@ -37,8 +37,16 @@ plantool new fix-login-timeout --brief "Sessions expire after 5 minutes; see iss
 plantool research fix-login-timeout # or start a hosted research run (claude by default)
 plantool plan fix-login-timeout     # then a plan run; comment inline, approve in the browser
 plantool implement fix-login-timeout
+plantool implement fix-login-timeout --step-by-step
 plantool changes fix-login-timeout  # difftool if installed, else git difftool
 ```
+
+At implementation start, choose **All at once** or **Step by step**. Step by step pauses after each
+plan ticket and opens the current uncommitted changes for review. With difftool, new human comments
+go to the same agent run so it can fix the current milestone. Resolve the comments in difftool,
+commit the milestone in the session checkout if you want a separate commit, then choose
+**Approve milestone and continue** in the sidebar. The CLI offers the same mode with
+`plantool implement <ref> --step-by-step`.
 
 ## Install
 
@@ -97,7 +105,7 @@ approve straight away. In that case the agent first writes a ticket list (todo i
 | `plantool new <slug> [--brief <text> \| --brief-file <path>] [--repo <path>] [--worktree] [--base <branch>] [--mirror]` | Create or reopen a session for the git checkout containing the current directory, and print the prompt for the next stage |
 | `plantool list [--repo .] [--stage <s>]` | The inbox. The browser's list page has a **New session** button with your recent repositories to pick from |
 | `plantool open <ref>` | Open a session in the browser |
-| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context |
+| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>] [--step-by-step]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context |
 | `plantool critique <ref>` | Have an agent critically review the research or plan and post findings as anchored comments (also the "Review with agent" button) |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
 | `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |

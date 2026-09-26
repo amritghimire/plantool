@@ -305,6 +305,14 @@ pub enum RunStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImplementationMode {
+    #[default]
+    AllAtOnce,
+    StepByStep,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     pub id: String,
@@ -312,6 +320,12 @@ pub struct Run {
     #[serde(default)]
     pub provider_session_id: Option<String>,
     pub stage: Stage,
+    #[serde(default)]
+    pub implementation_mode: ImplementationMode,
+    #[serde(default)]
+    pub milestone_pending: bool,
+    #[serde(default)]
+    pub milestone_review: Option<ChangeReview>,
     /// What the run was started to do: research, plan, implement, critique or resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,

@@ -18,6 +18,9 @@ pub struct Args {
     /// For implement: work in the current checkout instead of a git worktree.
     #[arg(long)]
     pub no_worktree: bool,
+    /// For implement: pause after each plan ticket for review and a milestone commit.
+    #[arg(long)]
+    pub step_by_step: bool,
     /// Resume an earlier run's provider session (keeps its context): a run id, or `last`.
     #[arg(long)]
     pub resume: Option<String>,
@@ -44,7 +47,7 @@ pub fn run(a: Args, stage: &str) -> anyhow::Result<()> {
         other => other.map(|s| s.to_string()),
     };
     let permission = a.permission.or_else(|| std::env::var("PLANTOOL_PERMISSION").ok());
-    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": permission, "worktree": !a.no_worktree, "resume_run": resume });
+    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": permission, "worktree": !a.no_worktree, "resume_run": resume, "implementation_mode": if a.step_by_step { "step-by-step" } else { "all-at-once" } });
     let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/runs"), &body)?;
     if a.json {
         return print_json(&v);

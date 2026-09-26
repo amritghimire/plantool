@@ -43,13 +43,13 @@ pub struct Changes {
     pub message: Option<String>,
 }
 
-pub fn stat(session: &Session, review: Option<ChangeReview>) -> Changes {
+pub fn stat(session: &Session, base: &str, review: Option<ChangeReview>) -> Changes {
     let tool = detect_change_tool();
-    let (stat, message) = match git::diff_numstat(session.cwd(), &session.base) {
+    let (stat, message) = match git::diff_numstat(session.cwd(), base) {
         Ok(s) => (s, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
-    Changes { tool: tool.name(), base: session.base.clone(), stat, review, message }
+    Changes { tool: tool.name(), base: base.to_string(), stat, review, message }
 }
 
 pub fn open_url(url: &str) {
@@ -72,7 +72,7 @@ fn reopen_difftool(path: &PathBuf, review: &str) -> bool {
     Command::new(path).arg("open").arg(review).stdin(Stdio::null()).output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-pub fn open_review(session: &Session, plan_path: Option<PathBuf>, existing: Option<&ChangeReview>) -> anyhow::Result<(ChangeReview, Option<String>)> {
+pub fn open_review(session: &Session, base: &str, plan_path: Option<PathBuf>, existing: Option<&ChangeReview>) -> anyhow::Result<(ChangeReview, Option<String>)> {
     let cwd = session.cwd().clone();
     match detect_change_tool() {
         ChangeTool::Difftool { path } => {
@@ -82,7 +82,9 @@ pub fn open_review(session: &Session, plan_path: Option<PathBuf>, existing: Opti
                 }
             }
             let mut cmd = Command::new(&path);
-            cmd.arg("diff").arg("-C").arg(&cwd).arg(&session.base).arg("--no-open");
+            cmd.arg("diff").arg("-C").arg(&cwd);
+            if base == "HEAD" { cmd.arg("--uncommitted"); } else { cmd.arg(base); }
+            cmd.arg("--no-open");
             if let Some(p) = plan_path.filter(|p| p.is_file()) {
                 cmd.arg("--design").arg(p);
             }
@@ -117,7 +119,7 @@ pub fn open_review(session: &Session, plan_path: Option<PathBuf>, existing: Opti
             if configured.is_none() {
                 anyhow::bail!("difftool is not installed and git has no diff.tool configured; set one with `git config --global diff.tool <name>` or install difftool");
             }
-            let base = session.base.clone();
+            let base = base.to_string();
             let attempt = |dir_diff: bool| -> std::io::Result<std::process::Child> {
                 let mut cmd = Command::new("git");
                 cmd.arg("-C").arg(&cwd).arg("difftool").arg("--no-prompt");
@@ -136,4 +138,13 @@ pub fn open_review(session: &Session, plan_path: Option<PathBuf>, existing: Opti
             Ok((ChangeReview::GitDifftool { opened_at: plantool_core::now() }, Some(format!("launched git difftool ({})", configured.unwrap_or_default()))))
         }
     }
+}
+
+pub fn unresolved_human_comments(review: &ChangeReview) -> anyhow::Result<usize> {
+    let Some(reference) = (match review { ChangeReview::Difftool { review, .. } => review.as_deref(), _ => None }) else { return Ok(0) };
+    let ChangeTool::Difftool { path } = detect_change_tool() else { anyhow::bail!("difftool is no longer available") };
+    let out = Command::new(path).args(["review", "comment", "list", "--review", reference, "--kind", "human", "--unresolved", "--source", "local", "--json"]).output()?;
+    if !out.status.success() { anyhow::bail!("could not read difftool comments: {}", String::from_utf8_lossy(&out.stderr).trim()) }
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    Ok(value.get("comments").and_then(|v| v.as_array()).map_or(0, Vec::len))
 }
