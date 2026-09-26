@@ -53,7 +53,21 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         Some(t) => format!("https://api.github.com/repos/{REPOSITORY}/releases/tags/{t}"),
         None => format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"),
     };
-    let release: Release = client.get(&url).send()?.error_for_status().context("fetching the release from GitHub")?.json()?;
+    let release: Release = match &a.tag {
+        Some(_) => client.get(&url).send()?.error_for_status().context("fetching the release from GitHub")?.json()?,
+        None => {
+            let resp = client.get(&url).send()?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                let mut list: Vec<Release> = client.get(format!("https://api.github.com/repos/{REPOSITORY}/releases?per_page=1")).send()?.error_for_status()?.json()?;
+                if list.is_empty() {
+                    bail!("{REPOSITORY} has no releases yet");
+                }
+                list.remove(0)
+            } else {
+                resp.error_for_status().context("fetching the release from GitHub")?.json()?
+            }
+        }
+    };
     let current = crate::VERSION.trim_start_matches('v');
     let latest = release.tag_name.trim_start_matches('v');
     println!("current: {current}\nlatest:  {latest}");

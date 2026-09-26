@@ -94,6 +94,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -104,3 +105,13 @@ jobs:
           files: dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update the Homebrew formula on main
+        run: |
+          git fetch --depth=1 origin main
+          git checkout -B main origin/main
+          scripts/render-formula.sh "${{ github.event.release.tag_name }}" dist/SHA256SUMS.txt > Formula/plantool.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/plantool.rb
+          git diff --cached --quiet || git commit -m "Point the Homebrew formula at ${{ github.event.release.tag_name }}"
+          git push origin main

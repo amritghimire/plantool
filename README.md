@@ -31,16 +31,34 @@ plantool changes fix-login-timeout  # difftool if installed, else git difftool
 
 ## Install
 
-Download the archive for your platform from the latest release, extract the `plantool` binary and
-put it on your `PATH`:
+macOS and Linux:
 
 ```bash
-tar -xzf plantool-darwin-arm64.tar.gz -C ~/.local/bin
-plantool --version
+curl -fsSL https://raw.githubusercontent.com/amritghimire/plantool/main/install.sh | sh
 ```
 
-On macOS you may need to clear the quarantine flag: `xattr -d com.apple.quarantine ~/.local/bin/plantool`.
-Upgrade later with `plantool update`, which verifies the release checksum before swapping the binary.
+It picks the right archive for your platform, verifies it against the release's
+`SHA256SUMS.txt`, installs to `~/.local/bin` (or `/usr/local/bin` when that is on your `PATH`
+and writable), and clears the macOS quarantine flag. Set `PLANTOOL_INSTALL_DIR` to choose the
+directory and `PLANTOOL_VERSION` to pin a tag.
+
+Homebrew:
+
+```bash
+brew tap amritghimire/plantool https://github.com/amritghimire/plantool
+brew install plantool
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/amritghimire/plantool/main/install.ps1 | iex
+```
+
+Or download the archive for your platform from the
+[releases page](https://github.com/amritghimire/plantool/releases), extract the `plantool`
+binary and put it on your `PATH`. Upgrade later with `plantool update`, which verifies the
+release checksum before swapping the binary.
 
 For hosted runs you need `claude` (Claude Code 2.1+) and/or `codex` on your `PATH`. difftool is
 optional and used for the change review when present.
