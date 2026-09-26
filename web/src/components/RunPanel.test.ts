@@ -1,4 +1,7 @@
-import { projectRun } from "./RunPanel";
+import { phaseOf, projectRun } from "./RunPanel";
+import type { Run } from "../types";
+
+const base: Run = { id: "r", provider: "claude", provider_session_id: "s", stage: "researching", cwd: "/r", status: "running", model: null, started_at: "", ended_at: null, error: null, seq: 0 };
 
 describe("projectRun", () => {
   it("folds deltas, activities and permissions", () => {
@@ -19,6 +22,16 @@ describe("projectRun", () => {
     expect(items.filter((i) => i.t === "msg")).toHaveLength(1);
     const after = projectRun([{ seq: 7, event: { type: "permission", request_id: "p1", kind: "command", title: "x" } }, { seq: 9, event: { type: "request-resolved", request_id: "p1" } }]);
     expect(after.pending).toHaveLength(0);
+  });
+
+  it("tells watching apart from working and idle from waiting", () => {
+    const watching = projectRun([{ seq: 1, event: { type: "activity-start", id: "a", kind: "tool", title: "Bash Wait for the human", detail: '{"command":"plantool session watch --session x --since 3"}' } }]);
+    expect(phaseOf(base, watching.items, watching.pending).kind).toBe("watching");
+    const working = projectRun([{ seq: 1, event: { type: "activity-start", id: "a", kind: "tool", title: "Read plan.md" } }]);
+    expect(phaseOf(base, working.items, working.pending)).toMatchObject({ kind: "working", title: "Working · Read plan.md" });
+    expect(phaseOf({ ...base, status: "idle" }, [], []).kind).toBe("idle");
+    expect(phaseOf({ ...base, status: "waiting" }, [], [{ request_id: "p", kind: "permission", title: "x" }]).kind).toBe("waiting");
+    expect(phaseOf({ ...base, status: "stopped" }, [], []).detail).toMatch(/Resume/);
   });
 
   it("does not repeat streamed text when the final message arrives", () => {

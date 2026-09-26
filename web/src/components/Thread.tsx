@@ -57,7 +57,7 @@ export function Thread({ root, replies, actions, highlighted }: { root: Comment;
           ))}
           <div className="thread-actions">
             {replying ? (
-              <Composer placeholder="Reply…" submitLabel="Reply" onCancel={() => setReplying(false)} onSubmit={async (b) => { await actions.reply(root, b); setReplying(false); }} />
+              <Composer draftKey={`reply:${root.id}`} placeholder="Reply…" submitLabel="Reply" onCancel={() => setReplying(false)} onSubmit={async (b) => { await actions.reply(root, b); setReplying(false); }} />
             ) : (
               <>
                 <button className="btn ghost" onClick={() => setReplying(true)} type="button">

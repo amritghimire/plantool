@@ -221,6 +221,7 @@ export function Sidebar(p: SidebarProps) {
               <span>
                 {r.provider} · {r.stage}
               </span>
+              <span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span>
               <span className="spacer" />
               <span className="muted small">{relTime(r.started_at)}</span>
               {!isLive(r) && r.provider_session_id && (
@@ -402,6 +403,8 @@ function CommentRow({ c, onJump, actions }: { c: Comment; onJump: () => void; ac
     </li>
   );
 }
+
+const RUN_WORD: Record<Run["status"], string> = { starting: "starting", running: "working", waiting: "needs input", idle: "your move", stopped: "stopped", failed: "failed" };
 
 function isLive(r: Run): boolean {
   return r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle";

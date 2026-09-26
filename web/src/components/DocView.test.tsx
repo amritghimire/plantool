@@ -63,6 +63,19 @@ describe("DocView", () => {
     expect(screen.getByText("why?")).toBeInTheDocument();
   });
 
+  it("keeps an unsent comment and follows its line when the document is rewritten", () => {
+    const onAdd = vi.fn(async () => {});
+    const props = { kind: "plan" as const, path: null, comments: [], actions, onAdd, mode: "rendered" as const, target: null, highlightComment: null, showResolved: false };
+    const { rerender } = render(<DocView {...props} doc={doc} />);
+    fireEvent.click(screen.getByTitle("Comment on line 3"));
+    fireEvent.change(screen.getByPlaceholderText("Comment on line 3…"), { target: { value: "keep me" } });
+    const rewritten: DocResponse = { ...doc, sha: "z", content: "# Plan\n\nNew intro.\n\nFirst paragraph.\n\n- [ ] task one\n- [x] task two\n", lines: 8 };
+    rerender(<DocView {...props} doc={rewritten} />);
+    const box = screen.getByPlaceholderText("Comment on line 5…") as HTMLTextAreaElement;
+    expect(box.value).toBe("keep me");
+    expect(screen.getByText(/moved from line 3 to line 5/)).toBeInTheDocument();
+  });
+
   it("shows the waiting state when the doc is missing", () => {
     render(<DocView kind="research" doc={null} path="/x/research.md" comments={[]} actions={actions} onAdd={async () => {}} mode="rendered" target={null} highlightComment={null} showResolved={false} />);
     expect(screen.getByText("Waiting for research.md")).toBeInTheDocument();

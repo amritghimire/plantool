@@ -35,6 +35,31 @@ interface Pending {
   questions?: { id: string; text: string; options?: string[] }[];
 }
 
+export type Phase = { kind: "starting" | "working" | "watching" | "waiting" | "idle" | "stopped" | "failed"; title: string; detail?: string };
+
+export function phaseOf(run: Run, items: Item[], pending: Pending[]): Phase {
+  const lastRunning = [...items].reverse().find((i): i is { t: "act"; a: Activity } => i.t === "act" && i.a.status === "running");
+  switch (run.status) {
+    case "starting":
+      return { kind: "starting", title: "Starting the agent…" };
+    case "waiting":
+      return { kind: "waiting", title: pending.length > 1 ? `Needs your answer (${pending.length} requests below)` : "Needs your answer below" };
+    case "running": {
+      const a = lastRunning?.a;
+      if (a && `${a.title} ${a.detail ?? ""}`.includes("session watch")) {
+        return { kind: "watching", title: "Waiting for your comments", detail: "The agent is blocked in `plantool session watch`. Comment on the document, reply on a thread, or send it a message; it wakes up on the next event." };
+      }
+      return { kind: "working", title: a ? `Working · ${a.title}` : "Working…" };
+    }
+    case "idle":
+      return { kind: "idle", title: "Turn finished. Your move.", detail: "Comment on the document, use “Send comments to the running agent”, or type below." };
+    case "failed":
+      return { kind: "failed", title: "Failed", detail: run.error ?? undefined };
+    default:
+      return { kind: "stopped", title: "Stopped", detail: run.provider_session_id ? "Resume to continue with the same context." : run.error ?? undefined };
+  }
+}
+
 export function projectRun(lines: RunLine[]) {
   const items: Item[] = [];
   const acts = new Map<string, Activity>();
@@ -123,6 +148,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
   const [err, setErr] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const { items, pending } = useMemo(() => projectRun(lines), [lines]);
+  const phase = run ? phaseOf(run, items, pending) : null;
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -183,7 +209,15 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
           ×
         </button>
       </header>
-      {run.error && <div className="error">{run.error}</div>}
+      {phase && (
+        <div className={`run-phase ${phase.kind}`} role="status">
+          <span className={`run-status ${run.status}`} />
+          <div>
+            <div className="run-phase-title">{phase.title}</div>
+            {phase.detail && <div className="muted small">{phase.detail}</div>}
+          </div>
+        </div>
+      )}
       <div className="run-scroll" ref={scroller}>
         {items.map((it, i) => {
           if (it.t === "msg") {

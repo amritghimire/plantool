@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { Element } from "hast";
 import { collectBlocks, blockForLine, type Block } from "../lib/blocks";
 import { splitSlides, slideForLine } from "../lib/slides";
+import { getDraft, moveDraft } from "../lib/drafts";
 import type { Comment, DocKind, DocResponse } from "../types";
 import { Composer } from "./Composer";
 import { CopyButton } from "./CopyButton";
@@ -34,7 +35,14 @@ interface Attach {
 const TAG_TYPE: Record<string, string> = { h1: "heading", h2: "heading", h3: "heading", h4: "heading", h5: "heading", h6: "heading", p: "paragraph", li: "listItem", pre: "code", table: "table", hr: "thematicBreak" };
 
 export function DocView(p: Props) {
-  const [composing, setComposing] = useState<number | null>(null);
+  const [composing, setComposingState] = useState<number | null>(null);
+  const [composingText, setComposingText] = useState<string | null>(null);
+  const [movedNote, setMovedNote] = useState<string | null>(null);
+  const setComposing = (line: number | null) => {
+    setComposingState(line);
+    setComposingText(line !== null && p.doc ? (p.doc.content.split("\n")[line - 1] ?? null) : null);
+    setMovedNote(null);
+  };
   const [slide, setSlide] = useState(0);
   const blocks = useMemo(() => (p.doc ? collectBlocks(p.doc.content) : []), [p.doc]);
   const slides = useMemo(() => (p.doc ? splitSlides(p.doc.content, p.doc.headings) : []), [p.doc]);
@@ -62,6 +70,28 @@ export function DocView(p: Props) {
     setSlide(0);
   }, [p.kind]);
 
+  // The agent rewrote the document while a comment was being typed: follow the line the
+  // composer was opened on, the way saved comments are re-anchored.
+  useEffect(() => {
+    if (composing === null || composingText === null || !p.doc) return;
+    const lines = p.doc.content.split("\n");
+    if (lines[composing - 1] === composingText) return;
+    const matches = lines.map((l, i) => (l === composingText ? i + 1 : 0)).filter(Boolean);
+    const draftFrom = `new:${p.kind}:${composing}`;
+    if (matches.length >= 1) {
+      const next = matches.reduce((best, l) => (Math.abs(l - composing) < Math.abs(best - composing) ? l : best), matches[0]);
+      moveDraft(draftFrom, `new:${p.kind}:${next}`);
+      setComposingState(next);
+      setMovedNote(next === composing ? null : `The document changed; your unsent comment moved from line ${composing} to line ${next}.`);
+    } else {
+      const clamped = Math.min(composing, lines.length);
+      if (clamped !== composing) moveDraft(draftFrom, `new:${p.kind}:${clamped}`);
+      setComposingState(clamped);
+      setMovedNote(`The document changed and the line you were commenting on is gone. Your text is kept on line ${clamped}; move it or send it anyway.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.doc?.sha]);
+
   useEffect(() => {
     if (!p.target || !slidesOn) return;
     setSlide(slideForLine(slides, p.target.line));
@@ -72,6 +102,12 @@ export function DocView(p: Props) {
     const c = p.comments.find((x) => x.id === p.highlightComment);
     if (c) setSlide(slideForLine(slides, c.anchor.line));
   }, [p.highlightComment, slidesOn, slides, p.comments]);
+
+  useEffect(() => {
+    if (!slidesOn) return;
+    const scroller = document.querySelector(".content") ?? document.scrollingElement;
+    scroller?.scrollTo({ top: 0 });
+  }, [slidesOn, current]);
 
   useEffect(() => {
     if (!slidesOn) return;
@@ -173,9 +209,10 @@ export function DocView(p: Props) {
     const block = blocks.find((b) => b.type === type && b.start === start);
     if (!block) return inner;
     const attach = attachments.map.get(`${type}:${start}`);
+    const hasDraft = composing !== start && getDraft(`new:${p.kind}:${start}`) !== "";
     const gutter = (
-      <button className="gutter" title={`Comment on line ${start}`} onClick={() => setComposing(composing === start ? null : start)} type="button">
-        +
+      <button className={`gutter ${hasDraft ? "has-draft" : ""}`} title={hasDraft ? `Unsent comment on line ${start}` : `Comment on line ${start}`} onClick={() => setComposing(composing === start ? null : start)} type="button">
+        {hasDraft ? "…" : "+"}
       </button>
     );
     const extras = (
@@ -183,7 +220,12 @@ export function DocView(p: Props) {
         {attach?.threads.map((t) => (
           <Thread key={t.root.id} root={t.root} replies={t.replies} actions={p.actions} highlighted={p.highlightComment === t.root.id} />
         ))}
-        {composing === start && <Composer placeholder={`Comment on line ${start}…`} onCancel={() => setComposing(null)} onSubmit={(b) => submit(start, b)} />}
+        {composing === start && (
+          <>
+            {movedNote && <div className="banner small">{movedNote}</div>}
+            <Composer draftKey={`new:${p.kind}:${start}`} placeholder={`Comment on line ${start}…`} onCancel={() => setComposing(null)} onSubmit={(b) => submit(start, b)} />
+          </>
+        )}
       </>
     );
     if (tag === "li") {
@@ -269,7 +311,7 @@ export function DocView(p: Props) {
           <div className="slide-progress">
             <div className="fill" style={{ width: `${((current + 1) / slides.length) * 100}%` }} />
           </div>
-          <div className="slide doc" key={`${p.doc.sha}:${current}`}>
+          <div className="slide doc" key={current}>
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
               {s.content}
             </ReactMarkdown>

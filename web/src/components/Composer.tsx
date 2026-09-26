@@ -1,26 +1,42 @@
 import { useEffect, useRef, useState } from "react";
+import { clearDraft, getDraft, setDraft } from "../lib/drafts";
 
-export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, submitLabel = "Comment" }: {
+export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, submitLabel = "Comment", draftKey }: {
   placeholder: string;
   onSubmit: (body: string) => Promise<void>;
   onCancel?: () => void;
   autoFocus?: boolean;
   submitLabel?: string;
+  /** Keeps the text across re-renders and document refreshes. */
+  draftKey?: string;
 }) {
-  const [body, setBody] = useState("");
+  const [body, setBodyState] = useState(() => (draftKey ? getDraft(draftKey) : ""));
+  const setBody = (v: string) => {
+    setBodyState(v);
+    if (draftKey) setDraft(draftKey, v);
+  };
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
-    if (autoFocus) ref.current?.focus();
+    if (!autoFocus) return;
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
   }, [autoFocus]);
+  const cancel = () => {
+    if (draftKey) clearDraft(draftKey);
+    onCancel?.();
+  };
   const submit = async () => {
     if (!body.trim() || busy) return;
     setBusy(true);
     setErr(null);
     try {
       await onSubmit(body);
-      setBody("");
+      setBodyState("");
+      if (draftKey) clearDraft(draftKey);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -37,7 +53,7 @@ export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, su
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit();
-          if (e.key === "Escape") onCancel?.();
+          if (e.key === "Escape") cancel();
         }}
       />
       {err && <div className="error">{err}</div>}
@@ -45,7 +61,7 @@ export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, su
         <span className="muted">Markdown, ⌘↩ to send</span>
         <span className="spacer" />
         {onCancel && (
-          <button className="btn ghost" onClick={onCancel} type="button">
+          <button className="btn ghost" onClick={cancel} type="button">
             Cancel
           </button>
         )}

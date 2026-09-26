@@ -11,7 +11,7 @@ import { StartRunDialog } from "./StartRunDialog";
 import { ThemeToggle } from "./ThemeToggle";
 import type { ThreadActions } from "./Thread";
 
-type Toast = { id: number; text: string; kind?: "info" | "error" };
+type Toast = { id: number; text: string; kind?: "info" | "error" | "warn" };
 
 export function SessionPage() {
   const { repo, slug } = useParams();
@@ -45,6 +45,10 @@ export function SessionPage() {
   const [changesNonce, setChangesNonce] = useState(0);
   const [author, setAuthor] = useState(authorName());
   const toastId = useRef(0);
+  const viewRef = useRef<SessionView | null>(null);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
 
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastId.current;
@@ -123,7 +127,8 @@ export function SessionPage() {
   }, [loadAll]);
 
   useEffect(() => {
-    document.title = view ? `${view.session.title} · plantool` : "plantool";
+    const waiting = view?.runs.some((r) => r.status === "waiting") ? "● " : view?.runs.some((r) => r.status === "idle") ? "○ " : "";
+    document.title = view ? `${waiting}${view.session.title} · plantool` : "plantool";
   }, [view]);
 
   useEffect(() => {
@@ -174,11 +179,17 @@ export function SessionPage() {
           break;
         case "run-started":
         case "run-updated":
-        case "run-ended":
+        case "run-ended": {
+          const prev = viewRef.current?.runs.find((r) => r.id === e.run.id);
           setView((v) => (v ? { ...v, runs: upsertRun(v.runs, e.run) } : v));
           if (e.type === "run-started") setSelectedRun(e.run.id);
+          if (e.type === "run-updated" && prev && prev.status !== e.run.status) {
+            if (e.run.status === "waiting") toast("The agent needs your answer", "warn");
+            else if (e.run.status === "idle" && prev.status === "running") toast("The agent finished its turn; your move");
+          }
           if (e.type === "run-ended") toast(`run ${e.run.status}${e.run.error ? `: ${e.run.error}` : ""}`, e.run.status === "failed" ? "error" : "info");
           break;
+        }
         case "run-removed":
           setView((v) => (v ? { ...v, runs: v.runs.filter((r) => r.id !== e.id) } : v));
           setRunLines((m) => {
