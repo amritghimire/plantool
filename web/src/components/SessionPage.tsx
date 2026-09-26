@@ -39,7 +39,7 @@ export function SessionPage() {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [dialog, setDialog] = useState<{ stage: "research" | "plan" | "implement"; resumeId?: string } | null>(null);
+  const [dialog, setDialog] = useState<{ stage: "research" | "plan" | "implement" | "critique"; resumeId?: string } | null>(null);
   const [selectedRun, setSelectedRun] = useState<string | null>(params.get("run"));
   const [runLines, setRunLines] = useState<Record<string, RunLine[]>>({});
   const [changesNonce, setChangesNonce] = useState(0);
@@ -319,6 +319,7 @@ export function SessionPage() {
 
   const onJump = (c: Comment) => {
     setTab(c.doc);
+    if (c.resolved) setShowResolved(true);
     setHighlight(c.id);
     setTarget({ line: c.anchor.line, nonce: Date.now() });
   };

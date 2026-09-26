@@ -312,6 +312,9 @@ pub struct Run {
     #[serde(default)]
     pub provider_session_id: Option<String>,
     pub stage: Stage,
+    /// What the run was started to do: research, plan, implement, critique or resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
     pub cwd: PathBuf,
     pub status: RunStatus,
     #[serde(default)]

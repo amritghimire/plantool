@@ -130,6 +130,7 @@ export interface Run {
   provider: Provider;
   provider_session_id: string | null;
   stage: Stage;
+  task?: string;
   cwd: string;
   status: RunStatus;
   model: string | null;

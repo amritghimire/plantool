@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
 import { relTime, shortPath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
-import type { ThreadActions } from "./Thread";
+import { Thread, type ThreadActions } from "./Thread";
 
 export interface SidebarProps {
   view: SessionView;
@@ -13,7 +13,7 @@ export interface SidebarProps {
   onBrief: (brief: string | null) => Promise<void>;
   onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
-  onStartRun: (stage: "research" | "plan" | "implement", resumeId?: string) => void;
+  onStartRun: (stage: "research" | "plan" | "implement" | "critique", resumeId?: string) => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
@@ -28,6 +28,14 @@ export function Sidebar(p: SidebarProps) {
   const stage = p.view.state.stage;
   const idx = STAGES.indexOf(stage);
   const openThreads = p.comments.filter((c) => !c.parent && !c.resolved).sort((a, b) => a.doc.localeCompare(b.doc) || a.anchor.line - b.anchor.line);
+  const resolvedThreads = p.comments.filter((c) => !c.parent && c.resolved).sort((a, b) => b.seq - a.seq);
+  const repliesOf = (root: Comment) => p.comments.filter((c) => c.parent === root.id).sort((a, b) => a.seq - b.seq);
+  const [showResolvedList, setShowResolvedList] = useState(false);
+  const activeDoc = p.view.docs.find((d) => d.kind === p.activeTab);
+  const askAgent = (c: Comment) =>
+    p.onSendToRun(
+      `Answer the comment thread ${c.id} on ${c.doc}.md line ${c.anchor.line} in plantool session ${p.view.key}. Read it with \`plantool session comment context --session ${p.view.key} --id ${c.id}\`, check the code it refers to, and reply on the thread with \`plantool session comment add --session ${p.view.key} --parent ${c.id} --body "…"\`. Answer the question there; only change the document if the thread asks for a change, and then say what changed. Leave the thread open for me to resolve.`,
+    );
   const openHuman = openThreads.filter((c) => c.kind === "human").length;
   const plan = p.view.docs.find((d) => d.kind === "plan");
   const research = p.view.docs.find((d) => d.kind === "research");
@@ -136,6 +144,11 @@ export function Sidebar(p: SidebarProps) {
             </button>
           </>
         )}
+        {activeDoc?.exists && (activeDoc.kind === "research" || activeDoc.kind === "plan") && (
+          <button className="btn ghost" onClick={() => p.onStartRun("critique")} disabled={p.busy} type="button" title="An agent reads the document against the code and posts findings as comments; it does not edit the document">
+            Review {activeDoc.kind} with agent
+          </button>
+        )}
         <div className="skip-row muted small">
           <button className="link" onClick={() => p.onStartRun(stage === "new" || stage === "researching" || stage === "research-review" ? "research" : stage === "approved" || stage === "implementing" || stage === "implementation-review" ? "implement" : "plan")} disabled={p.busy} type="button">
             run any stage…
@@ -199,9 +212,23 @@ export function Sidebar(p: SidebarProps) {
         )}
         <ul className="comment-list">
           {openThreads.map((c) => (
-            <CommentRow key={c.id} c={c} onJump={() => p.onJump(c)} actions={p.actions} />
+            <CommentRow key={c.id} c={c} replies={repliesOf(c)} onJump={() => p.onJump(c)} actions={p.actions} onAsk={liveRun ? () => askAgent(c) : undefined} busy={p.busy} />
           ))}
         </ul>
+        {resolvedThreads.length > 0 && (
+          <>
+            <button className="link resolved-toggle" onClick={() => setShowResolvedList((s) => !s)} type="button">
+              {showResolvedList ? "▾" : "▸"} Resolved conversations <span className="badge">{resolvedThreads.length}</span>
+            </button>
+            {showResolvedList && (
+              <ul className="comment-list resolved-list">
+                {resolvedThreads.map((c) => (
+                  <CommentRow key={c.id} c={c} replies={repliesOf(c)} onJump={() => p.onJump(c)} actions={p.actions} busy={p.busy} />
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </div>
 
       <div className="side-block">
@@ -219,7 +246,7 @@ export function Sidebar(p: SidebarProps) {
             <li key={r.id} className={p.selectedRun === r.id ? "active" : ""} onClick={() => p.onSelectRun(r.id)}>
               <span className={`run-status ${r.status}`} />
               <span>
-                {r.provider} · {r.stage}
+                {r.provider} · {r.task ?? r.stage}
               </span>
               <span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span>
               <span className="spacer" />
@@ -330,10 +357,14 @@ function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: stri
 
 const QUICK_REPLIES = ["Agreed, go ahead.", "No, keep it as it is.", "Not now; note it as a follow-up."];
 
-function CommentRow({ c, onJump, actions }: { c: Comment; onJump: () => void; actions: ThreadActions }) {
+function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c: Comment; replies: Comment[]; onJump: () => void; actions: ThreadActions; onAsk?: () => void; busy: boolean }) {
   const [replying, setReplying] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [innerBusy, setBusy] = useState(false);
+  const busy = innerBusy || outerBusy;
+  const count = replies.length + 1;
+  const last = replies[replies.length - 1];
   const send = async (body: string) => {
     if (!body.trim()) return;
     setBusy(true);
@@ -348,27 +379,45 @@ function CommentRow({ c, onJump, actions }: { c: Comment; onJump: () => void; ac
   const resolve = async () => {
     setBusy(true);
     try {
-      await actions.resolve(c, true);
+      await actions.resolve(c, !c.resolved);
     } finally {
       setBusy(false);
     }
   };
   return (
-    <li className={replying ? "replying" : ""}>
+    <li className={`${replying || expanded ? "replying" : ""} ${c.resolved ? "resolved" : ""}`}>
       <div className="comment-row" onClick={onJump}>
         <span className={`kind kind-${c.kind}`}>{c.kind}</span>
         <span className="muted small">
           {c.doc}:{c.anchor.line}
         </span>
+        {count > 1 && (
+          <span className="muted small" title={last ? `last reply by ${last.author}` : ""}>
+            · {count} {last?.kind === "agent" ? "· agent replied" : ""}
+          </span>
+        )}
         <span className="spacer" />
+        <button className="row-action" title={expanded ? "Collapse the conversation" : "Read the conversation"} onClick={(e) => { e.stopPropagation(); setExpanded((x) => !x); }} type="button">
+          {expanded ? "▾" : "▸"}
+        </button>
+        {onAsk && !c.resolved && (
+          <button className="row-action" title="Ask the running agent to answer this thread" disabled={busy} onClick={(e) => { e.stopPropagation(); onAsk(); }} type="button">
+            ?
+          </button>
+        )}
         <button className="row-action" title="Reply" disabled={busy} onClick={(e) => { e.stopPropagation(); setReplying((r) => !r); }} type="button">
           ↩
         </button>
-        <button className="row-action" title="Resolve" disabled={busy} onClick={(e) => { e.stopPropagation(); void resolve(); }} type="button">
-          ✓
+        <button className="row-action" title={c.resolved ? "Reopen" : "Resolve"} disabled={busy} onClick={(e) => { e.stopPropagation(); void resolve(); }} type="button">
+          {c.resolved ? "↺" : "✓"}
         </button>
       </div>
-      <div className="preview" onClick={onJump}>{c.body.split("\n")[0]}</div>
+      {!expanded && <div className="preview" onClick={onJump}>{(last ?? c).body.split("\n")[0]}</div>}
+      {expanded && (
+        <div className="side-thread" onClick={(e) => e.stopPropagation()}>
+          <Thread root={c} replies={replies} actions={actions} />
+        </div>
+      )}
       {replying && (
         <div className="quick-reply" onClick={(e) => e.stopPropagation()}>
           <div className="chips">

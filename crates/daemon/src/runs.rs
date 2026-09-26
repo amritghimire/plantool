@@ -32,6 +32,7 @@ impl RunManager {
             provider,
             provider_session_id: resume.clone(),
             stage,
+            task: Some(stage_name.to_string()),
             cwd: sess.cwd().clone(),
             status: RunStatus::Starting,
             model: model.clone(),

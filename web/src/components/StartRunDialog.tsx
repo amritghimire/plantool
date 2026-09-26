@@ -3,7 +3,7 @@ import { api } from "../api";
 import { PERMISSION_MODES, type PermissionMode, type Run } from "../types";
 import { relTime } from "../lib/format";
 
-export type RunStage = "research" | "plan" | "implement";
+export type RunStage = "research" | "plan" | "implement" | "critique";
 import { CopyButton } from "./CopyButton";
 
 interface ProviderInfo {
@@ -86,6 +86,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
             <option value="research">research</option>
             <option value="plan">plan</option>
             <option value="implement">implement (needs an approved plan)</option>
+            <option value="critique">critique: review the document and post findings as comments</option>
           </select>
         </label>
         <label>

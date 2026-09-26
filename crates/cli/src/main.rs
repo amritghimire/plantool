@@ -29,6 +29,8 @@ enum Command {
     Plan(commands::run::Args),
     /// Start a hosted implementation run for a session.
     Implement(commands::run::Args),
+    /// Have an agent critically review the research or plan and post findings as comments.
+    Critique(commands::run::Args),
     /// Open the change review (difftool, or git difftool) for a session.
     Changes(commands::changes::Args),
     /// Progress across sessions.
@@ -54,6 +56,7 @@ fn main() {
         Command::Research(a) => commands::run::run(a, "research"),
         Command::Plan(a) => commands::run::run(a, "plan"),
         Command::Implement(a) => commands::run::run(a, "implement"),
+        Command::Critique(a) => commands::run::run(a, "critique"),
         Command::Changes(a) => commands::changes::run(a),
         Command::Status(a) => commands::status::run(a),
         Command::Session(a) => commands::session::run(a),

@@ -148,6 +148,10 @@ h1.brand { font-size: 16px; margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { border: 1px solid var(--line); background: var(--bg-2); border-radius: 999px; padding: 2px 9px; font-size: 12px; cursor: pointer; color: var(--fg-2); }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
+.resolved-toggle { text-align: left; margin-top: 6px; font-size: 12px; color: var(--fg-2); display: flex; gap: 6px; align-items: center; }
+.resolved-list li { opacity: 0.8; }
+.comment-list li.resolved .kind { filter: grayscale(0.4); }
+.side-thread .thread { margin: 4px 0 0; }
 .comment-tools { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
 .comment-tools .btn { width: 100%; }
 .run-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; font-size: 12.5px; }

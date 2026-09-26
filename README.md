@@ -98,6 +98,7 @@ approve straight away. In that case the agent first writes a ticket list (todo i
 | `plantool list [--repo .] [--stage <s>]` | The inbox. The browser's list page has a **New session** button with your recent repositories to pick from |
 | `plantool open <ref>` | Open a session in the browser |
 | `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context |
+| `plantool critique <ref>` | Have an agent critically review the research or plan and post findings as anchored comments (also the "Review with agent" button) |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
 | `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |
 | `plantool skill [research\|plan\|implement]` | Print the agent instructions, or one stage skill, for any agent to read inline |

@@ -36,13 +36,14 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let provider = Provider::parse(&body.provider).ok_or_else(|| bad_request(format!("unknown provider {}", body.provider)))?;
     let stage_name = body.stage.as_str();
+    let current = s.stage();
     let target = match stage_name {
         "research" => Stage::Researching,
         "plan" => Stage::Planning,
         "implement" => Stage::Implementing,
-        other => return Err(bad_request(format!("stage must be research, plan or implement (got {other})"))),
+        "critique" => current,
+        other => return Err(bad_request(format!("stage must be research, plan, implement or critique (got {other})"))),
     };
-    let current = s.stage();
     if stage_name == "implement" && !matches!(current, Stage::Approved | Stage::Implementing | Stage::ImplementationReview) {
         return Err(ApiError(StatusCode::FORBIDDEN, format!("the plan must be approved before implementation starts (stage is {current})")));
     }

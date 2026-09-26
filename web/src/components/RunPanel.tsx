@@ -173,7 +173,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
       <header className="run-head">
         <span className={`run-status ${run.status}`} />
         <strong>
-          {run.provider} · {run.stage}
+          {run.provider} · {run.task ?? run.stage}
         </strong>
         <span className="muted small">{run.model ?? ""}</span>
         <span className="spacer" />

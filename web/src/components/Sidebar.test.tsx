@@ -68,6 +68,15 @@ describe("Sidebar comments", () => {
     await vi.waitFor(() => expect(actions.resolve).toHaveBeenCalledWith(question, true));
   });
 
+  it("expands a thread in place and asks the running agent about it", async () => {
+    const { onSendToRun } = setup();
+    fireEvent.click(screen.getByTitle("Read the conversation"));
+    expect(screen.getByText("Keep, hide, or remove Storage?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("Ask the running agent to answer this thread"));
+    await vi.waitFor(() => expect(onSendToRun).toHaveBeenCalled());
+    expect((onSendToRun.mock.calls[0] as unknown as [string])[0]).toContain("--parent q1");
+  });
+
   it("sends the review prompt to the live run", async () => {
     const { onSendToRun } = setup();
     fireEvent.click(screen.getByText("Send comments to the running agent"));

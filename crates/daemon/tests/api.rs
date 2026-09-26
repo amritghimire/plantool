@@ -172,7 +172,7 @@ async fn brief_and_prompt() {
 
     let (st, _) = call(app, "DELETE", &format!("/api/sessions/{key}/runs/nope"), None, true, "127.0.0.1").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
-    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
+    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, task: None, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
     live.upsert_run(stopped, |r| plantool_daemon::events::LiveEvent::RunStarted { run: r }).unwrap();
     live.append_run_event("r1", 1, json!({ "type": "status", "label": "x" })).unwrap();
     assert!(live.store.run_log_path("r1").is_file());

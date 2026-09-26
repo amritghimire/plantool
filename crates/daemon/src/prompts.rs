@@ -1,7 +1,7 @@
 use plantool_core::{DocKind, Session};
 use std::path::Path;
 
-pub const STAGES: [&str; 5] = ["research", "plan", "implement", "review", "resume"];
+pub const STAGES: [&str; 6] = ["research", "plan", "implement", "review", "resume", "critique"];
 
 pub const RESEARCH: &str = r#"Research for plantool session `{key}`: {title}
 
@@ -33,9 +33,26 @@ set the stage to `implementation-review`, and summarise what changed and what yo
 pub const REVIEW: &str = r#"Act on the review comments for plantool session `{key}`: {title}
 
 Run `plantool skill` and follow it. The human left comments on `{review_doc_path}`.
-Read them with `plantool session comment list --session {key} --kind human --unresolved --context --json` (note the `seq`),
-revise the document for each one, reply on the thread with what changed (`comment add --parent <id>`), and resolve it.
+Read them with `plantool session comment list --session {key} --kind human --unresolved --context --json` (note the `seq`).
+A comment that asks a question gets an answer on its thread (`comment add --parent <id>`); leave it open for the human to resolve.
+A comment that asks for a change gets the change in the document, a reply saying what changed, and a resolve.
 Then `plantool session watch --session {key} --since <seq> --timeout 900` and repeat until the stage changes or the human says stop.
+{brief}
+{extra}"#;
+
+pub const CRITIQUE: &str = r#"Critically review the document for plantool session `{key}`: {title}
+
+Run `plantool skill` and follow it. Read `{review_doc_path}` (and `{research_path}` if it exists) against the code in `{checkout}`;
+open the files the document names and check its claims. You are the reviewer here, not the author: do not edit the document.
+
+Look for: assumptions that do not match the code; missing edge cases, error handling, tests, migrations, security or backwards
+compatibility; steps too big for one session; acceptance criteria that cannot be verified; a simpler approach that follows the
+codebase's existing patterns; anything the brief asked for that the document does not cover, and anything it covers that was not asked.
+
+Post each finding as a comment anchored on the line it is about, all in one batch
+(`plantool session comment apply --session {key} --input -` with `{"comments":[{"doc":"<research|plan>","match":"<line text>","body":"…"}]}`).
+Each body: the problem, why it matters, and the concrete fix or question; one finding per comment; skip praise.
+End with one comment on the title line: the verdict (ready, needs updates, or needs revision) and the two or three findings that matter most.
 {brief}
 {extra}"#;
 
@@ -61,6 +78,7 @@ pub fn template(home: &Path, stage: &str) -> String {
         "implement" => IMPLEMENT.to_string(),
         "review" => REVIEW.to_string(),
         "resume" => RESUME.to_string(),
+        "critique" => CRITIQUE.to_string(),
         _ => String::new(),
     }
 }
@@ -181,6 +199,14 @@ mod tests {
         assert!(p.contains("comment list --session repo/fix-it --kind human --unresolved"), "{p}");
         let p = render_at(Path::new("/nonexistent"), "review", &session(None), dir, None, Stage::PlanReview);
         assert!(p.contains("/d/plan.md"), "{p}");
+    }
+
+    #[test]
+    fn critique_prompt_reviews_without_editing() {
+        let p = render_at(Path::new("/nonexistent"), "critique", &session(None), Path::new("/d"), None, Stage::PlanReview);
+        assert!(p.contains("/d/plan.md"), "{p}");
+        assert!(p.contains("comment apply --session repo/fix-it"), "{p}");
+        assert!(p.contains("do not edit the document"), "{p}");
     }
 
     #[test]

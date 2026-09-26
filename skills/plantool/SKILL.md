@@ -73,9 +73,15 @@ call. `comment context --id <id>` does the same for one comment.
 ## Modes
 
 - **Act on feedback** (the usual loop in `plan-review`): read `comment list --kind human
-  --unresolved --context`, revise the document, then **reply** on each thread with what changed
-  (`comment add --parent <id> --body "…"`) and resolve it. Do not add unrelated findings of your
-  own while acting.
+  --unresolved --context`. Tell questions from requests. A **question** gets an answer on its
+  thread (`comment add --parent <id> --body "…"`), grounded in the code, and stays open for the
+  human to resolve; the thread is a conversation, so read the earlier replies first
+  (`comment context --id <id>`). A **request** gets the change in the document, a reply saying
+  what changed, and a resolve. Do not add unrelated findings of your own while acting.
+- **Critique** (`plantool skill` + the critique prompt, or `plantool critique <ref>`): review the
+  research or plan as a reviewer, not the author. Check its claims against the code, post one
+  finding per comment anchored on the line it is about (batched with `comment apply`), and end
+  with a verdict comment on the title line. Do not edit the document.
 - **Annotate**: when asked to review a document, leave only comments that help; batch them with
   `comment apply` (JSON `{"comments":[{"doc":"plan","match":"…","body":"…"}]}` on stdin or
   `--input`).
