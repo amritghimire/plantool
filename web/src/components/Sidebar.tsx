@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
 import { relTime, shortPath } from "../lib/format";
 
@@ -7,10 +8,13 @@ export interface SidebarProps {
   activeTab: string;
   onTab: (t: string) => void;
   onStage: (s: Stage) => Promise<void>;
+  onBrief: (brief: string | null) => Promise<void>;
+  onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
   onStartRun: (stage: "research" | "plan" | "implement") => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
+  onRemoveRun: (id: string) => Promise<void>;
   selectedRun: string | null;
   busy: boolean;
 }
@@ -24,17 +28,30 @@ export function Sidebar(p: SidebarProps) {
   const research = p.view.docs.find((d) => d.kind === "research");
   const s = p.view.session;
 
+  const finished = p.view.runs.filter((r) => !isLive(r));
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
+  const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
 
   return (
     <aside className="sidebar">
       <div className="side-block">
         <div className="side-title">{s.title}</div>
         <div className="muted small">{p.view.key}</div>
-        <div className="muted small" title={s.worktree ?? s.repo.root}>
-          {shortPath(s.worktree ?? s.repo.root)} · {s.repo.branch} → {s.base}
+        <div className="muted small" title={`repository: ${s.repo.root}`}>
+          {shortPath(s.repo.root)} · {s.repo.branch} → {s.base}
+        </div>
+        {s.worktree && (
+          <div className="muted small" title={`worktree: ${s.worktree}`}>
+            worktree {shortPath(s.worktree)}
+          </div>
+        )}
+        <div className="muted small" title={`${s.created_at}${s.created_in ? ` in ${s.created_in}` : ""}`}>
+          created {relTime(s.created_at)}
+          {s.created_in && s.created_in !== s.repo.root ? ` from ${shortPath(s.created_in)}` : ""}
         </div>
       </div>
+
+      <Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} />
 
       <ol className="stepper">
         {STAGES.map((st, i) => (
@@ -47,14 +64,33 @@ export function Sidebar(p: SidebarProps) {
 
       <div className="side-block actions">
         {stage === "new" && (
-          <button className="btn primary" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
-            Start research
-          </button>
+          <>
+            <button className="btn primary" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
+              Start research
+            </button>
+            <div className="skip-row muted small">
+              skip:
+              <button className="link" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+                research → plan
+              </button>
+              <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
+                planning → build
+              </button>
+            </div>
+          </>
         )}
         {(stage === "researching" || stage === "research-review") && (
-          <button className="btn primary" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
-            Plan it
-          </button>
+          <>
+            <button className="btn primary" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+              Plan it
+            </button>
+            <div className="skip-row muted small">
+              skip:
+              <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
+                planning → build
+              </button>
+            </div>
+          </>
         )}
         {(stage === "planning" || stage === "plan-review") && (
           <>
@@ -72,9 +108,12 @@ export function Sidebar(p: SidebarProps) {
           </>
         )}
         {stage === "approved" && (
-          <button className="btn primary" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
-            Start implementation
-          </button>
+          <>
+            <button className="btn primary" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
+              Start implementation
+            </button>
+            {!plan?.exists && <div className="muted small">No plan: the agent writes the tickets (todo items) to plan.md first, then works through them.</div>}
+          </>
         )}
         {(stage === "implementing" || stage === "implementation-review") && (
           <>
@@ -149,7 +188,14 @@ export function Sidebar(p: SidebarProps) {
       </div>
 
       <div className="side-block">
-        <div className="side-heading">Runs</div>
+        <div className="side-heading">
+          Runs
+          {finished.length > 1 && (
+            <button className="link" onClick={() => window.confirm(`Clear ${finished.length} finished runs and their transcripts?`) && finished.forEach((r) => void p.onRemoveRun(r.id))} type="button">
+              clear finished
+            </button>
+          )}
+        </div>
         {p.view.runs.length === 0 && <div className="muted small">No hosted runs yet.</div>}
         <ul className="run-list">
           {[...p.view.runs].reverse().map((r) => (
@@ -160,12 +206,99 @@ export function Sidebar(p: SidebarProps) {
               </span>
               <span className="spacer" />
               <span className="muted small">{relTime(r.started_at)}</span>
+              {!isLive(r) && (
+                <button
+                  className="run-remove"
+                  title="Clear this run and its transcript"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm("Clear this run and its transcript?")) void p.onRemoveRun(r.id);
+                  }}
+                  type="button"
+                >
+                  ×
+                </button>
+              )}
             </li>
           ))}
         </ul>
       </div>
+
+      <div className="side-block danger-zone">
+        <button
+          className="link danger"
+          disabled={p.busy}
+          onClick={() => {
+            const wt = s.worktree ? window.confirm(`Also remove the git worktree at ${s.worktree}? (Cancel keeps it.)`) : false;
+            if (window.confirm(`Drop session ${p.view.key}? Its documents, comments and run transcripts are deleted. This cannot be undone.`)) void p.onDelete(wt);
+          }}
+          type="button"
+        >
+          {stage === "done" ? "Drop this finished session" : "Drop session"}
+        </button>
+      </div>
     </aside>
   );
+}
+
+function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: string | null) => Promise<void>; busy: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(brief ?? "");
+  useEffect(() => {
+    if (!editing) setDraft(brief ?? "");
+  }, [brief, editing]);
+  const save = async () => {
+    try {
+      await onSave(draft.trim() ? draft : null);
+      setEditing(false);
+    } catch {
+      // the page shows the error
+    }
+  };
+  return (
+    <div className="side-block brief">
+      <div className="side-heading">
+        Brief
+        {!editing && (
+          <button className="link" onClick={() => setEditing(true)} type="button">
+            {brief ? "edit" : "add"}
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <>
+          <textarea
+            rows={5}
+            value={draft}
+            autoFocus
+            placeholder="What should the agent research or build? Context, links, constraints. It is rendered into every stage prompt."
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void save();
+              if (e.key === "Escape") setEditing(false);
+            }}
+          />
+          <div className="composer-actions">
+            <span className="spacer" />
+            <button className="btn ghost small" onClick={() => setEditing(false)} type="button">
+              Cancel
+            </button>
+            <button className="btn primary small" disabled={busy} onClick={() => void save()} type="button">
+              Save
+            </button>
+          </div>
+        </>
+      ) : brief ? (
+        <div className="brief-text">{brief}</div>
+      ) : (
+        <div className="muted small">Nothing yet. Tell the agent what to research or build; it goes into every stage prompt.</div>
+      )}
+    </div>
+  );
+}
+
+function isLive(r: Run): boolean {
+  return r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle";
 }
 
 function DocTab({ label, doc, active, onClick }: { label: string; doc: DocSummary | undefined; active: boolean; onClick: () => void }) {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
-import type { Run, RunEvent } from "../types";
+import { PERMISSION_MODES, type PermissionMode, type Run, type RunEvent } from "../types";
 
 export interface RunLine {
   seq: number;
@@ -41,12 +41,20 @@ export function projectRun(lines: RunLine[]) {
   const msgs = new Map<string, Message>();
   const pending = new Map<string, Pending>();
   let streaming: Message | null = null;
+  let lastStreamed: Message | null = null;
   for (const { event: e } of lines) {
     switch (e.type) {
       case "message": {
         const m = msgs.get(e.id);
+        // The final message for text that was already streamed: adopt the streamed item instead of repeating it.
+        const streamed = streaming ?? (lastStreamed && lastStreamed.content.trim() === e.content.trim() ? lastStreamed : null);
         if (m) m.content = e.content;
-        else {
+        else if (e.role === "assistant" && streamed) {
+          streamed.id = e.id;
+          streamed.content = e.content;
+          msgs.set(e.id, streamed);
+          lastStreamed = null;
+        } else {
           const nm = { id: e.id, role: e.role, content: e.content };
           msgs.set(e.id, nm);
           items.push({ t: "msg", m: nm });
@@ -58,6 +66,7 @@ export function projectRun(lines: RunLine[]) {
         if (!streaming) {
           streaming = { id: `stream-${items.length}`, role: "assistant", content: "" };
           items.push({ t: "msg", m: streaming });
+          lastStreamed = streaming;
         }
         streaming.content += e.delta;
         break;
@@ -143,6 +152,23 @@ export function RunPanel({ sessionKey, run, lines, onClose }: { sessionKey: stri
         <span className="muted small">{run.model ?? ""}</span>
         <span className="spacer" />
         <span className="muted small">{run.status}</span>
+        {live ? (
+          <select
+            className="permission-select"
+            title={PERMISSION_MODES.find((m) => m.id === (run.permission_mode ?? "ask"))?.hint}
+            value={run.permission_mode ?? "ask"}
+            disabled={busy}
+            onChange={(e) => void send({ permission_mode: e.target.value as PermissionMode })}
+          >
+            {PERMISSION_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          run.permission_mode && run.permission_mode !== "ask" && <span className="muted small">{PERMISSION_MODES.find((m) => m.id === run.permission_mode)?.label}</span>
+        )}
         {live && (
           <button className="btn ghost" onClick={() => void api.stopRun(sessionKey, run.id)} type="button">
             Stop
@@ -183,6 +209,11 @@ export function RunPanel({ sessionKey, run, lines, onClose }: { sessionKey: stri
                   {o.label}
                 </button>
               ))}
+              {(run.permission_mode ?? "ask") !== "allow-all" && (
+                <button className="btn ghost" disabled={busy} title="Answer this and every later request with allow" onClick={() => void send({ permission_mode: "allow-all" })} type="button">
+                  Allow all
+                </button>
+              )}
             </div>
           )}
           {pd.kind === "input" && <InputAnswer pd={pd} busy={busy} onAnswer={(answers) => void send({ input: { request_id: pd.request_id, answers } })} />}

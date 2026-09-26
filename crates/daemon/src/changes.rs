@@ -52,10 +52,35 @@ pub fn stat(session: &Session, review: Option<ChangeReview>) -> Changes {
     Changes { tool: tool.name(), base: session.base.clone(), stat, review, message }
 }
 
-pub fn open_review(session: &Session, plan_path: Option<PathBuf>) -> anyhow::Result<(ChangeReview, Option<String>)> {
+pub fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    let mut cmd = { let mut c = Command::new("open"); c.arg(url); c };
+    #[cfg(target_os = "windows")]
+    let mut cmd = { let mut c = Command::new("cmd"); c.args(["/C", "start", "", url]); c };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut cmd = { let mut c = Command::new("xdg-open"); c.arg(url); c };
+    let _ = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+}
+
+/// Open an existing difftool review from the daemon: refresh its diff, then let difftool open the
+/// browser itself so the page never navigates cross-origin. Returns false when the review is gone.
+fn reopen_difftool(path: &PathBuf, review: &str) -> bool {
+    let refreshed = Command::new(path).arg("refresh").arg(review).stdin(Stdio::null()).output().map(|o| o.status.success()).unwrap_or(false);
+    if !refreshed {
+        return false;
+    }
+    Command::new(path).arg("open").arg(review).stdin(Stdio::null()).output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub fn open_review(session: &Session, plan_path: Option<PathBuf>, existing: Option<&ChangeReview>) -> anyhow::Result<(ChangeReview, Option<String>)> {
     let cwd = session.cwd().clone();
     match detect_change_tool() {
         ChangeTool::Difftool { path } => {
+            if let Some(ChangeReview::Difftool { url, review: Some(review), .. }) = existing {
+                if reopen_difftool(&path, review) {
+                    return Ok((ChangeReview::Difftool { url: url.clone(), review: Some(review.clone()), opened_at: plantool_core::now() }, Some("refreshed the existing difftool review and opened it".into())));
+                }
+            }
             let mut cmd = Command::new(&path);
             cmd.arg("diff").arg("-C").arg(&cwd).arg(&session.base).arg("--no-open");
             if let Some(p) = plan_path.filter(|p| p.is_file()) {
@@ -75,7 +100,14 @@ pub fn open_review(session: &Session, plan_path: Option<PathBuf>) -> anyhow::Res
             match url {
                 Some(url) => {
                     let review = url.split("/r/").nth(1).map(|s| s.trim_end_matches('/').to_string());
-                    Ok((ChangeReview::Difftool { url, review, opened_at: plantool_core::now() }, None))
+                    let opened = match &review {
+                        Some(r) => Command::new(&path).arg("open").arg(r).stdin(Stdio::null()).output().map(|o| o.status.success()).unwrap_or(false),
+                        None => false,
+                    };
+                    if !opened {
+                        open_url(&url);
+                    }
+                    Ok((ChangeReview::Difftool { url, review, opened_at: plantool_core::now() }, Some("difftool opened the review in your browser".into())))
                 }
                 None => anyhow::bail!("difftool printed no review URL: {}", stdout.trim()),
             }

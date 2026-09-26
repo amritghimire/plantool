@@ -1,5 +1,6 @@
 use super::{emit, EventSink, InputQuestion, PermissionOption, ProviderEvent, RunInput, RunOptions};
 use anyhow::Context;
+use plantool_core::PermissionMode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -14,15 +15,26 @@ struct Pending {
     input: Value,
 }
 
+fn claude_mode(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Ask => "default",
+        PermissionMode::AcceptEdits => "acceptEdits",
+        PermissionMode::Auto => "auto",
+        PermissionMode::AllowAll => "bypassPermissions",
+    }
+}
+
 pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: EventSink) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "claude".into());
+    let mut mode = opts.permission_mode;
     let mut cmd = Command::new(&exe);
     cmd.arg("-p")
         .arg("--input-format").arg("stream-json")
         .arg("--output-format").arg("stream-json")
         .arg("--verbose")
         .arg("--include-partial-messages")
-        .arg("--permission-mode").arg("default")
+        .arg("--permission-mode").arg(claude_mode(mode))
+        .arg("--allow-dangerously-skip-permissions")
         .arg("--permission-prompt-tool").arg("stdio");
     if let Some(m) = &opts.model {
         cmd.arg("--model").arg(m);
@@ -137,7 +149,7 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                         }
                         let tool = req.get("tool_name").and_then(|s| s.as_str()).unwrap_or("").to_string();
                         let input_v = req.get("input").cloned().unwrap_or(json!({}));
-                        if READ_ONLY_TOOLS.contains(&tool.as_str()) {
+                        if READ_ONLY_TOOLS.contains(&tool.as_str()) || (mode == PermissionMode::AllowAll && tool != "AskUserQuestion") {
                             respond(&mut stdin, &request_id, json!({ "behavior": "allow", "updatedInput": input_v })).await?;
                             continue;
                         }
@@ -213,6 +225,21 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                             let _ = p.tool;
                             respond(&mut stdin, &request_id, json!({ "behavior": "allow", "updatedInput": updated })).await?;
                             emit(&sink, ProviderEvent::RequestResolved { request_id }).await;
+                        }
+                    }
+                    Some(RunInput::PermissionMode(m)) => {
+                        mode = m;
+                        let req = json!({ "type": "control_request", "request_id": format!("plantool-mode-{}", plantool_core::now()), "request": { "subtype": "set_permission_mode", "mode": claude_mode(m) } });
+                        stdin.write_all(format!("{req}\n").as_bytes()).await?;
+                        emit(&sink, ProviderEvent::Status { label: format!("permissions: {m}"), detail: None }).await;
+                        if m == PermissionMode::AllowAll {
+                            let ids: Vec<String> = pending.iter().filter(|(_, p)| p.tool != "AskUserQuestion").map(|(id, _)| id.clone()).collect();
+                            for id in ids {
+                                if let Some(p) = pending.remove(&id) {
+                                    respond(&mut stdin, &id, json!({ "behavior": "allow", "updatedInput": p.input })).await?;
+                                    emit(&sink, ProviderEvent::RequestResolved { request_id: id }).await;
+                                }
+                            }
                         }
                     }
                     Some(RunInput::Stop) | None => { stopped = true; break; }

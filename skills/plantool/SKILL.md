@@ -10,6 +10,14 @@ a stage stepper, and a live view of your run. You drive it through the `plantool
 against a local daemon (`127.0.0.1:41200`, override `PLANTOOL_PORT`). Everything you write shows
 up in the user's tab as you write it. **Do not drive the browser.**
 
+**The stage skills.** `plantool skill research`, `plantool skill plan` and `plantool skill implement`
+print the instructions for each phase, adapted to plantool. The stage prompts point you at them.
+`plantool skill install` writes them as slash commands (`/plantool-research <ref>` etc.).
+
+**The brief.** `plantool session get --session <ref> --json` → `session.brief` is what the user
+wants researched or built. Treat it as the assignment; `plantool session prompt --session <ref>`
+prints the prompt for the next stage with the brief rendered in.
+
 **Only the human can approve.** The stages are `new → researching → research-review → planning →
 plan-review → approved → implementing → implementation-review → done`. You may move the stage
 forward with `session stage --set <stage>` up to `plan-review`, and from `approved` to
@@ -48,6 +56,8 @@ plantool session comment resolve --session <ref> --id a,b
 plantool session watch --session <ref> --since <seq> --timeout 600   # block until the human acts
 plantool session goto --session <ref> --kind plan --match "<line text>"   # scroll their tab
 plantool session stage --session <ref> --set planning
+plantool session brief --session <ref>                               # what the user wants
+plantool session prompt --session <ref> --stage plan                 # the prompt for a stage
 ```
 
 ## Anchoring

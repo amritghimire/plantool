@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, authorName, setAuthorName } from "../api";
 import { useLive } from "../lib/live";
 import type { Comment, DocKind, DocResponse, LiveEvent, Run, SessionView, Stage } from "../types";
@@ -17,10 +17,12 @@ export function SessionPage() {
   const { repo, slug } = useParams();
   const key = `${repo}/${slug}`;
   const [params, setParams] = useSearchParams();
+  const nav = useNavigate();
   const [view, setView] = useState<SessionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [docs, setDocs] = useState<Partial<Record<DocKind, DocResponse | null>>>({});
   const [paths, setPaths] = useState<Partial<Record<DocKind, string>>>({});
+  const [prompts, setPrompts] = useState<Partial<Record<DocKind, string>>>({});
   const [comments, setComments] = useState<Comment[]>([]);
   const [tab, setTabState] = useState<string>(params.get("tab") ?? "plan");
   const [mode, setMode] = useState<ViewMode>(() => (localStorage.getItem("plantool.mode") === "source" ? "source" : "rendered"));
@@ -49,6 +51,20 @@ export function SessionPage() {
     setParams(next, { replace: true });
   };
 
+  const loadPrompt = useCallback(
+    async (kind: DocKind) => {
+      const stage = kind === "research" ? "research" : kind === "plan" ? "plan" : null;
+      if (!stage) return;
+      try {
+        const p = await api.prompt(key, stage);
+        setPrompts((m) => ({ ...m, [kind]: p.prompt }));
+      } catch {
+        // the empty state still shows the path
+      }
+    },
+    [key],
+  );
+
   const loadDoc = useCallback(
     async (kind: DocKind) => {
       try {
@@ -62,10 +78,18 @@ export function SessionPage() {
         } catch {
           // ignore
         }
+        void loadPrompt(kind);
       }
     },
-    [key],
+    [key, loadPrompt],
   );
+
+  const reloadPrompts = useCallback(() => {
+    setDocs((m) => {
+      for (const k of Object.keys(m) as DocKind[]) if (m[k] === null) void loadPrompt(k);
+      return m;
+    });
+  }, [loadPrompt]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -126,12 +150,27 @@ export function SessionPage() {
           setView((v) => (v ? { ...v, state: { ...v.state, stage: e.to } } : v));
           toast(`stage: ${e.to}`);
           break;
+        case "session-updated":
+          setView((v) => (v ? { ...v, session: e.session } : v));
+          reloadPrompts();
+          break;
+        case "session-removed":
+          nav("/", { replace: true });
+          break;
         case "run-started":
         case "run-updated":
         case "run-ended":
           setView((v) => (v ? { ...v, runs: upsertRun(v.runs, e.run) } : v));
           if (e.type === "run-started") setSelectedRun(e.run.id);
           if (e.type === "run-ended") toast(`run ${e.run.status}${e.run.error ? `: ${e.run.error}` : ""}`, e.run.status === "failed" ? "error" : "info");
+          break;
+        case "run-removed":
+          setView((v) => (v ? { ...v, runs: v.runs.filter((r) => r.id !== e.id) } : v));
+          setRunLines((m) => {
+            const { [e.id]: _gone, ...rest } = m;
+            return rest;
+          });
+          setSelectedRun((s) => (s === e.id ? null : s));
           break;
         case "run-event":
           setRunLines((m) => {
@@ -157,7 +196,7 @@ export function SessionPage() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, loadDoc, toast],
+    [key, loadDoc, reloadPrompts, toast],
   );
 
   useLive(view ? key : null, onEvent, () => void loadAll());
@@ -195,6 +234,42 @@ export function SessionPage() {
       toast((e as Error).message, "error");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onBrief = async (brief: string | null) => {
+    setBusy(true);
+    try {
+      const r = await api.setBrief(key, brief);
+      setView((v) => (v ? { ...v, session: r.session } : v));
+      reloadPrompts();
+    } catch (e) {
+      toast((e as Error).message, "error");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDelete = async (removeWorktree: boolean) => {
+    setBusy(true);
+    try {
+      await api.removeSession(key, removeWorktree);
+      nav("/", { replace: true });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRemoveRun = async (id: string) => {
+    try {
+      await api.removeRun(key, id);
+      setView((v) => (v ? { ...v, runs: v.runs.filter((r) => r.id !== id) } : v));
+      setSelectedRun((s) => (s === id ? null : s));
+    } catch (e) {
+      toast((e as Error).message, "error");
     }
   };
 
@@ -266,10 +341,13 @@ export function SessionPage() {
         activeTab={tab}
         onTab={setTab}
         onStage={onStage}
+        onBrief={onBrief}
+        onDelete={onDelete}
         onJump={onJump}
         onStartRun={(s) => setDialog(s)}
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
+        onRemoveRun={onRemoveRun}
         selectedRun={selectedRun}
         busy={busy}
       />
@@ -279,6 +357,8 @@ export function SessionPage() {
             kind={kind}
             doc={docs[kind] ?? null}
             path={paths[kind] ?? view.docs.find((d) => d.kind === kind)?.path ?? null}
+            prompt={prompts[kind] ?? null}
+            onStartRun={kind === "research" || kind === "plan" ? () => setDialog(kind) : undefined}
             comments={comments.filter((c) => c.doc === kind)}
             actions={actions}
             onAdd={onAdd}

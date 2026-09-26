@@ -1,5 +1,6 @@
 use super::{emit, EventSink, InputQuestion, PermissionOption, ProviderEvent, RunInput, RunOptions};
 use anyhow::Context;
+use plantool_core::PermissionMode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -86,6 +87,27 @@ fn decision_options(available: Option<&Vec<Value>>, kind: &str) -> (Vec<Permissi
     (options, map)
 }
 
+fn codex_approval(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Ask | PermissionMode::AcceptEdits => "on-request",
+        PermissionMode::Auto | PermissionMode::AllowAll => "never",
+    }
+}
+
+fn codex_sandbox(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::AllowAll => "danger-full-access",
+        _ => "workspace-write",
+    }
+}
+
+fn codex_sandbox_policy(mode: PermissionMode, writable_roots: &[std::path::PathBuf]) -> Value {
+    match mode {
+        PermissionMode::AllowAll => json!({ "type": "dangerFullAccess" }),
+        _ => json!({ "type": "workspaceWrite", "writableRoots": writable_roots, "networkAccess": true }),
+    }
+}
+
 pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: EventSink) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "codex".into());
     let mut cmd = Command::new(&exe);
@@ -110,6 +132,7 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
     let mut turn_rx: Option<oneshot::Receiver<Result<Value, String>>> = None;
     let mut init_rx = Some(init_rx);
     let mut stopped = false;
+    let mut mode = opts.permission_mode;
     emit(&sink, ProviderEvent::Message { id: "prompt".into(), role: "user".into(), content: opts.prompt.clone() }).await;
 
     loop {
@@ -118,7 +141,7 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                 if let Ok(res) = rx.try_recv() {
                     res.map_err(|e| anyhow::anyhow!("codex initialize failed: {e}"))?;
                     rpc.notify("initialized", json!({})).await?;
-                    let mut cfg = json!({ "cwd": opts.cwd, "sandbox": "workspace-write", "approvalPolicy": "on-request", "approvalsReviewer": "user" });
+                    let mut cfg = json!({ "cwd": opts.cwd, "sandbox": codex_sandbox(mode), "approvalPolicy": codex_approval(mode), "approvalsReviewer": "user" });
                     if let Some(m) = &opts.model { cfg["model"] = json!(m); }
                     let rx = if let Some(t) = &opts.resume {
                         cfg["threadId"] = json!(t);
@@ -148,7 +171,7 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
         if phase == 2 && active_turn.is_none() && turn_rx.is_none() && !queued.is_empty() {
             let text = queued.remove(0);
             let tid = thread_id.clone().unwrap_or_default();
-            let rx = rpc.request("turn/start", json!({ "threadId": tid, "input": [{ "type": "text", "text": text, "text_elements": [] }], "sandboxPolicy": { "type": "workspaceWrite", "writableRoots": opts.writable_roots, "networkAccess": true } })).await?;
+            let rx = rpc.request("turn/start", json!({ "threadId": tid, "input": [{ "type": "text", "text": text, "text_elements": [] }], "approvalPolicy": codex_approval(mode), "sandboxPolicy": codex_sandbox_policy(mode, &opts.writable_roots) })).await?;
             turn_rx = Some(rx);
         }
         if let Some(rx) = turn_rx.as_mut() {
@@ -332,6 +355,20 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                             for (k, v) in answers { map.insert(k, json!({ "answers": [v] })); }
                             rpc.respond(rpc_id, json!({ "answers": map })).await?;
                             emit(&sink, ProviderEvent::RequestResolved { request_id }).await;
+                        }
+                    }
+                    Some(RunInput::PermissionMode(m)) => {
+                        mode = m;
+                        emit(&sink, ProviderEvent::Status { label: format!("permissions: {m} (applies from the next turn)"), detail: None }).await;
+                        if m == PermissionMode::AllowAll {
+                            let ids: Vec<String> = pending_approvals.keys().cloned().collect();
+                            for request_id in ids {
+                                if let Some(p) = pending_approvals.remove(&request_id) {
+                                    let result = p.decisions.get("allow").cloned().unwrap_or(json!({ "decision": "accept" }));
+                                    rpc.respond(p.rpc_id, result).await?;
+                                    emit(&sink, ProviderEvent::RequestResolved { request_id }).await;
+                                }
+                            }
                         }
                     }
                     Some(RunInput::Stop) | None => { stopped = true; break; }

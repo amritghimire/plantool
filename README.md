@@ -13,7 +13,12 @@ changes in [difftool](https://github.com/skshetry/difftool) or your `git difftoo
 - **Inline comments on documents.** Click a paragraph, a list item or a source line. Comments follow
   their line when the file changes and are marked *outdated* instead of lost.
 - **Agents drive it from the CLI.** `plantool session …` reads the board, writes comments, waits
-  for your reply and moves the stage forward. `plantool skill` prints the instructions.
+  for your reply and moves the stage forward. `plantool skill` prints the instructions, and
+  `plantool skill research|plan|implement` prints the stage skills, so any agent with a shell
+  works without installing anything.
+- **A brief per session.** `plantool new <slug> --brief "…"` (or edit it in the sidebar) says what
+  to research or build. It is rendered into every stage prompt, and the browser shows the prompt to
+  paste with a copy button while a document is still missing.
 - **Hosted runs.** Start Claude Code or Codex from the browser; the transcript, tool activity and
   permission prompts stream into the page. Or run your agent in a terminal and let it use the CLI.
 - **Human-only approval.** `approved` and `done` can only be set from the browser. There is no CLI
@@ -22,8 +27,10 @@ changes in [difftool](https://github.com/skshetry/difftool) or your `git difftoo
 
 ```bash
 cd your-repo
-plantool new fix-login-timeout      # opens http://127.0.0.1:41200/s/<repo>/fix-login-timeout
-plantool research fix-login-timeout # start a hosted research run (claude by default)
+plantool new fix-login-timeout --brief "Sessions expire after 5 minutes; see issue #42"
+                                    # opens http://127.0.0.1:41200/s/<repo>/fix-login-timeout
+                                    # and prints the research prompt to paste into any agent
+plantool research fix-login-timeout # or start a hosted research run (claude by default)
 plantool plan fix-login-timeout     # then a plan run; comment inline, approve in the browser
 plantool implement fix-login-timeout
 plantool changes fix-login-timeout  # difftool if installed, else git difftool
@@ -72,17 +79,25 @@ new → researching → research-review → planning → plan-review → approve
 The agent moves the stage forward up to `plan-review`, and from `approved` on. You set `approved`
 and `done`. Writing `research.md` or `plan.md` advances the stage automatically.
 
+A finished session can be dropped from the bottom of the sidebar (documents, comments and
+transcripts are deleted; the git worktree only if you say so). Only the browser can do this.
+
+Steps can be skipped from the sidebar: start planning without research, or skip planning and
+approve straight away. In that case the agent first writes a ticket list (todo items) to
+`plan.md` from the brief and works through it ticket by ticket, so progress still shows.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `plantool new <slug> [--repo <path>] [--worktree] [--base <branch>] [--mirror]` | Create or reopen a session for the git checkout containing the current directory |
-| `plantool list [--repo .] [--stage <s>]` | The inbox |
+| `plantool new <slug> [--brief <text> \| --brief-file <path>] [--repo <path>] [--worktree] [--base <branch>] [--mirror]` | Create or reopen a session for the git checkout containing the current directory, and print the prompt for the next stage |
+| `plantool list [--repo .] [--stage <s>]` | The inbox. The browser's list page has a **New session** button with your recent repositories to pick from |
 | `plantool open <ref>` | Open a session in the browser |
-| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>]` | Start a hosted run |
+| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree]` | Start a hosted run; implement runs work in a git worktree unless told otherwise |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
 | `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |
-| `plantool skill` | Print the agent instructions |
+| `plantool skill [research\|plan\|implement]` | Print the agent instructions, or one stage skill, for any agent to read inline |
+| `plantool skill install [--agent claude\|codex] [--dir <d>] [--force]` | Optional: write the skills as slash commands (`/plantool-research <ref>` …). Nothing is installed unless you ask |
 | `plantool daemon start\|stop\|status`, `plantool serve` | The background daemon |
 | `plantool update` | Install the latest release |
 
@@ -92,6 +107,9 @@ and `done`. Writing `research.md` or `plan.md` advances the stage automatically.
 
 ```bash
 plantool session get --session <ref> --json
+plantool session brief --session <ref> [--set "…" | --file <path>]     # what the user wants
+plantool session prompt --session <ref> [--stage research|plan|implement|next]
+plantool session worktree --session <ref>                              # create and print the worktree
 plantool session doc path --session <ref> --kind plan                  # the file to write
 plantool session comment list --session <ref> --kind human --unresolved --context
 plantool session comment add --session <ref> --kind plan --match "<line text>" --body "…"

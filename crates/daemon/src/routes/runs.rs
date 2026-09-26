@@ -4,9 +4,9 @@ use crate::providers::RunInput;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use plantool_core::{Actor, Provider, Stage};
+use plantool_core::{Actor, PermissionMode, Provider, Stage};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -21,6 +21,15 @@ pub struct StartBody {
     pub prompt: Option<String>,
     #[serde(default)]
     pub resume_run: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    /// For implement runs: work in a git worktree (default true). Ignored for other stages.
+    #[serde(default)]
+    pub worktree: Option<bool>,
+}
+
+fn parse_mode(s: &str) -> Result<PermissionMode, ApiError> {
+    PermissionMode::parse(s).ok_or_else(|| bad_request(format!("permission mode must be one of ask, accept-edits, auto, allow-all (got {s})")))
 }
 
 async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, Json(body): Json<StartBody>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
@@ -40,10 +49,15 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
     if target.index() > current.index() {
         let _ = s.set_stage(target, Actor::Agent);
     }
+    if stage_name == "implement" && body.worktree.unwrap_or(true) {
+        let ws = s.clone();
+        tokio::task::spawn_blocking(move || ws.ensure_worktree(None)).await.map_err(|e| anyhow::anyhow!(e))??;
+    }
     let sess = s.session();
     let prompt = crate::prompts::render(&state.config.home, stage_name, &sess, &s.store.dir, body.prompt.as_deref().filter(|p| !p.trim().is_empty()));
     let resume = body.resume_run.as_deref().and_then(|rid| s.run(rid)).and_then(|r| r.provider_session_id);
-    let run = state.runs.start(s.clone(), provider, target, stage_name, prompt.clone(), body.model.clone(), resume)?;
+    let mode = body.permission_mode.as_deref().map(parse_mode).transpose()?.unwrap_or_default();
+    let run = state.runs.start(s.clone(), provider, target, stage_name, prompt.clone(), body.model.clone(), resume, mode)?;
     Ok((StatusCode::CREATED, Json(json!({ "run": run, "prompt": prompt }))))
 }
 
@@ -68,19 +82,27 @@ pub struct InputBody {
     pub permission: Option<PermissionBody>,
     #[serde(default)]
     pub input: Option<InputAnswers>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
 }
 
 async fn input(State(state): State<AppState>, Path((repo, slug, id)): Path<(String, String, String)>, Json(body): Json<InputBody>) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
-    s.run(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown run {id}")))?;
-    let msg = if let Some(p) = body.permission {
+    let mut run = s.run(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown run {id}")))?;
+    let msg = if let Some(m) = body.permission_mode.as_deref() {
+        let mode = parse_mode(m)?;
+        state.runs.send(&id, RunInput::PermissionMode(mode)).await.map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
+        run.permission_mode = mode;
+        s.upsert_run(run, |r| crate::events::LiveEvent::RunUpdated { run: r })?;
+        return Ok(Json(json!({ "ok": true, "permission_mode": mode })));
+    } else if let Some(p) = body.permission {
         RunInput::Permission { request_id: p.request_id, decision: p.decision }
     } else if let Some(i) = body.input {
         RunInput::Input { request_id: i.request_id, answers: i.answers }
     } else if let Some(t) = body.text.filter(|t| !t.trim().is_empty()) {
         RunInput::Text(t)
     } else {
-        return Err(bad_request("give text, permission or input"));
+        return Err(bad_request("give text, permission, input or permission_mode"));
     };
     state.runs.send(&id, msg).await.map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
@@ -93,6 +115,16 @@ async fn stop(State(state): State<AppState>, Path((repo, slug, id)): Path<(Strin
         Ok(()) => Ok(Json(json!({ "ok": true }))),
         Err(_) => Ok(Json(json!({ "ok": true, "note": "run was not live" }))),
     }
+}
+
+async fn remove(State(state): State<AppState>, Path((repo, slug, id)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let run = s.run(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown run {id}")))?;
+    if state.runs.is_live(&id) || matches!(run.status, plantool_core::RunStatus::Starting | plantool_core::RunStatus::Running | plantool_core::RunStatus::Waiting | plantool_core::RunStatus::Idle) && state.runs.is_live(&id) {
+        return Err(ApiError(StatusCode::CONFLICT, format!("run {id} is still live; stop it first")));
+    }
+    s.remove_run(&id)?;
+    Ok(Json(json!({ "ok": true, "removed": id })))
 }
 
 #[derive(Deserialize)]
@@ -119,5 +151,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{repo}/{slug}/runs", post(start))
         .route("/sessions/{repo}/{slug}/runs/{id}/input", post(input))
         .route("/sessions/{repo}/{slug}/runs/{id}/stop", post(stop))
+        .route("/sessions/{repo}/{slug}/runs/{id}", delete(remove))
+        .route("/sessions/{repo}/{slug}/runs/{id}/remove", post(remove))
         .route("/sessions/{repo}/{slug}/runs/{id}/events", get(events))
 }

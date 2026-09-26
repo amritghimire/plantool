@@ -1,7 +1,7 @@
 use crate::events::LiveEvent;
 use crate::providers::{self, ProviderEvent, RunInput, RunOptions};
 use crate::registry::LiveSession;
-use plantool_core::{Provider, Run, RunStatus, Stage};
+use plantool_core::{PermissionMode, Provider, Run, RunStatus, Stage};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -25,7 +25,7 @@ impl RunManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, resume: Option<String>) -> anyhow::Result<Run> {
+    pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, resume: Option<String>, permission_mode: PermissionMode) -> anyhow::Result<Run> {
         let sess = session.session();
         let run = Run {
             id: short_id(),
@@ -35,6 +35,7 @@ impl RunManager {
             cwd: sess.cwd().clone(),
             status: RunStatus::Starting,
             model: model.clone(),
+            permission_mode,
             started_at: plantool_core::now(),
             ended_at: None,
             error: None,
@@ -44,7 +45,7 @@ impl RunManager {
         let (in_tx, in_rx) = mpsc::channel::<RunInput>(64);
         let (ev_tx, mut ev_rx) = mpsc::channel::<ProviderEvent>(1024);
         self.handles.lock().unwrap_or_else(|e| e.into_inner()).insert(run.id.clone(), Handle { input: in_tx });
-        let opts = RunOptions { cwd: run.cwd.clone(), prompt, model, resume, executable: providers::executable_for(provider), writable_roots: vec![session.store.dir.clone()] };
+        let opts = RunOptions { cwd: run.cwd.clone(), prompt, model, resume, executable: providers::executable_for(provider), writable_roots: vec![session.store.dir.clone()], permission_mode };
         let run_id = run.id.clone();
         let manager = self.clone();
         let stage_label = stage_name.to_string();

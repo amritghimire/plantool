@@ -88,7 +88,18 @@ export interface Session {
   worktree: string | null;
   base: string;
   mirror: boolean;
+  brief?: string | null;
+  created_in?: string | null;
   created_at: string;
+}
+
+export interface RepoInfo {
+  root: string;
+  repo_slug: string;
+  branch: string;
+  base: string;
+  sessions: number;
+  last_used: string;
 }
 
 export type ChangeReview =
@@ -105,6 +116,13 @@ export interface State {
 }
 
 export type Provider = "claude" | "codex" | "opencode";
+export type PermissionMode = "ask" | "accept-edits" | "auto" | "allow-all";
+export const PERMISSION_MODES: { id: PermissionMode; label: string; hint: string }[] = [
+  { id: "ask", label: "Ask", hint: "Every edit and command is confirmed here." },
+  { id: "accept-edits", label: "Accept edits", hint: "File edits go through; commands still ask." },
+  { id: "auto", label: "Auto", hint: "The agent's own judgement decides; risky actions still ask." },
+  { id: "allow-all", label: "Allow all", hint: "Nothing asks. Only for a sandboxed checkout." },
+];
 export type RunStatus = "starting" | "running" | "waiting" | "idle" | "stopped" | "failed";
 
 export interface Run {
@@ -115,6 +133,7 @@ export interface Run {
   cwd: string;
   status: RunStatus;
   model: string | null;
+  permission_mode?: PermissionMode;
   started_at: string;
   ended_at: string | null;
   error: string | null;
@@ -181,10 +200,13 @@ export type LiveEvent =
   | { type: "thread-resolution"; seq: number; ids: string[]; resolved: boolean }
   | { type: "doc-refreshed"; seq: number; kind: DocKind; sha: string; lines: number; reanchored: number; outdated: number }
   | { type: "stage-changed"; seq: number; from: Stage; to: Stage; actor: Actor }
+  | { type: "session-updated"; seq: number; session: Session }
+  | { type: "session-removed"; seq: number; key: string }
   | { type: "run-started"; seq: number; run: Run }
   | { type: "run-updated"; seq: number; run: Run }
   | { type: "run-event"; seq: number; run_id: string; event: RunEvent }
   | { type: "run-ended"; seq: number; run: Run }
+  | { type: "run-removed"; seq: number; id: string }
   | { type: "changes-opened"; seq: number; review: ChangeReview }
   | { type: "navigate"; seq: number; target: NavTarget; viewers: number };
 

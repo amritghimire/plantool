@@ -96,15 +96,35 @@ number, tracks the run status (running, waiting on a prompt, idle, stopped, fail
 broadcasts. The browser replays `runs/:id/events?since=` after a reconnect. Runs that were live
 when the daemon restarts are marked stopped; a new run can resume the provider session.
 
-Stage prompts (`prompts.rs`) are short: they invoke the user's `/research`, `/plan`, `/implement`
-skills, tell the agent to run `plantool skill`, and substitute the session's document paths so
-nothing lands in `REVIEWS/`. `~/.plantool/prompts/<stage>.md` overrides them.
+Stage prompts (`prompts.rs`) are short: they tell the agent to run `plantool skill` and
+`plantool skill <stage>`, substitute the session's document paths so nothing lands in
+`REVIEWS/`, and render the session's **brief** (`Session.brief`, set with `plantool new --brief`,
+`plantool session brief` or the sidebar; `POST …/brief` broadcasts `session-updated`).
+`GET …/prompt/{research|plan|implement|next}` returns the rendered prompt; the browser shows it
+with a copy button while a document is missing, and `plantool new` prints it.
+`~/.plantool/prompts/<stage>.md` overrides a template.
+
+The stage skills live in `skills/{plantool,research,plan,implement}/SKILL.md` and are embedded in
+the CLI. `plantool skill <name>` prints one, so no agent needs anything installed; `plantool skill
+install` is an explicit opt-in that writes them as slash commands under `~/.claude/skills` or
+`~/.codex/skills`.
+
+A run has a permission mode (`ask`, `accept-edits`, `auto`, `allow-all`), chosen when the run
+starts and changeable from the run panel (`POST …/runs/:id/input` with `permission_mode`). Claude
+gets it as `--permission-mode` (plus `--allow-dangerously-skip-permissions` so it can be switched
+mid-run with `set_permission_mode`); `allow-all` also makes the daemon answer any remaining
+`can_use_tool` request with allow. Codex gets it as `approvalPolicy` and the sandbox policy on the
+next `turn/start`.
 
 ## Change review
 
-`changes.rs` prefers `difftool` (`PLANTOOL_DIFFTOOL_PATH`, then `PATH`) and runs
-`difftool diff -C <checkout> <base> --design <plan.md> --no-open`, storing the review URL on the
-session. Without difftool it launches `git difftool --dir-diff --no-prompt <base>` (retrying
+`changes.rs` prefers `difftool` (`PLANTOOL_DIFFTOOL_PATH`, then `PATH`). The first time it runs
+`difftool diff -C <checkout> <base> --design <plan.md> --no-open`, stores the review URL on the
+session, and then `difftool open <review>` so difftool's own daemon opens the browser tab. Later
+clicks run `difftool refresh <review>` and `open` again. The page never navigates to the review
+itself, because a navigation from the plantool origin is rejected by difftool as cross-site.
+An implement run creates the session's worktree first (`ensure_worktree`, also
+`POST …/worktree` and `plantool session worktree`) unless the run says `worktree: false`. Without difftool it launches `git difftool --dir-diff --no-prompt <base>` (retrying
 without `--dir-diff`). `git diff --numstat` against the base plus untracked files is always
 available for the stat table.
 

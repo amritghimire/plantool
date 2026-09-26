@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { PERMISSION_MODES, type PermissionMode } from "../types";
+import { CopyButton } from "./CopyButton";
 
 interface ProviderInfo {
   id: string;
@@ -20,22 +22,39 @@ export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stag
   });
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [permission, setPermission] = useState<PermissionMode>(() => {
+    try {
+      const v = localStorage.getItem("plantool.permission");
+      return PERMISSION_MODES.some((m) => m.id === v) ? (v as PermissionMode) : "ask";
+    } catch {
+      return "ask";
+    }
+  });
+  const [preview, setPreview] = useState<string | null>(null);
+  const [worktree, setWorktree] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message));
   }, []);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      api.prompt(sessionKey, stage, prompt || undefined).then((r) => setPreview(r.prompt)).catch(() => setPreview(null));
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [sessionKey, stage, prompt]);
   const current = providers?.find((p) => p.id === provider);
   const start = async () => {
     setBusy(true);
     setErr(null);
     try {
       localStorage.setItem("plantool.provider", provider);
+      localStorage.setItem("plantool.permission", permission);
     } catch {
       // ignore
     }
     try {
-      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined });
+      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined });
       onStarted(r.run.id);
       onClose();
     } catch (e) {
@@ -78,9 +97,36 @@ export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stag
           )}
         </label>
         <label>
+          Permissions
+          <select value={permission} onChange={(e) => setPermission(e.target.value as PermissionMode)}>
+            {PERMISSION_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <span className="muted small">{PERMISSION_MODES.find((m) => m.id === permission)?.hint}</span>
+        </label>
+        {stage === "implement" && (
+          <label className="check">
+            <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
+            <span>
+              Work in a git worktree <span className="muted small">(.claude/worktrees/&lt;slug&gt; off the base branch; your checkout stays untouched)</span>
+            </span>
+          </label>
+        )}
+        <label>
           Extra instructions
           <textarea rows={3} value={prompt} placeholder="Optional. Appended to the stage prompt." onChange={(e) => setPrompt(e.target.value)} />
         </label>
+        {preview && (
+          <details className="prompt-preview">
+            <summary>
+              The prompt the agent gets <CopyButton text={preview} label="copy" className="link" />
+            </summary>
+            <pre className="prompt-text">{preview}</pre>
+          </details>
+        )}
         {err && <div className="error">{err}</div>}
         <div className="composer-actions">
           <span className="spacer" />

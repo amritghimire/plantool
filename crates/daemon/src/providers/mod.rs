@@ -1,7 +1,7 @@
 pub mod claude;
 pub mod codex;
 
-use plantool_core::Provider;
+use plantool_core::{PermissionMode, Provider};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -44,6 +44,7 @@ pub enum RunInput {
     Text(String),
     Permission { request_id: String, decision: String },
     Input { request_id: String, answers: BTreeMap<String, String> },
+    PermissionMode(PermissionMode),
     Stop,
 }
 
@@ -55,6 +56,7 @@ pub struct RunOptions {
     pub resume: Option<String>,
     pub executable: Option<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
+    pub permission_mode: PermissionMode,
 }
 
 pub type EventSink = mpsc::Sender<ProviderEvent>;

@@ -54,6 +54,19 @@ describe("DocView", () => {
     expect(screen.getByText("/x/research.md")).toBeInTheDocument();
   });
 
+  it("shows the stage prompt with a copy button in the waiting state", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.assign(navigator, { clipboard: { writeText } });
+    const onStartRun = vi.fn();
+    render(<DocView kind="research" doc={null} path="/x/research.md" comments={[]} actions={actions} onAdd={async () => {}} mode="rendered" target={null} highlightComment={null} showResolved={false} prompt="Research for `repo/x`" onStartRun={onStartRun} />);
+    expect(screen.getByText("Research for `repo/x`")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Copy prompt"));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Research for `repo/x`"));
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Run it here"));
+    expect(onStartRun).toHaveBeenCalled();
+  });
+
   it("source mode anchors to the exact line", async () => {
     const onAdd = vi.fn(async () => {});
     render(<DocView kind="plan" doc={doc} path={null} comments={[]} actions={actions} onAdd={onAdd} mode="source" target={null} highlightComment={null} showResolved={false} />);

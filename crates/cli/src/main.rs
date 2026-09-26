@@ -35,8 +35,8 @@ enum Command {
     Status(commands::status::Args),
     /// Inspect and annotate a session (agent-facing).
     Session(commands::session::Args),
-    /// Print the agent skill.
-    Skill,
+    /// Print the agent skills (plantool, research, plan, implement) or install them as slash commands.
+    Skill(commands::skill::Args),
     /// Manage the background daemon.
     Daemon(commands::daemon::Args),
     /// Run the daemon in the foreground.
@@ -57,10 +57,7 @@ fn main() {
         Command::Changes(a) => commands::changes::run(a),
         Command::Status(a) => commands::status::run(a),
         Command::Session(a) => commands::session::run(a),
-        Command::Skill => {
-            print!("{}", include_str!("../../../skills/plantool/SKILL.md"));
-            Ok(())
-        }
+        Command::Skill(a) => commands::skill::run(a),
         Command::Daemon(a) => commands::daemon::run(a),
         Command::Serve(a) => commands::daemon::serve(a),
         Command::Update(a) => commands::update::run(a),

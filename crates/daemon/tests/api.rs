@@ -124,6 +124,89 @@ async fn full_session_flow() {
 }
 
 #[tokio::test]
+async fn brief_and_prompt() {
+    let h = harness();
+    let app = &h.app;
+    let (st, v) = call(app, "POST", "/api/sessions", Some(json!({ "slug": "scopes", "cwd": h.repo, "brief": "  Token scope names are confusing  " })), false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let key = v["session"]["key"].as_str().unwrap().to_string();
+    assert_eq!(v["session"]["session"]["brief"], "Token scope names are confusing");
+
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/next"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["stage"], "research");
+    let prompt = v["prompt"].as_str().unwrap();
+    assert!(prompt.contains("plantool skill research"), "{prompt}");
+    assert!(prompt.contains("What the user wants:\nToken scope names are confusing"), "{prompt}");
+    assert!(prompt.contains("/research.md"), "{prompt}");
+
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/plan?extra=check%20issue%2013162"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["prompt"].as_str().unwrap().contains("Additional instructions from the user:\ncheck issue 13162"));
+
+    let (st, _) = call(app, "GET", &format!("/api/sessions/{key}/prompt/bogus"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    let live = h.state.registry.get_key(&key).unwrap();
+    let mut rx = live.tx.subscribe();
+    let (st, v) = call(app, "POST", &format!("/api/sessions/{key}/brief"), Some(json!({ "brief": "Rename the scopes" })), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["brief"], "Rename the scopes");
+    assert!(matches!(rx.try_recv().unwrap().event, plantool_daemon::events::LiveEvent::SessionUpdated { .. }));
+    let (_, v) = call(app, "GET", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
+    assert_eq!(v["session"]["brief"], "Rename the scopes");
+    let meta: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
+    assert_eq!(meta["brief"], "Rename the scopes");
+
+    let (_, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/research"), None, false, "127.0.0.1").await;
+    assert!(v["prompt"].as_str().unwrap().contains("Rename the scopes"));
+
+    let (st, v) = call(app, "POST", &format!("/api/sessions/{key}/brief"), Some(json!({ "brief": "   " })), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["brief"].is_null());
+    let (_, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/research"), None, false, "127.0.0.1").await;
+    assert!(!v["prompt"].as_str().unwrap().contains("What the user wants"));
+
+    let (st, v) = call(app, "POST", &format!("/api/sessions/{key}/runs"), Some(json!({ "provider": "claude", "stage": "research", "permission_mode": "sometimes" })), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+
+    let (st, _) = call(app, "DELETE", &format!("/api/sessions/{key}/runs/nope"), None, true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
+    live.upsert_run(stopped, |r| plantool_daemon::events::LiveEvent::RunStarted { run: r }).unwrap();
+    live.append_run_event("r1", 1, json!({ "type": "status", "label": "x" })).unwrap();
+    assert!(live.store.run_log_path("r1").is_file());
+    let (st, v) = call(app, "DELETE", &format!("/api/sessions/{key}/runs/r1"), None, true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(!live.store.run_meta_path("r1").exists());
+    assert!(!live.store.run_log_path("r1").exists());
+    let (_, v) = call(app, "GET", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
+    assert_eq!(v["runs"].as_array().unwrap().len(), 0);
+    assert_eq!(v["session"]["created_in"], json!(h.repo));
+
+    let (st, v) = call(app, "GET", "/api/repos", None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["repos"][0]["root"], json!(std::fs::canonicalize(&h.repo).unwrap()));
+    assert_eq!(v["repos"][0]["sessions"], 1);
+
+    let (st, v) = call(app, "DELETE", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+    let (st, v) = call(app, "POST", &format!("/api/sessions/{key}/worktree"), Some(json!({})), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let wt = std::path::PathBuf::from(v["worktree"].as_str().unwrap());
+    assert!(wt.join("a.txt").is_file() || wt.is_dir());
+    let mut rx = live.tx.subscribe();
+    let (st, v) = call(app, "DELETE", &format!("/api/sessions/{key}?worktree=true"), None, true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(matches!(rx.try_recv().unwrap().event, plantool_daemon::events::LiveEvent::SessionRemoved { .. }));
+    assert!(!live.store.dir.exists());
+    assert!(!wt.exists());
+    let (st, _) = call(app, "GET", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    assert!(h.state.registry.get_key(&key).is_none());
+}
+
+#[tokio::test]
 async fn rejects_foreign_host_and_origin() {
     let h = harness();
     let (st, _) = call(&h.app, "GET", "/health", None, false, "evil.example").await;

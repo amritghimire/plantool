@@ -119,6 +119,15 @@ pub fn default_base(c: &Checkout) -> String {
     c.branch.clone()
 }
 
+pub fn worktree_remove(c: &Checkout, path: &Path) -> Result<(), GitError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let p = path.to_string_lossy().to_string();
+    git(&c.root, &["worktree", "remove", "--force", &p])?;
+    Ok(())
+}
+
 pub fn worktree_add(c: &Checkout, path: &Path, branch: &str, base: &str) -> Result<(), GitError> {
     if path.exists() {
         return Ok(());

@@ -133,6 +133,11 @@ pub struct Session {
     pub base: String,
     #[serde(default)]
     pub mirror: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    /// The directory `plantool new` was run from (or the browser's chosen repo path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_in: Option<PathBuf>,
     pub created_at: String,
 }
 
@@ -256,6 +261,39 @@ impl Provider {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionMode {
+    #[default]
+    Ask,
+    AcceptEdits,
+    Auto,
+    AllowAll,
+}
+
+impl PermissionMode {
+    pub const ALL: [PermissionMode; 4] = [PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Auto, PermissionMode::AllowAll];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermissionMode::Ask => "ask",
+            PermissionMode::AcceptEdits => "accept-edits",
+            PermissionMode::Auto => "auto",
+            PermissionMode::AllowAll => "allow-all",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<PermissionMode> {
+        PermissionMode::ALL.into_iter().find(|m| m.as_str() == s)
+    }
+}
+
+impl std::fmt::Display for PermissionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunStatus {
@@ -278,6 +316,8 @@ pub struct Run {
     pub status: RunStatus,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
     pub started_at: String,
     #[serde(default)]
     pub ended_at: Option<String>,

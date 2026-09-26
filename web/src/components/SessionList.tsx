@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { relTime } from "../lib/format";
+import { relTime, shortPath } from "../lib/format";
 import { STAGE_LABEL, type SessionView } from "../types";
+import { NewSessionDialog } from "./NewSessionDialog";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function SessionList() {
   const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   useEffect(() => {
     api.sessions().then(setSessions).catch((e: Error) => setError(e.message));
-  }, []);
+  }, [creating]);
   const groups = new Map<string, SessionView[]>();
   for (const s of sessions ?? []) {
     const list = groups.get(s.session.repo_slug) ?? [];
@@ -22,8 +24,12 @@ export function SessionList() {
       <header className="topbar">
         <h1 className="brand">plantool</h1>
         <div className="spacer" />
+        <button className="btn primary" onClick={() => setCreating(true)} type="button">
+          New session
+        </button>
         <ThemeToggle />
       </header>
+      {creating && <NewSessionDialog onClose={() => setCreating(false)} />}
       <main className="list">
         {error && <p className="error">{error}</p>}
         {sessions && sessions.length === 0 && (
@@ -34,7 +40,9 @@ export function SessionList() {
         )}
         {[...groups.entries()].map(([repo, items]) => (
           <section key={repo} className="repo-group">
-            <h2>{repo}</h2>
+            <h2>
+              {repo} <span className="muted repo-path" title={items[0].session.repo.root}>{shortPath(items[0].session.repo.root, 4)}</span>
+            </h2>
             <ul>
               {items.map((s) => (
                 <li key={s.key}>

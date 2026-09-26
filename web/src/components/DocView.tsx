@@ -5,6 +5,7 @@ import type { Element } from "hast";
 import { collectBlocks, blockForLine, type Block } from "../lib/blocks";
 import type { Comment, DocKind, DocResponse } from "../types";
 import { Composer } from "./Composer";
+import { CopyButton } from "./CopyButton";
 import { Mermaid } from "./Markdown";
 import { Thread, type ThreadActions } from "./Thread";
 
@@ -21,6 +22,8 @@ interface Props {
   target: { line: number; nonce: number } | null;
   highlightComment: string | null;
   showResolved: boolean;
+  prompt?: string | null;
+  onStartRun?: () => void;
 }
 
 interface Attach {
@@ -74,7 +77,24 @@ export function DocView(p: Props) {
         <h3>Waiting for {p.kind}.md</h3>
         <p>The agent writes this document to</p>
         <pre>{p.path ?? "…"}</pre>
-        <p className="muted">It appears here the moment the file lands. Ask your agent to run <code>plantool skill</code>.</p>
+        {p.prompt && (
+          <div className="prompt-box">
+            <div className="prompt-head">
+              <span>Paste this into your agent</span>
+              <span className="spacer" />
+              <CopyButton text={p.prompt} label="Copy prompt" />
+              {p.onStartRun && (
+                <button className="btn primary small" onClick={p.onStartRun} type="button">
+                  Run it here
+                </button>
+              )}
+            </div>
+            <pre className="prompt-text">{p.prompt}</pre>
+          </div>
+        )}
+        <p className="muted">
+          It appears here the moment the file lands. The prompt tells the agent to run <code>plantool skill</code>; set a brief in the sidebar to say what you want.
+        </p>
       </div>
     );
   }

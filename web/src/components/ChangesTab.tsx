@@ -16,7 +16,6 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
     try {
       const r = await api.openChanges(sessionKey);
       setData(r);
-      if (r.review?.tool === "difftool") window.open(r.review.url, "_blank");
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -44,7 +43,8 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
       </div>
       {data.review?.tool === "difftool" && (
         <p className="banner">
-          difftool review: <a href={data.review.url} target="_blank" rel="noreferrer">{data.review.url}</a>
+          difftool review: <a href={data.review.url} target="_blank" rel="noreferrer noopener">{data.review.url}</a>
+          <span className="muted small"> · the daemon opens it; if the tab did not appear, use the link</span>
         </p>
       )}
       {data.review?.tool === "git-difftool" && <p className="banner">git difftool was launched on this machine.</p>}

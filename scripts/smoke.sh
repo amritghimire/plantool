@@ -18,7 +18,13 @@ expect() {
   grep -q $flag -- "$pat" <<<"$out" || { echo "FAIL: expected '$pat' in output of: $*"; echo "$out"; exit 1; }
 }
 
-expect "created repo/smoke-test" "$BIN" new smoke-test --title "Smoke" --no-open
+expect "created repo/smoke-test" "$BIN" new smoke-test --title "Smoke" --brief "Make it smoke" --no-open
+expect "plantool skill research" "$BIN" session prompt --session smoke-test
+expect "Make it smoke" "$BIN" session prompt --session smoke-test --stage plan
+expect "Make it smoke" "$BIN" session brief --session smoke-test
+expect "Changed brief" "$BIN" session brief --session smoke-test --set "Changed brief"
+expect "name: plantool-research" "$BIN" skill research
+expect "plantool skill implement" "$BIN" skill list
 PLAN="$("$BIN" session doc path --session smoke-test --kind plan)"
 printf '# Plan\n\nalpha\n\n### Phase 1: A\n- [ ] one\n' > "$PLAN"
 # The watcher may capture the file before the explicit touch; either way a sha must be reported.
@@ -29,5 +35,8 @@ expect "\"id\": \"$ID\"" "$BIN" session comment list --session smoke-test --json
 if "$BIN" session stage --session smoke-test --set approved 2>/dev/null; then echo "FAIL: agent approved"; exit 1; fi
 "$BIN" session watch --session smoke-test --timeout 1 >/dev/null && { echo "FAIL: watch returned early"; exit 1; } || [ $? -eq 124 ]
 expect "tool:" "$BIN" session changes --session smoke-test
+WT="$("$BIN" session worktree --session smoke-test)"
+[ -f "$WT/a.txt" ] || { echo "FAIL: worktree missing at $WT"; exit 1; }
+expect "$WT" "$BIN" session get --session smoke-test
 expect smoke-test "$BIN" status
 echo "smoke ok on port $PORT"

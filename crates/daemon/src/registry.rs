@@ -55,6 +55,8 @@ pub struct CreateSession {
     pub mirror: bool,
     #[serde(default)]
     pub repo_slug: Option<String>,
+    #[serde(default)]
+    pub brief: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,6 +101,16 @@ pub struct DocSummary {
     pub title: Option<String>,
     pub captured_at: Option<String>,
     pub progress: Vec<markdown::PhaseProgress>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoInfo {
+    pub root: PathBuf,
+    pub repo_slug: String,
+    pub branch: String,
+    pub base: String,
+    pub sessions: usize,
+    pub last_used: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -292,6 +304,33 @@ impl LiveSession {
         Ok(to)
     }
 
+    pub fn set_brief(&self, brief: Option<String>) -> Result<Session, RegistryError> {
+        let mut g = self.lock();
+        g.session.brief = brief.map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
+        self.store.save_meta(&g.session)?;
+        let session = g.session.clone();
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session: session.clone() });
+        self.persist_state(&g)?;
+        Ok(session)
+    }
+
+    /// Create the session's git worktree if it has none, and record it on the session.
+    pub fn ensure_worktree(&self, dir: Option<PathBuf>) -> Result<Session, RegistryError> {
+        let session = self.session();
+        if session.worktree.is_some() {
+            return Ok(session);
+        }
+        let dir = dir.unwrap_or_else(|| git::main_root(&session.repo.common_dir).join(".claude").join("worktrees").join(&session.slug));
+        git::worktree_add(&session.repo, &dir, &session.slug, &session.base)?;
+        let mut g = self.lock();
+        g.session.worktree = Some(dir);
+        self.store.save_meta(&g.session)?;
+        let session = g.session.clone();
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session: session.clone() });
+        self.persist_state(&g)?;
+        Ok(session)
+    }
+
     pub fn set_review(&self, review: ChangeReview) -> Result<(), RegistryError> {
         let mut g = self.lock();
         g.state.review = Some(review.clone());
@@ -474,6 +513,17 @@ impl LiveSession {
         Ok(())
     }
 
+    pub fn remove_run(&self, id: &str) -> anyhow::Result<bool> {
+        let mut g = self.lock();
+        if g.runs.remove(id).is_none() {
+            return Ok(false);
+        }
+        self.store.remove_run(id)?;
+        self.broadcast(&mut g, LiveEvent::RunRemoved { id: id.to_string() });
+        self.persist_state(&g)?;
+        Ok(true)
+    }
+
     pub fn append_run_event(&self, run_id: &str, seq: u64, event: serde_json::Value) -> anyhow::Result<()> {
         let line = serde_json::json!({ "seq": seq, "at": plantool_core::now(), "event": event });
         self.store.append_run_event(run_id, &line.to_string())?;
@@ -584,6 +634,8 @@ impl Registry {
             worktree,
             base,
             mirror: intent.mirror,
+            brief: intent.brief.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(|b| b.to_string()),
+            created_in: intent.repo.clone().or(intent.cwd.clone()),
             created_at: plantool_core::now(),
         };
         let dir = store::session_dir(&self.home, &repo_slug, &intent.slug);
@@ -597,6 +649,44 @@ impl Registry {
         }
         self.sessions.write().unwrap_or_else(|e| e.into_inner()).insert(key, live.clone());
         Ok((live, true))
+    }
+
+    /// Drop a session: its folder under the plantool home and, on request, its git worktree.
+    pub fn remove(&self, key: &str, remove_worktree: bool) -> Result<Session, RegistryError> {
+        let live = self.get_key(key).ok_or_else(|| RegistryError::NotFound(key.to_string()))?;
+        let session = live.session();
+        if remove_worktree {
+            if let Some(wt) = &session.worktree {
+                git::worktree_remove(&session.repo, wt)?;
+            }
+        }
+        {
+            let mut g = live.lock();
+            live.broadcast(&mut g, LiveEvent::SessionRemoved { key: key.to_string() });
+        }
+        self.sessions.write().unwrap_or_else(|e| e.into_inner()).remove(key);
+        std::fs::remove_dir_all(&live.store.dir).map_err(|e| anyhow::anyhow!("removing {}: {e}", live.store.dir.display()))?;
+        Ok(session)
+    }
+
+    /// Repositories seen across sessions, most recently used first.
+    pub fn repos(&self) -> Vec<RepoInfo> {
+        let mut by_root: BTreeMap<PathBuf, RepoInfo> = BTreeMap::new();
+        for s in self.all() {
+            let sess = s.session();
+            let st = s.state();
+            let last = if st.updated_at.is_empty() { sess.created_at.clone() } else { st.updated_at.clone() };
+            let e = by_root.entry(sess.repo.root.clone()).or_insert_with(|| RepoInfo { root: sess.repo.root.clone(), repo_slug: sess.repo_slug.clone(), branch: sess.repo.branch.clone(), base: sess.base.clone(), sessions: 0, last_used: String::new() });
+            e.sessions += 1;
+            if last > e.last_used {
+                e.last_used = last;
+                e.branch = sess.repo.branch.clone();
+                e.base = sess.base.clone();
+            }
+        }
+        let mut out: Vec<RepoInfo> = by_root.into_values().collect();
+        out.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+        out
     }
 
     pub fn list(&self, repo: Option<&str>, stage: Option<Stage>) -> Vec<SessionView> {

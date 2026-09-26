@@ -1,4 +1,6 @@
-import type { ChangesResponse, Comment, DocKind, DocResponse, NavTarget, Run, SessionView, Stage } from "./types";
+import type { ChangesResponse, Comment, DocKind, DocResponse, NavTarget, RepoInfo, Run, Session, SessionView, Stage } from "./types";
+
+export type PromptStage = "research" | "plan" | "implement" | "next";
 
 export function token(): string {
   const t = window.__PLANTOOL_TOKEN__ ?? "";
@@ -49,6 +51,10 @@ export function setAuthorName(name: string) {
 export const api = {
   sessions: () => request<SessionView[]>("GET", "/api/sessions"),
   session: (key: string) => request<SessionView>("GET", `/api/sessions/${key}`),
+  repos: () => request<{ repos: RepoInfo[] }>("GET", "/api/repos"),
+  createSession: (body: { slug: string; repo: string; title?: string; brief?: string; worktree?: boolean; base?: string }) =>
+    request<{ created: boolean; session: SessionView; url: string }>("POST", "/api/sessions", body),
+  removeSession: (key: string, worktree: boolean) => request<{ removed: string; worktree_removed: boolean }>("DELETE", `/api/sessions/${key}?worktree=${worktree}`),
   doc: (key: string, kind: DocKind) => request<DocResponse>("GET", `/api/sessions/${key}/docs/${kind}`),
   docPath: (key: string, kind: DocKind) => request<{ kind: DocKind; path: string; exists: boolean }>("GET", `/api/sessions/${key}/docs/${kind}/path`),
   comments: (key: string) => request<{ seq: number; comments: Comment[] }>("GET", `/api/sessions/${key}/comments`),
@@ -61,9 +67,13 @@ export const api = {
   navigate: (key: string, target: Partial<NavTarget>) => request<{ viewers: number }>("POST", `/api/sessions/${key}/navigate`, target),
   changes: (key: string) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes`),
   openChanges: (key: string) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, {}),
-  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string }) => request<{ run: Run }>("POST", `/api/sessions/${key}/runs`, body),
+  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  prompt: (key: string, stage: PromptStage, extra?: string) =>
+    request<{ stage: Exclude<PromptStage, "next">; prompt: string; session_stage: Stage }>("GET", `/api/sessions/${key}/prompt/${stage}${extra ? `?extra=${encodeURIComponent(extra)}` : ""}`),
+  setBrief: (key: string, brief: string | null) => request<{ brief: string | null; session: Session }>("POST", `/api/sessions/${key}/brief`, { brief }),
   runInput: (key: string, id: string, body: unknown) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/input`, body),
   stopRun: (key: string, id: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/stop`, {}),
+  removeRun: (key: string, id: string) => request<{ ok: boolean; removed: string }>("DELETE", `/api/sessions/${key}/runs/${id}`),
   runEvents: (key: string, id: string, since = 0) => request<{ events: { seq: number; at: string; event: unknown }[] }>("GET", `/api/sessions/${key}/runs/${id}/events?since=${since}`),
   providers: () => request<{ providers: { id: string; available: boolean; version?: string; error?: string; models: { id: string; label: string }[] }[] }>("GET", "/api/providers"),
 };

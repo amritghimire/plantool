@@ -164,6 +164,17 @@ impl SessionStore {
         Ok(runs)
     }
 
+    pub fn remove_run(&self, id: &str) -> anyhow::Result<()> {
+        for p in [self.run_meta_path(id), self.run_log_path(id)] {
+            match fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(())
+    }
+
     pub fn append_run_event(&self, id: &str, line: &str) -> anyhow::Result<()> {
         fs::create_dir_all(self.runs_dir())?;
         let mut f = fs::OpenOptions::new().create(true).append(true).open(self.run_log_path(id))?;

@@ -82,6 +82,44 @@ pub enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read or set the session brief: what the user wants researched or built.
+    Brief {
+        #[command(flatten)]
+        target: Target,
+        /// New brief text.
+        #[arg(long)]
+        set: Option<String>,
+        /// Read the new brief from a file, or stdin with `-`.
+        #[arg(long, conflicts_with = "set")]
+        file: Option<PathBuf>,
+        /// Remove the brief.
+        #[arg(long, conflicts_with_all = ["set", "file"])]
+        clear: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create the session's git worktree (if none) and print its path; implementation happens there.
+    Worktree {
+        #[command(flatten)]
+        target: Target,
+        /// Where to create it (default: <repo>/.claude/worktrees/<slug>).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the prompt to paste into an agent for a stage (research, plan, implement, or next).
+    Prompt {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long, default_value = "next")]
+        stage: String,
+        /// Extra instructions appended to the prompt.
+        #[arg(long)]
+        extra: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -279,6 +317,13 @@ pub fn run(a: Args) -> anyhow::Result<()> {
             }
             println!("{}  [{}]", v["key"].as_str().unwrap_or(""), v["state"]["stage"].as_str().unwrap_or(""));
             println!("title:    {}", v["session"]["title"].as_str().unwrap_or(""));
+            if let Some(b) = v["session"]["brief"].as_str().filter(|b| !b.trim().is_empty()) {
+                let mut lines = b.lines();
+                println!("brief:    {}", lines.next().unwrap_or(""));
+                for l in lines {
+                    println!("          {l}");
+                }
+            }
             println!("checkout: {}", v["session"]["worktree"].as_str().or_else(|| v["session"]["repo"]["root"].as_str()).unwrap_or(""));
             println!("base:     {}", v["session"]["base"].as_str().unwrap_or(""));
             println!("docs:     {}", v["dir"].as_str().unwrap_or(""));
@@ -350,6 +395,49 @@ pub fn run(a: Args) -> anyhow::Result<()> {
                 return print_json(&v);
             }
             println!("navigated; {} viewer(s)", v["viewers"]);
+            Ok(())
+        }
+        Cmd::Brief { target, set, file, clear, json } => {
+            let (key, v) = c.resolve_key(&target.session)?;
+            let brief = if clear { Some(None) } else { crate::commands::new::read_brief(set, file)?.map(Some) };
+            let current = match brief {
+                Some(b) => {
+                    let r: Value = c.post(&format!("/api/sessions/{key}/brief"), &json!({ "brief": b }))?;
+                    if json {
+                        return print_json(&r);
+                    }
+                    r["brief"].as_str().map(|s| s.to_string())
+                }
+                None => {
+                    if json {
+                        return print_json(&json!({ "brief": v["session"]["brief"] }));
+                    }
+                    v["session"]["brief"].as_str().map(|s| s.to_string())
+                }
+            };
+            match current {
+                Some(b) => println!("{b}"),
+                None => eprintln!("no brief; set one with --set or --file"),
+            }
+            Ok(())
+        }
+        Cmd::Worktree { target, dir, json } => {
+            let (key, _) = c.resolve_key(&target.session)?;
+            let v: Value = c.post(&format!("/api/sessions/{key}/worktree"), &json!({ "dir": dir.as_deref().map(absolute) }))?;
+            if json {
+                return print_json(&v);
+            }
+            println!("{}", v["worktree"].as_str().unwrap_or(""));
+            Ok(())
+        }
+        Cmd::Prompt { target, stage, extra, json } => {
+            let (key, _) = c.resolve_key(&target.session)?;
+            let q = extra.map(|e| format!("?extra={}", urlencode(&e))).unwrap_or_default();
+            let v: Value = c.get(&format!("/api/sessions/{key}/prompt/{stage}{q}"))?;
+            if json {
+                return print_json(&v);
+            }
+            println!("{}", v["prompt"].as_str().unwrap_or(""));
             Ok(())
         }
         Cmd::Changes { target, json } => {

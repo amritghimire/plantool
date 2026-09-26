@@ -19,7 +19,8 @@ async fn open(State(state): State<AppState>, Path((repo, slug)): Path<(String, S
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let session = s.session();
     let plan = s.doc_path(DocKind::Plan);
-    let (review, message) = tokio::task::spawn_blocking(move || crate::changes::open_review(&session, Some(plan))).await.map_err(|e| anyhow::anyhow!(e))??;
+    let existing = s.state().review;
+    let (review, message) = tokio::task::spawn_blocking(move || crate::changes::open_review(&session, Some(plan), existing.as_ref())).await.map_err(|e| anyhow::anyhow!(e))??;
     s.set_review(review.clone())?;
     let session = s.session();
     let c = tokio::task::spawn_blocking(move || crate::changes::stat(&session, Some(review))).await.map_err(|e| anyhow::anyhow!(e))?;

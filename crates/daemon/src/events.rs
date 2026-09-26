@@ -1,4 +1,4 @@
-use plantool_core::{ChangeReview, Comment, DocKind, Run, Stage};
+use plantool_core::{ChangeReview, Comment, DocKind, Run, Session, Stage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,10 +11,13 @@ pub enum LiveEvent {
     ThreadResolution { ids: Vec<String>, resolved: bool },
     DocRefreshed { kind: DocKind, sha: String, lines: u32, reanchored: usize, outdated: usize },
     StageChanged { from: Stage, to: Stage, actor: plantool_core::Actor },
+    SessionUpdated { session: Session },
+    SessionRemoved { key: String },
     RunStarted { run: Run },
     RunUpdated { run: Run },
     RunEvent { run_id: String, seq: u64, event: serde_json::Value },
     RunEnded { run: Run },
+    RunRemoved { id: String },
     ChangesOpened { review: ChangeReview },
     Navigate { target: NavTarget, viewers: usize },
 }

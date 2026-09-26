@@ -12,6 +12,12 @@ pub struct Args {
     /// Extra instructions appended to the stage prompt.
     #[arg(long)]
     pub prompt: Option<String>,
+    /// Permission mode: ask (default), accept-edits, auto or allow-all. Also PLANTOOL_PERMISSION.
+    #[arg(long)]
+    pub permission: Option<String>,
+    /// For implement: work in the current checkout instead of a git worktree.
+    #[arg(long)]
+    pub no_worktree: bool,
     #[arg(long)]
     pub no_open: bool,
     #[arg(long)]
@@ -22,7 +28,8 @@ pub fn run(a: Args, stage: &str) -> anyhow::Result<()> {
     let c = Client::connect()?;
     let (key, _) = c.resolve_key(&a.reference)?;
     let provider = a.provider.or_else(|| std::env::var("PLANTOOL_PROVIDER").ok()).unwrap_or_else(|| "claude".to_string());
-    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt });
+    let permission = a.permission.or_else(|| std::env::var("PLANTOOL_PERMISSION").ok());
+    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": permission, "worktree": !a.no_worktree });
     let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/runs"), &body)?;
     if a.json {
         return print_json(&v);
