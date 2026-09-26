@@ -1,0 +1,204 @@
+export type Stage =
+  | "new"
+  | "researching"
+  | "research-review"
+  | "planning"
+  | "plan-review"
+  | "approved"
+  | "implementing"
+  | "implementation-review"
+  | "done";
+
+export const STAGES: Stage[] = [
+  "new",
+  "researching",
+  "research-review",
+  "planning",
+  "plan-review",
+  "approved",
+  "implementing",
+  "implementation-review",
+  "done",
+];
+
+export const STAGE_LABEL: Record<Stage, string> = {
+  new: "New",
+  researching: "Researching",
+  "research-review": "Research review",
+  planning: "Planning",
+  "plan-review": "Plan review",
+  approved: "Approved",
+  implementing: "Implementing",
+  "implementation-review": "Implementation review",
+  done: "Done",
+};
+
+export type DocKind = "research" | "plan" | "investigation" | "quick-fix" | "design";
+export type CommentKind = "human" | "agent";
+export type Actor = "human" | "agent";
+
+export interface Anchor {
+  line: number;
+  text: string;
+  outdated: boolean;
+}
+
+export interface Comment {
+  id: string;
+  doc: DocKind;
+  anchor: Anchor;
+  body: string;
+  kind: CommentKind;
+  author: string;
+  parent: string | null;
+  resolved: boolean;
+  created_at: string;
+  updated_at: string | null;
+  seq: number;
+}
+
+export interface PhaseProgress {
+  name: string;
+  done: number;
+  total: number;
+}
+
+export interface DocSummary {
+  kind: DocKind;
+  path: string;
+  exists: boolean;
+  sha: string | null;
+  lines: number;
+  title: string | null;
+  captured_at: string | null;
+  progress: PhaseProgress[];
+}
+
+export interface Checkout {
+  root: string;
+  common_dir: string;
+  branch: string;
+}
+
+export interface Session {
+  repo_slug: string;
+  slug: string;
+  title: string;
+  repo: Checkout;
+  worktree: string | null;
+  base: string;
+  mirror: boolean;
+  created_at: string;
+}
+
+export type ChangeReview =
+  | { tool: "difftool"; url: string; review: string | null; opened_at: string }
+  | { tool: "git-difftool"; opened_at: string };
+
+export interface State {
+  stage: Stage;
+  comments: Comment[];
+  docs: Record<string, { sha: string; captured_at: string; lines: number }>;
+  seq: number;
+  review: ChangeReview | null;
+  updated_at: string;
+}
+
+export type Provider = "claude" | "codex" | "opencode";
+export type RunStatus = "starting" | "running" | "waiting" | "idle" | "stopped" | "failed";
+
+export interface Run {
+  id: string;
+  provider: Provider;
+  provider_session_id: string | null;
+  stage: Stage;
+  cwd: string;
+  status: RunStatus;
+  model: string | null;
+  started_at: string;
+  ended_at: string | null;
+  error: string | null;
+  seq: number;
+}
+
+export interface SessionView {
+  key: string;
+  url_path: string;
+  dir: string;
+  session: Session;
+  state: State;
+  docs: DocSummary[];
+  runs: Run[];
+  open_comments: number;
+}
+
+export interface Heading {
+  line: number;
+  level: number;
+  text: string;
+}
+
+export interface DocResponse {
+  kind: DocKind;
+  sha: string;
+  content: string;
+  captured_at: string;
+  path: string;
+  lines: number;
+  headings: Heading[];
+  progress: PhaseProgress[];
+}
+
+export interface NavTarget {
+  doc: DocKind | null;
+  line: number | null;
+  comment: string | null;
+  tab: string | null;
+}
+
+export interface FileStat {
+  path: string;
+  added: number;
+  deleted: number;
+}
+
+export interface ChangesResponse {
+  tool: "difftool" | "git-difftool" | "none";
+  base: string;
+  stat: FileStat[];
+  review: ChangeReview | null;
+  message?: string;
+}
+
+export type LiveEvent =
+  | { type: "hello"; seq: number; key: string }
+  | { type: "resync"; seq: number }
+  | { type: "comments-since"; seq: number; comments: Comment[] }
+  | { type: "comment-added"; seq: number; comment: Comment }
+  | { type: "comments-added"; seq: number; comments: Comment[] }
+  | { type: "comment-updated"; seq: number; comment: Comment }
+  | { type: "comment-removed"; seq: number; ids: string[] }
+  | { type: "thread-resolution"; seq: number; ids: string[]; resolved: boolean }
+  | { type: "doc-refreshed"; seq: number; kind: DocKind; sha: string; lines: number; reanchored: number; outdated: number }
+  | { type: "stage-changed"; seq: number; from: Stage; to: Stage; actor: Actor }
+  | { type: "run-started"; seq: number; run: Run }
+  | { type: "run-updated"; seq: number; run: Run }
+  | { type: "run-event"; seq: number; run_id: string; event: RunEvent }
+  | { type: "run-ended"; seq: number; run: Run }
+  | { type: "changes-opened"; seq: number; review: ChangeReview }
+  | { type: "navigate"; seq: number; target: NavTarget; viewers: number };
+
+export type RunEvent =
+  | { type: "message"; id: string; role: "user" | "assistant"; content: string }
+  | { type: "text-delta"; delta: string; segment?: string }
+  | { type: "activity-start"; id: string; kind: string; title: string; detail?: string }
+  | { type: "activity-output"; id: string; delta: string }
+  | { type: "activity-complete"; id: string; status: "completed" | "failed" | "denied"; output?: string }
+  | { type: "permission"; request_id: string; kind: string; title: string; detail?: string; options?: { id: string; label: string }[] }
+  | { type: "input-request"; request_id: string; title: string; questions: { id: string; text: string; options?: string[] }[] }
+  | { type: "request-resolved"; request_id: string }
+  | { type: "turn-started"; turn_id: string }
+  | { type: "turn-completed"; turn_id: string; status: "completed" | "interrupted" | "failed"; error?: string }
+  | { type: "provider-session"; session_id: string }
+  | { type: "status"; label: string; detail?: string }
+  | { type: "raw"; line: string };

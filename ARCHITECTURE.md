@@ -1,0 +1,133 @@
+# plantool architecture
+
+plantool hosts the research → plan → implement workflow for a human and a coding agent at once.
+Its shape follows difftool: one long-lived daemon owns the state, the human uses a browser, the
+agent uses a thin CLI, and both see each other's changes live.
+
+```
+   human  →  Web UI (React, embedded in the binary)  ──HTTP + WS──┐
+                                                                    ▼
+   agent  →  CLI (`plantool …`, clap)  ───────HTTP───────▶  Daemon (axum) on 127.0.0.1:41200
+                                                              Registry: sessions in memory
+                                                              Providers: claude / codex processes
+                                                                    │
+                                                        ~/.plantool/sessions/<repo>/<slug>/
+```
+
+## Crates
+
+- `crates/core` (`plantool-core`): pure data and logic, no I/O. Models (`Session`, `State`,
+  `Comment`, `Run`, `Stage`, `DocKind`), the stage machine (`transition`), Markdown indexing
+  (headings, checkboxes, per-phase progress), and comment anchoring (`--match` resolution and
+  re-anchoring after a document changes).
+- `crates/daemon` (`plantool-daemon`): the server. `registry.rs` holds every session in memory
+  and is the only writer of the store; `store.rs` is the on-disk layout; `git.rs` shells out to
+  git with argv (never a shell); `watcher.rs` captures documents when files change; `providers/`
+  hosts agent processes; `runs.rs` turns provider events into a durable transcript; `changes.rs`
+  bridges to difftool or `git difftool`; `routes/` is the HTTP and WebSocket API;
+  `security.rs` guards every request; `assets.rs` serves the embedded web build.
+- `crates/cli` (`plantool` binary): commands, a blocking HTTP client, `ensure_daemon`, and the
+  `serve` command that runs the daemon in-process. The web build and the agent skill are embedded.
+- `web/`: Vite + React + TypeScript. Built to `web/dist`, embedded by `rust-embed`.
+
+## Sessions, documents, stages
+
+A session is `<repo_slug>/<slug>`. The repo slug comes from the `origin` remote
+(`owner-repo`) or the checkout's directory name, computed once and stored in `meta.json`. The
+slug is the CLI ref when unique.
+
+Documents are Markdown files in the session folder: `research.md`, `plan.md`, `investigation.md`,
+`quick-fix.md`, `design.md`. The agent writes them directly (the CLI prints the path); the daemon
+notices (a recursive `notify` watcher plus a 2 s poll), stores every revision content-addressed
+under `revisions/<kind>/<sha>.md`, re-anchors comments, and broadcasts `doc-refreshed`. Writing
+research or plan the first time advances the stage to the matching review stage.
+
+Stages are a fixed sequence. `core::stage::transition(from, to, actor)` is the single rule: an
+agent may only move forward, never into `approved` or `done`, and never across `approved`. The
+daemon derives the actor from a per-daemon browser token that is injected into the served
+`index.html` and sent back as `X-Plantool-Actor`. The CLI never has it and has no approve command.
+This is a guard against honest mistakes, not against an agent with a shell on the same machine.
+
+## Persistence
+
+```
+~/.plantool/
+  daemon.json                         pid, port, protocol
+  daemon.log
+  prompts/<stage>.md                  optional prompt overrides
+  sessions/<repo>/<slug>/
+    meta.json                         Session (rare writes)
+    state.json                        stage, comments, doc shas, seq, review (per mutation, atomic)
+    research.md plan.md …             the live documents
+    revisions/<kind>/<sha>.md         every captured revision
+    runs/<id>.json, runs/<id>.ndjson  run metadata and append-only transcript
+```
+
+Writes are temp-file-plus-rename with fsync. A batch of comments is one persist and one broadcast.
+`state.seq` increments on every mutation and is the cursor for `watch --since`.
+
+## Live updates
+
+`GET /api/sessions/:repo/:slug/live` is a WebSocket. Every mutation broadcasts a `LiveMessage`
+(`seq`, `at`, plus a tagged `LiveEvent`: comment events, `doc-refreshed`, `stage-changed`,
+`run-*`, `changes-opened`, `navigate`). The web client applies events directly and re-fetches on
+reconnect. The CLI's `watch` opens the same socket, folds in a `since` reconcile, prints one
+NDJSON event and exits, so an agent can block until the human acts.
+
+## Hosted runs
+
+`providers/mod.rs` defines a neutral `ProviderEvent` vocabulary (messages, text deltas, tool
+activities, permissions, input requests, turn boundaries, provider session id). Each provider is a
+task owning a child process:
+
+- **Claude Code**: `claude -p --input-format stream-json --output-format stream-json --verbose
+  --include-partial-messages --permission-mode default --permission-prompt-tool stdio`. The daemon
+  sends an `initialize` control request, then user messages as JSON lines. Permission prompts
+  arrive as `control_request` / `can_use_tool`; read-only tools are auto-allowed, everything else
+  is surfaced to the browser and answered with a `control_response`. `AskUserQuestion` becomes an
+  input request. The session id from `system/init` is stored for `--resume`.
+- **Codex**: `codex app-server --stdio`, JSON-RPC over stdio. `initialize`, `thread/start`
+  (workspace-write sandbox, approvals on request), `turn/start` with the session folder as an extra
+  writable root, `turn/steer` for follow-ups mid-turn. Server requests for command, file-change and
+  permission approvals and for user input are surfaced and answered with the native decision.
+
+`runs.rs` consumes provider events, appends each to the run's NDJSON transcript with a sequence
+number, tracks the run status (running, waiting on a prompt, idle, stopped, failed), and
+broadcasts. The browser replays `runs/:id/events?since=` after a reconnect. Runs that were live
+when the daemon restarts are marked stopped; a new run can resume the provider session.
+
+Stage prompts (`prompts.rs`) are short: they invoke the user's `/research`, `/plan`, `/implement`
+skills, tell the agent to run `plantool skill`, and substitute the session's document paths so
+nothing lands in `REVIEWS/`. `~/.plantool/prompts/<stage>.md` overrides them.
+
+## Change review
+
+`changes.rs` prefers `difftool` (`PLANTOOL_DIFFTOOL_PATH`, then `PATH`) and runs
+`difftool diff -C <checkout> <base> --design <plan.md> --no-open`, storing the review URL on the
+session. Without difftool it launches `git difftool --dir-diff --no-prompt <base>` (retrying
+without `--dir-diff`). `git diff --numstat` against the base plus untracked files is always
+available for the stat table.
+
+## Security
+
+The daemon binds loopback only. A middleware rejects any request or WebSocket upgrade whose
+`Host` is not loopback or whose `Origin`, when present, is not loopback, which blocks DNS
+rebinding and cross-site reads. Request bodies are capped at 16 MB. All external commands use
+argv, never a shell string.
+
+## Release
+
+`scripts/package-binaries.sh` builds a release binary for a target triple and packages it as
+`plantool-<platform>.tar.gz` (zip on Windows). The GitHub workflow runs the tests and the smoke
+script, then builds the five platforms and attaches the archives and `SHA256SUMS.txt` to the
+release. `plantool update` downloads the matching archive, verifies its checksum against
+`SHA256SUMS.txt`, and swaps the binary atomically.
+
+## Design principles
+
+1. One daemon, many sessions, one source of truth; agents and humans share live state.
+2. The repo is never touched: documents live in the plantool home.
+3. Approval is a server-side rule, not a sentence in a prompt.
+4. Never lose a comment or a revision; re-anchor or mark outdated.
+5. The CLI is thin, the web is a view, the daemon owns disk and processes.
+6. Integrate difftool instead of rebuilding a diff viewer.

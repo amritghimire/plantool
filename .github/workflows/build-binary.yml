@@ -1,0 +1,106 @@
+name: Build binary
+
+# Tests, then builds the standalone plantool binary for every platform. Every run uploads
+# workflow artifacts; a published GitHub Release also gets the archives attached.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: web
+      - run: npm run typecheck && npm test
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: cargo test --workspace
+      - run: cargo build -p plantool
+      - run: scripts/smoke.sh target/debug/plantool
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci && npm run build
+        working-directory: web
+        shell: bash
+      - if: matrix.cross
+        run: cargo install cross --locked
+      - name: Package
+        shell: bash
+        env:
+          PLANTOOL_BUILD_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
+          PLANTOOL_RELEASE_REPOSITORY: ${{ github.repository }}
+        run: scripts/package-binaries.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plantool-${{ matrix.target }}
+          path: dist/plantool-*
+      - if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/plantool-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  checksums:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum plantool-*.tar.gz plantool-*.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

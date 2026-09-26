@@ -1,0 +1,27 @@
+[package]
+name = "plantool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "plantool"
+path = "src/main.rs"
+
+[dependencies]
+plantool-core = { path = "../core" }
+plantool-daemon = { path = "../daemon" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures.workspace = true
+open.workspace = true
+dirs.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+flate2 = "1"
+tar = "0.4"
