@@ -137,9 +137,19 @@ h1.brand { font-size: 16px; margin: 0; }
 .fill { height: 100%; background: var(--ok); transition: width 0.3s; }
 
 .comment-list, .run-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.comment-list li { display: grid; grid-template-columns: auto auto 1fr; gap: 6px; align-items: baseline; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; font-size: 12.5px; }
-.comment-list li:hover { border-color: var(--accent); }
-.comment-list .preview { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-list li { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12.5px; }
+.comment-list li:hover, .comment-list li.replying { border-color: var(--accent); }
+.comment-row { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.comment-list .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.row-action { border: 1px solid transparent; background: none; color: var(--fg-3); cursor: pointer; padding: 0 4px; border-radius: 4px; font-size: 12px; line-height: 1.4; opacity: 0; }
+.comment-list li:hover .row-action, .comment-list li.replying .row-action { opacity: 1; }
+.row-action:hover { color: var(--accent); border-color: var(--line); background: var(--bg-2); }
+.quick-reply { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; border-top: 1px dashed var(--line); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { border: 1px solid var(--line); background: var(--bg-2); border-radius: 999px; padding: 2px 9px; font-size: 12px; cursor: pointer; color: var(--fg-2); }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.comment-tools { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.comment-tools .btn { width: 100%; }
 .run-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; font-size: 12.5px; }
 .run-list li.active { border-color: var(--accent); }
 .run-remove { border: 0; background: none; color: var(--fg-3); cursor: pointer; padding: 0 2px; font-size: 14px; line-height: 1; }

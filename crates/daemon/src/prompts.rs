@@ -1,7 +1,7 @@
 use plantool_core::{DocKind, Session};
 use std::path::Path;
 
-pub const STAGES: [&str; 3] = ["research", "plan", "implement"];
+pub const STAGES: [&str; 4] = ["research", "plan", "implement", "review"];
 
 pub const RESEARCH: &str = r#"Research for plantool session `{key}`: {title}
 
@@ -30,6 +30,15 @@ set the stage to `implementation-review`, and summarise what changed and what yo
 {brief}
 {extra}"#;
 
+pub const REVIEW: &str = r#"Act on the review comments for plantool session `{key}`: {title}
+
+Run `plantool skill` and follow it. The human left comments on `{review_doc_path}`.
+Read them with `plantool session comment list --session {key} --kind human --unresolved --context --json` (note the `seq`),
+revise the document for each one, reply on the thread with what changed (`comment add --parent <id>`), and resolve it.
+Then `plantool session watch --session {key} --since <seq> --timeout 900` and repeat until the stage changes or the human says stop.
+{brief}
+{extra}"#;
+
 pub fn template(home: &Path, stage: &str) -> String {
     let override_path = home.join("prompts").join(format!("{stage}.md"));
     if let Ok(s) = std::fs::read_to_string(&override_path) {
@@ -41,6 +50,7 @@ pub fn template(home: &Path, stage: &str) -> String {
         "research" => RESEARCH.to_string(),
         "plan" => PLAN.to_string(),
         "implement" => IMPLEMENT.to_string(),
+        "review" => REVIEW.to_string(),
         _ => String::new(),
     }
 }
@@ -56,7 +66,20 @@ pub fn next_stage(stage: plantool_core::Stage) -> Option<&'static str> {
     }
 }
 
+/// The document a review prompt should point at for the session's current stage.
+pub fn review_doc(stage: plantool_core::Stage) -> DocKind {
+    if stage.index() < plantool_core::Stage::Planning.index() {
+        DocKind::Research
+    } else {
+        DocKind::Plan
+    }
+}
+
 pub fn render(home: &Path, stage: &str, session: &Session, session_dir: &Path, extra: Option<&str>) -> String {
+    render_at(home, stage, session, session_dir, extra, plantool_core::Stage::New)
+}
+
+pub fn render_at(home: &Path, stage: &str, session: &Session, session_dir: &Path, extra: Option<&str>, current: plantool_core::Stage) -> String {
     let t = template(home, stage);
     let brief = session
         .brief
@@ -75,6 +98,7 @@ pub fn render(home: &Path, stage: &str, session: &Session, session_dir: &Path, e
             .replace("{session_dir}", &session_dir.display().to_string())
             .replace("{research_path}", &session_dir.join(DocKind::Research.file_name()).display().to_string())
             .replace("{plan_path}", &session_dir.join(DocKind::Plan.file_name()).display().to_string())
+            .replace("{review_doc_path}", &session_dir.join(review_doc(current).file_name()).display().to_string())
             .replace("{brief}", &brief)
             .replace("{extra}", &extra),
     )
@@ -136,6 +160,16 @@ mod tests {
         assert!(!p.contains("What the user wants"));
         assert!(!p.contains("Additional instructions"));
         assert!(!p.ends_with('\n'));
+    }
+
+    #[test]
+    fn review_prompt_points_at_the_document_under_review() {
+        let dir = Path::new("/d");
+        let p = render_at(Path::new("/nonexistent"), "review", &session(None), dir, None, Stage::ResearchReview);
+        assert!(p.contains("/d/research.md"), "{p}");
+        assert!(p.contains("comment list --session repo/fix-it --kind human --unresolved"), "{p}");
+        let p = render_at(Path::new("/nonexistent"), "review", &session(None), dir, None, Stage::PlanReview);
+        assert!(p.contains("/d/plan.md"), "{p}");
     }
 
     #[test]

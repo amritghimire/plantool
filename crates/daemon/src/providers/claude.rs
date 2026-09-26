@@ -138,7 +138,7 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                         turn_open = false;
                         emit(&sink, ProviderEvent::TurnCompleted { turn_id: format!("t{turn_counter}"), status: status.into(), error }).await;
                         if let Some(cost) = v.get("total_cost_usd").and_then(|c| c.as_f64()) {
-                            emit(&sink, ProviderEvent::Status { label: format!("turn done · ${cost:.4}"), detail: None }).await;
+                            emit(&sink, ProviderEvent::Status { label: format!("turn done · ${cost:.2} at API rates (an estimate; a subscription is not charged per token)"), detail: None }).await;
                         }
                     }
                     "control_request" => {

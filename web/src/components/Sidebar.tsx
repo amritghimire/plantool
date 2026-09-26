@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
 import { relTime, shortPath } from "../lib/format";
+import { CopyButton } from "./CopyButton";
+import type { ThreadActions } from "./Thread";
 
 export interface SidebarProps {
   view: SessionView;
@@ -15,6 +17,9 @@ export interface SidebarProps {
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
+  actions: ThreadActions;
+  reviewPrompt: string | null;
+  onSendToRun: (text: string) => Promise<void>;
   selectedRun: string | null;
   busy: boolean;
 }
@@ -29,6 +34,7 @@ export function Sidebar(p: SidebarProps) {
   const s = p.view.session;
 
   const finished = p.view.runs.filter((r) => !isLive(r));
+  const liveRun = p.view.runs.find(isLive) ?? null;
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
   const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
 
@@ -174,15 +180,21 @@ export function Sidebar(p: SidebarProps) {
           Open comments <span className="badge">{openThreads.length}</span>
         </div>
         {openThreads.length === 0 && <div className="muted small">Click + next to any block to comment.</div>}
+        {openThreads.length > 0 && p.reviewPrompt && (
+          <div className="comment-tools">
+            {liveRun ? (
+              <button className="btn primary small" disabled={p.busy} onClick={() => void p.onSendToRun(p.reviewPrompt ?? "")} title="Tells the running agent to read the open comments, act on them, reply and resolve" type="button">
+                Send comments to the running agent
+              </button>
+            ) : (
+              <span className="muted small">No run is live. Paste this into your agent:</span>
+            )}
+            <CopyButton text={p.reviewPrompt} label="Copy prompt to act on comments" />
+          </div>
+        )}
         <ul className="comment-list">
           {openThreads.map((c) => (
-            <li key={c.id} onClick={() => p.onJump(c)}>
-              <span className={`kind kind-${c.kind}`}>{c.kind}</span>
-              <span className="muted small">
-                {c.doc}:{c.anchor.line}
-              </span>
-              <span className="preview">{c.body.split("\n")[0]}</span>
-            </li>
+            <CommentRow key={c.id} c={c} onJump={() => p.onJump(c)} actions={p.actions} />
           ))}
         </ul>
       </div>
@@ -294,6 +306,82 @@ function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: stri
         <div className="muted small">Nothing yet. Tell the agent what to research or build; it goes into every stage prompt.</div>
       )}
     </div>
+  );
+}
+
+const QUICK_REPLIES = ["Agreed, go ahead.", "No, keep it as it is.", "Not now; note it as a follow-up."];
+
+function CommentRow({ c, onJump, actions }: { c: Comment; onJump: () => void; actions: ThreadActions }) {
+  const [replying, setReplying] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const send = async (body: string) => {
+    if (!body.trim()) return;
+    setBusy(true);
+    try {
+      await actions.reply(c, body.trim());
+      setText("");
+      setReplying(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const resolve = async () => {
+    setBusy(true);
+    try {
+      await actions.resolve(c, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li className={replying ? "replying" : ""}>
+      <div className="comment-row" onClick={onJump}>
+        <span className={`kind kind-${c.kind}`}>{c.kind}</span>
+        <span className="muted small">
+          {c.doc}:{c.anchor.line}
+        </span>
+        <span className="spacer" />
+        <button className="row-action" title="Reply" disabled={busy} onClick={(e) => { e.stopPropagation(); setReplying((r) => !r); }} type="button">
+          ↩
+        </button>
+        <button className="row-action" title="Resolve" disabled={busy} onClick={(e) => { e.stopPropagation(); void resolve(); }} type="button">
+          ✓
+        </button>
+      </div>
+      <div className="preview" onClick={onJump}>{c.body.split("\n")[0]}</div>
+      {replying && (
+        <div className="quick-reply" onClick={(e) => e.stopPropagation()}>
+          <div className="chips">
+            {QUICK_REPLIES.map((q) => (
+              <button key={q} className="chip" disabled={busy} onClick={() => void send(q)} type="button">
+                {q}
+              </button>
+            ))}
+          </div>
+          <textarea
+            rows={2}
+            value={text}
+            autoFocus
+            placeholder="Reply… (⌘↩ to send)"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void send(text);
+              if (e.key === "Escape") setReplying(false);
+            }}
+          />
+          <div className="composer-actions">
+            <span className="spacer" />
+            <button className="btn ghost small" onClick={() => setReplying(false)} type="button">
+              Cancel
+            </button>
+            <button className="btn primary small" disabled={busy || !text.trim()} onClick={() => void send(text)} type="button">
+              Reply
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 

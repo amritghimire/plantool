@@ -23,6 +23,7 @@ export function SessionPage() {
   const [docs, setDocs] = useState<Partial<Record<DocKind, DocResponse | null>>>({});
   const [paths, setPaths] = useState<Partial<Record<DocKind, string>>>({});
   const [prompts, setPrompts] = useState<Partial<Record<DocKind, string>>>({});
+  const [reviewPrompt, setReviewPrompt] = useState<string | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [tab, setTabState] = useState<string>(params.get("tab") ?? "plan");
   const [mode, setMode] = useState<ViewMode>(() => (localStorage.getItem("plantool.mode") === "source" ? "source" : "rendered"));
@@ -84,12 +85,17 @@ export function SessionPage() {
     [key, loadPrompt],
   );
 
+  const loadReviewPrompt = useCallback(() => {
+    api.prompt(key, "review").then((r) => setReviewPrompt(r.prompt)).catch(() => setReviewPrompt(null));
+  }, [key]);
+
   const reloadPrompts = useCallback(() => {
     setDocs((m) => {
       for (const k of Object.keys(m) as DocKind[]) if (m[k] === null) void loadPrompt(k);
       return m;
     });
-  }, [loadPrompt]);
+    loadReviewPrompt();
+  }, [loadPrompt, loadReviewPrompt]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -98,11 +104,12 @@ export function SessionPage() {
       setError(null);
       const c = await api.comments(key);
       setComments(c.comments);
+      loadReviewPrompt();
       await Promise.all(v.docs.map((d) => loadDoc(d.kind)));
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [key, loadDoc]);
+  }, [key, loadDoc, loadReviewPrompt]);
 
   useEffect(() => {
     void loadAll();
@@ -149,6 +156,7 @@ export function SessionPage() {
         case "stage-changed":
           setView((v) => (v ? { ...v, state: { ...v.state, stage: e.to } } : v));
           toast(`stage: ${e.to}`);
+          loadReviewPrompt();
           break;
         case "session-updated":
           setView((v) => (v ? { ...v, session: e.session } : v));
@@ -196,7 +204,7 @@ export function SessionPage() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, loadDoc, reloadPrompts, toast],
+    [key, loadDoc, reloadPrompts, loadReviewPrompt, toast],
   );
 
   useLive(view ? key : null, onEvent, () => void loadAll());
@@ -246,6 +254,24 @@ export function SessionPage() {
     } catch (e) {
       toast((e as Error).message, "error");
       throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSendToRun = async (text: string) => {
+    const live = view?.runs.find((r) => r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle");
+    if (!live) {
+      toast("No run is live; start one or paste the prompt into your agent.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.runInput(key, live.id, { text });
+      setSelectedRun(live.id);
+      toast("Sent to the running agent");
+    } catch (e) {
+      toast((e as Error).message, "error");
     } finally {
       setBusy(false);
     }
@@ -348,6 +374,9 @@ export function SessionPage() {
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
         onRemoveRun={onRemoveRun}
+        actions={actions}
+        reviewPrompt={reviewPrompt}
+        onSendToRun={onSendToRun}
         selectedRun={selectedRun}
         busy={busy}
       />

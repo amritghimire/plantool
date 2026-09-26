@@ -1,6 +1,6 @@
 import type { ChangesResponse, Comment, DocKind, DocResponse, NavTarget, RepoInfo, Run, Session, SessionView, Stage } from "./types";
 
-export type PromptStage = "research" | "plan" | "implement" | "next";
+export type PromptStage = "research" | "plan" | "implement" | "review" | "next";
 
 export function token(): string {
   const t = window.__PLANTOOL_TOKEN__ ?? "";

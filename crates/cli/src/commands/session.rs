@@ -108,7 +108,7 @@ pub enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Print the prompt to paste into an agent for a stage (research, plan, implement, or next).
+    /// Print the prompt to paste into an agent for a stage (research, plan, implement, review, or next).
     Prompt {
         #[command(flatten)]
         target: Target,

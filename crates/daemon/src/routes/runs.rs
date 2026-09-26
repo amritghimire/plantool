@@ -54,7 +54,7 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
         tokio::task::spawn_blocking(move || ws.ensure_worktree(None)).await.map_err(|e| anyhow::anyhow!(e))??;
     }
     let sess = s.session();
-    let prompt = crate::prompts::render(&state.config.home, stage_name, &sess, &s.store.dir, body.prompt.as_deref().filter(|p| !p.trim().is_empty()));
+    let prompt = crate::prompts::render_at(&state.config.home, stage_name, &sess, &s.store.dir, body.prompt.as_deref().filter(|p| !p.trim().is_empty()), s.stage());
     let resume = body.resume_run.as_deref().and_then(|rid| s.run(rid)).and_then(|r| r.provider_session_id);
     let mode = body.permission_mode.as_deref().map(parse_mode).transpose()?.unwrap_or_default();
     let run = state.runs.start(s.clone(), provider, target, stage_name, prompt.clone(), body.model.clone(), resume, mode)?;
