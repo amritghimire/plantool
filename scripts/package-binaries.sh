@@ -42,7 +42,16 @@ for target in "${targets[@]}"; do
   cp "target/$target/release/$bin" "dist/pkg/$plat/$bin"
   chmod +x "dist/pkg/$plat/$bin"
   case "$plat" in
-    windows-*) archive="plantool-$plat.zip"; (cd "dist/pkg/$plat" && zip -q "../../$archive" "$bin") ;;
+    windows-*)
+      archive="plantool-$plat.zip"
+      if command -v zip >/dev/null 2>&1; then
+        (cd "dist/pkg/$plat" && zip -q "../../$archive" "$bin")
+      elif command -v 7z >/dev/null 2>&1; then
+        (cd "dist/pkg/$plat" && 7z a -tzip -bso0 -bsp0 "../../$archive" "$bin")
+      else
+        powershell -NoProfile -Command "Compress-Archive -Force -Path 'dist/pkg/$plat/$bin' -DestinationPath 'dist/$archive'"
+      fi
+      ;;
     *) archive="plantool-$plat.tar.gz"; tar -czf "dist/$archive" -C "dist/pkg/$plat" "$bin" ;;
   esac
   echo "packaged dist/$archive"
