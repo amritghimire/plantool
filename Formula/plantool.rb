@@ -1,28 +1,28 @@
 class Plantool < Formula
   desc "Research, plan and implement with your coding agent, reviewed in the browser"
   homepage "https://github.com/amritghimire/plantool"
-  version "0.0.4"
+  version "0.0.5"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/amritghimire/plantool/releases/download/v0.0.4/plantool-darwin-arm64.tar.gz"
-      sha256 "66b23387737815acd4b31701b1760ae0e8cdcc810090856541db4e8ddc2e0fcb"
+      url "https://github.com/amritghimire/plantool/releases/download/v0.0.5/plantool-darwin-arm64.tar.gz"
+      sha256 "1720e7f959aaeab76a38b635bded1d56a5dd151dc00a7907d7bab4e34a2d0096"
     end
     on_intel do
-      url "https://github.com/amritghimire/plantool/releases/download/v0.0.4/plantool-darwin-x64.tar.gz"
-      sha256 "e92d78e6f73e15d095793740b33bb669f06972f84f64622a4e8bf39548a70cd1"
+      url "https://github.com/amritghimire/plantool/releases/download/v0.0.5/plantool-darwin-x64.tar.gz"
+      sha256 "bade6aed1d46885830619bd9754734fe6fd824ca8252bda8f625e9ea394c6126"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/amritghimire/plantool/releases/download/v0.0.4/plantool-linux-arm64.tar.gz"
-      sha256 "712976a97a59dec927a81c5b3f62a88dceec9ffb6a35c5fca976a26983fcd19d"
+      url "https://github.com/amritghimire/plantool/releases/download/v0.0.5/plantool-linux-arm64.tar.gz"
+      sha256 "e1cd7685847bc0d4788474986d4a10b6fcdeaec78e304d75cf887a00d6fc5d48"
     end
     on_intel do
-      url "https://github.com/amritghimire/plantool/releases/download/v0.0.4/plantool-linux-x64.tar.gz"
-      sha256 "13c8f074f91eed46b883d0c845ab6504c540a7498466757dde392eff2f0c3b6e"
+      url "https://github.com/amritghimire/plantool/releases/download/v0.0.5/plantool-linux-x64.tar.gz"
+      sha256 "9342adae3a000f8987182e5fddfe0d2f510cdbfb9aba8f0cd0fbb7592929f2e1"
     end
   end
 
