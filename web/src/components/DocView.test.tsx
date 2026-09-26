@@ -13,6 +13,21 @@ const doc: DocResponse = {
   progress: [],
 };
 
+const deck: DocResponse = {
+  kind: "research",
+  sha: "y",
+  content: "# Research\n\nIntro here.\n\n## Flow\n\nFlow text.\n\n## Risks\n\nRisk text.\n",
+  captured_at: "",
+  path: "/tmp/research.md",
+  lines: 11,
+  headings: [
+    { line: 1, level: 1, text: "Research" },
+    { line: 5, level: 2, text: "Flow" },
+    { line: 9, level: 2, text: "Risks" },
+  ],
+  progress: [],
+};
+
 const comment: Comment = {
   id: "c1",
   doc: "plan",
@@ -65,6 +80,26 @@ describe("DocView", () => {
     expect(await screen.findByText("Copied")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Run it here"));
     expect(onStartRun).toHaveBeenCalled();
+  });
+
+  it("slides mode shows one section at a time and anchors to absolute lines", async () => {
+    const onAdd = vi.fn(async () => {});
+    const riskComment: Comment = { ...comment, id: "c9", doc: "research", anchor: { line: 11, text: "Risk text.", outdated: false }, body: "hmm" };
+    render(<DocView kind="research" doc={deck} path={null} comments={[riskComment]} actions={actions} onAdd={onAdd} mode="slides" target={null} highlightComment={null} showResolved={false} />);
+    expect(screen.getByText("Intro here.")).toBeInTheDocument();
+    expect(screen.queryByText("Flow text.")).toBeNull();
+    expect(screen.getByText("1 / 3 · Research")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Next →"));
+    expect(screen.getByText("Flow text.")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(screen.getByText("Risk text.")).toBeInTheDocument();
+    expect(screen.getByText("hmm")).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("Comment on line 11"));
+    fireEvent.change(screen.getByPlaceholderText("Comment on line 11…"), { target: { value: "note" } });
+    fireEvent.click(screen.getByText("Comment"));
+    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("research", 11, "note"));
+    fireEvent.click(screen.getByText("Flow"));
+    expect(screen.getByText("Flow text.")).toBeInTheDocument();
   });
 
   it("source mode anchors to the exact line", async () => {

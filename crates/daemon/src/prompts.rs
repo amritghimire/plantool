@@ -1,7 +1,7 @@
 use plantool_core::{DocKind, Session};
 use std::path::Path;
 
-pub const STAGES: [&str; 4] = ["research", "plan", "implement", "review"];
+pub const STAGES: [&str; 5] = ["research", "plan", "implement", "review", "resume"];
 
 pub const RESEARCH: &str = r#"Research for plantool session `{key}`: {title}
 
@@ -39,6 +39,15 @@ Then `plantool session watch --session {key} --since <seq> --timeout 900` and re
 {brief}
 {extra}"#;
 
+pub const RESUME: &str = r#"Continue plantool session `{key}` ({title}) where you left off; the run was restarted and you keep your context.
+
+Run `plantool skill` if it is no longer in your context. The stage is `{stage}`.
+Read new comments with `plantool session comment list --session {key} --kind human --unresolved --context --json` and act on them
+(revise `{review_doc_path}`, reply on each thread, resolve it), then `plantool session watch --session {key} --since <seq> --timeout 900`
+and carry on as the stage skill says.
+{brief}
+{extra}"#;
+
 pub fn template(home: &Path, stage: &str) -> String {
     let override_path = home.join("prompts").join(format!("{stage}.md"));
     if let Ok(s) = std::fs::read_to_string(&override_path) {
@@ -51,6 +60,7 @@ pub fn template(home: &Path, stage: &str) -> String {
         "plan" => PLAN.to_string(),
         "implement" => IMPLEMENT.to_string(),
         "review" => REVIEW.to_string(),
+        "resume" => RESUME.to_string(),
         _ => String::new(),
     }
 }
@@ -99,6 +109,7 @@ pub fn render_at(home: &Path, stage: &str, session: &Session, session_dir: &Path
             .replace("{research_path}", &session_dir.join(DocKind::Research.file_name()).display().to_string())
             .replace("{plan_path}", &session_dir.join(DocKind::Plan.file_name()).display().to_string())
             .replace("{review_doc_path}", &session_dir.join(review_doc(current).file_name()).display().to_string())
+            .replace("{stage}", current.as_str())
             .replace("{brief}", &brief)
             .replace("{extra}", &extra),
     )

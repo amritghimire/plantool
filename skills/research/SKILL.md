@@ -32,8 +32,21 @@ name (file paths, function names, section titles), never by a bare number or id.
 
 ## The document
 
-Write the whole document to the path from step 2. Never write into `REVIEWS/`. Use this shape
-and drop any section that has nothing to say:
+Write the whole document to the path from step 2. Never write into `REVIEWS/`. The human reads it
+as a **slide deck** (one `##` section per slide) as well as a page, and comments on any block, so:
+
+- One idea per `##` section, and keep a section to what fits on one screen (roughly 15 lines).
+  Lead each section with a one-line takeaway in bold, then the evidence.
+- Prefer bullets and tables to paragraphs. A table for "what lives where" (path, role).
+- Draw the flow. Use a ` ```mermaid ` block for anything with more than two steps: `flowchart`
+  for code paths and data flow, `sequenceDiagram` for request/response or process interaction,
+  `stateDiagram-v2` for lifecycles, `erDiagram` for models. Keep labels short; the diagram is
+  rendered in the browser and can be commented on like any other block.
+- Numbers get a chart: `pie` or `xychart-beta` in mermaid, or a small table when a chart would
+  not add anything.
+- Refer to code by path and symbol name; the reader can search for it.
+
+Use this shape and drop any section that has nothing to say:
 
 ```markdown
 # Research: <title>
@@ -42,10 +55,11 @@ and drop any section that has nothing to say:
 What was researched and the one-paragraph answer.
 
 ## How it works
-The code flow and architecture, with file paths.
+**Takeaway in one line.** Then the code flow as a mermaid flowchart or sequence diagram, and
+the few sentences the diagram cannot carry, with file paths.
 
 ## Key components
-Files, functions and classes with their responsibilities.
+A table: path | role | notes.
 
 ## Patterns and conventions
 What the codebase does that the plan must follow.

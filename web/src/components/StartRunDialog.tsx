@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { PERMISSION_MODES, type PermissionMode } from "../types";
+import { PERMISSION_MODES, type PermissionMode, type Run } from "../types";
+import { relTime } from "../lib/format";
+
+export type RunStage = "research" | "plan" | "implement";
 import { CopyButton } from "./CopyButton";
 
 interface ProviderInfo {
@@ -11,15 +14,20 @@ interface ProviderInfo {
   models: { id: string; label: string }[];
 }
 
-export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stage: "research" | "plan" | "implement"; sessionKey: string; onClose: () => void; onStarted: (id: string) => void }) {
+export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId, onClose, onStarted }: { stage: RunStage; sessionKey: string; runs: Run[]; resumeId?: string; onClose: () => void; onStarted: (id: string) => void }) {
+  const resumeTarget = resumeId ? runs.find((r) => r.id === resumeId) : undefined;
+  const [stage, setStage] = useState<RunStage>(initialStage);
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
   const [provider, setProvider] = useState<string>(() => {
+    if (resumeTarget) return resumeTarget.provider;
     try {
       return localStorage.getItem("plantool.provider") || "claude";
     } catch {
       return "claude";
     }
   });
+  const resumable = [...runs].filter((r) => r.provider === provider && r.provider_session_id && !(r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle")).sort((a, b) => b.started_at.localeCompare(a.started_at));
+  const [resume, setResume] = useState<string>(resumeId ?? "");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
   const [permission, setPermission] = useState<PermissionMode>(() => {
@@ -39,10 +47,14 @@ export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stag
   }, []);
   useEffect(() => {
     const t = window.setTimeout(() => {
-      api.prompt(sessionKey, stage, prompt || undefined).then((r) => setPreview(r.prompt)).catch(() => setPreview(null));
+      api.prompt(sessionKey, resume ? "resume" : stage, prompt || undefined).then((r) => setPreview(r.prompt)).catch(() => setPreview(null));
     }, 250);
     return () => window.clearTimeout(t);
-  }, [sessionKey, stage, prompt]);
+  }, [sessionKey, stage, prompt, resume]);
+  useEffect(() => {
+    if (resume && !resumable.some((r) => r.id === resume)) setResume("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
   const current = providers?.find((p) => p.id === provider);
   const start = async () => {
     setBusy(true);
@@ -54,7 +66,7 @@ export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stag
       // ignore
     }
     try {
-      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined });
+      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined });
       onStarted(r.run.id);
       onClose();
     } catch (e) {
@@ -66,8 +78,16 @@ export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stag
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Start {stage} run</h3>
+        <h3>{resume ? "Resume run" : `Start ${stage} run`}</h3>
         <p className="muted small">The agent runs in the session's checkout and writes to the session folder. You can also run it in your own terminal: ask your agent to run <code>plantool skill</code>.</p>
+        <label>
+          Stage
+          <select value={stage} onChange={(e) => setStage(e.target.value as RunStage)}>
+            <option value="research">research</option>
+            <option value="plan">plan</option>
+            <option value="implement">implement (needs an approved plan)</option>
+          </select>
+        </label>
         <label>
           Provider
           <select value={provider} onChange={(e) => { setProvider(e.target.value); setModel(""); }}>
@@ -81,6 +101,20 @@ export function StartRunDialog({ stage, sessionKey, onClose, onStarted }: { stag
           </select>
         </label>
         {current?.error && <div className="error">{current.error}</div>}
+        {resumable.length > 0 && (
+          <label>
+            Continue from
+            <select value={resume} onChange={(e) => setResume(e.target.value)}>
+              <option value="">a fresh session (full stage prompt)</option>
+              {resumable.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.provider} · {r.stage} · {relTime(r.started_at)} · {r.status}
+                </option>
+              ))}
+            </select>
+            <span className="muted small">Resuming keeps everything that run already read and wrote; the agent is told to pick up where it left off and act on new comments.</span>
+          </label>
+        )}
         <label>
           Model
           {current && current.models.length > 0 ? (

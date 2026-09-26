@@ -26,13 +26,20 @@ export function SessionPage() {
   const [reviewPrompt, setReviewPrompt] = useState<string | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [tab, setTabState] = useState<string>(params.get("tab") ?? "plan");
-  const [mode, setMode] = useState<ViewMode>(() => (localStorage.getItem("plantool.mode") === "source" ? "source" : "rendered"));
+  const [mode, setModeState] = useState<ViewMode>(() => {
+    const m = localStorage.getItem("plantool.mode");
+    return m === "source" || m === "slides" ? m : "rendered";
+  });
+  const setMode = (m: ViewMode) => {
+    setModeState(m);
+    localStorage.setItem("plantool.mode", m);
+  };
   const [showResolved, setShowResolved] = useState(false);
   const [target, setTarget] = useState<{ line: number; nonce: number } | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [dialog, setDialog] = useState<"research" | "plan" | "implement" | null>(null);
+  const [dialog, setDialog] = useState<{ stage: "research" | "plan" | "implement"; resumeId?: string } | null>(null);
   const [selectedRun, setSelectedRun] = useState<string | null>(params.get("run"));
   const [runLines, setRunLines] = useState<Record<string, RunLine[]>>({});
   const [changesNonce, setChangesNonce] = useState(0);
@@ -351,10 +358,13 @@ export function SessionPage() {
         </label>
         {kind && (
           <div className="seg">
-            <button className={mode === "rendered" ? "active" : ""} onClick={() => { setMode("rendered"); localStorage.setItem("plantool.mode", "rendered"); }} type="button">
+            <button className={mode === "rendered" ? "active" : ""} onClick={() => setMode("rendered")} type="button">
               Rendered
             </button>
-            <button className={mode === "source" ? "active" : ""} onClick={() => { setMode("source"); localStorage.setItem("plantool.mode", "source"); }} type="button">
+            <button className={mode === "slides" ? "active" : ""} onClick={() => setMode("slides")} type="button" title="One heading per slide; ← → to move">
+              Slides
+            </button>
+            <button className={mode === "source" ? "active" : ""} onClick={() => setMode("source")} type="button">
               Source
             </button>
           </div>
@@ -370,7 +380,7 @@ export function SessionPage() {
         onBrief={onBrief}
         onDelete={onDelete}
         onJump={onJump}
-        onStartRun={(s) => setDialog(s)}
+        onStartRun={(s, resumeId) => setDialog({ stage: s, resumeId })}
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
         onRemoveRun={onRemoveRun}
@@ -387,7 +397,7 @@ export function SessionPage() {
             doc={docs[kind] ?? null}
             path={paths[kind] ?? view.docs.find((d) => d.kind === kind)?.path ?? null}
             prompt={prompts[kind] ?? null}
-            onStartRun={kind === "research" || kind === "plan" ? () => setDialog(kind) : undefined}
+            onStartRun={kind === "research" || kind === "plan" ? () => setDialog({ stage: kind }) : undefined}
             comments={comments.filter((c) => c.doc === kind)}
             actions={actions}
             onAdd={onAdd}
@@ -400,8 +410,16 @@ export function SessionPage() {
           <ChangesTab sessionKey={key} nonce={changesNonce} />
         )}
       </main>
-      {run && <RunPanel sessionKey={key} run={run} lines={runLines[run.id] ?? []} onClose={() => setSelectedRun(null)} />}
-      {dialog && <StartRunDialog stage={dialog} sessionKey={key} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
+      {run && (
+        <RunPanel
+          sessionKey={key}
+          run={run}
+          lines={runLines[run.id] ?? []}
+          onClose={() => setSelectedRun(null)}
+          onResume={(r) => setDialog({ stage: r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", resumeId: r.id })}
+        />
+      )}
+      {dialog && <StartRunDialog stage={dialog.stage} sessionKey={key} runs={view.runs} resumeId={dialog.resumeId} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind ?? "info"}`}>

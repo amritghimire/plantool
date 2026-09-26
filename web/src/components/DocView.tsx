@@ -3,13 +3,14 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Element } from "hast";
 import { collectBlocks, blockForLine, type Block } from "../lib/blocks";
+import { splitSlides, slideForLine } from "../lib/slides";
 import type { Comment, DocKind, DocResponse } from "../types";
 import { Composer } from "./Composer";
 import { CopyButton } from "./CopyButton";
 import { Mermaid } from "./Markdown";
 import { Thread, type ThreadActions } from "./Thread";
 
-export type ViewMode = "rendered" | "source";
+export type ViewMode = "rendered" | "slides" | "source";
 
 interface Props {
   kind: DocKind;
@@ -34,7 +35,11 @@ const TAG_TYPE: Record<string, string> = { h1: "heading", h2: "heading", h3: "he
 
 export function DocView(p: Props) {
   const [composing, setComposing] = useState<number | null>(null);
+  const [slide, setSlide] = useState(0);
   const blocks = useMemo(() => (p.doc ? collectBlocks(p.doc.content) : []), [p.doc]);
+  const slides = useMemo(() => (p.doc ? splitSlides(p.doc.content, p.doc.headings) : []), [p.doc]);
+  const slidesOn = p.mode === "slides" && slides.length > 0;
+  const current = Math.min(slide, Math.max(slides.length - 1, 0));
   const threads = useMemo(() => buildThreads(p.comments, p.showResolved), [p.comments, p.showResolved]);
   const attachments = useMemo(() => {
     const map = new Map<string, Attach>();
@@ -54,6 +59,47 @@ export function DocView(p: Props) {
   }, [threads, blocks]);
 
   useEffect(() => {
+    setSlide(0);
+  }, [p.kind]);
+
+  useEffect(() => {
+    if (!p.target || !slidesOn) return;
+    setSlide(slideForLine(slides, p.target.line));
+  }, [p.target, slidesOn, slides]);
+
+  useEffect(() => {
+    if (!p.highlightComment || !slidesOn) return;
+    const c = p.comments.find((x) => x.id === p.highlightComment);
+    if (c) setSlide(slideForLine(slides, c.anchor.line));
+  }, [p.highlightComment, slidesOn, slides, p.comments]);
+
+  useEffect(() => {
+    if (!slidesOn) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " " || e.key === "j") {
+        e.preventDefault();
+        setSlide((s) => Math.min(s + 1, slides.length - 1));
+      } else if (e.key === "ArrowLeft" || e.key === "PageUp" || e.key === "k") {
+        e.preventDefault();
+        setSlide((s) => Math.max(s - 1, 0));
+      } else if (e.key === "Home") {
+        setSlide(0);
+      } else if (e.key === "End") {
+        setSlide(slides.length - 1);
+      } else if (e.key === "f") {
+        const el = document.querySelector(".slides");
+        if (el && !document.fullscreenElement) void el.requestFullscreen?.();
+        else if (document.fullscreenElement) void document.exitFullscreen?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [slidesOn, slides.length]);
+
+  useEffect(() => {
     if (!p.target) return;
     const line = p.target.line;
     const el = findLineElement(line);
@@ -63,13 +109,13 @@ export function DocView(p: Props) {
       const t = window.setTimeout(() => el.classList.remove("flash"), 1600);
       return () => window.clearTimeout(t);
     }
-  }, [p.target]);
+  }, [p.target, current]);
 
   useEffect(() => {
     if (!p.highlightComment) return;
     const el = document.getElementById(`c-${p.highlightComment}`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [p.highlightComment]);
+  }, [p.highlightComment, current]);
 
   if (!p.doc) {
     return (
@@ -118,9 +164,11 @@ export function DocView(p: Props) {
     );
   }
 
+  const offset = slidesOn ? slides[current].start - 1 : 0;
+
   const wrap = (tag: string, node: Element | undefined, inner: ReactNode, extraClass = ""): ReactNode => {
     const type = TAG_TYPE[tag];
-    const start = node?.position?.start.line;
+    const start = node?.position?.start.line ? node.position.start.line + offset : undefined;
     if (!type || !start) return inner;
     const block = blocks.find((b) => b.type === type && b.start === start);
     if (!block) return inner;
@@ -173,7 +221,7 @@ export function DocView(p: Props) {
       const cls = (rest as { className?: string }).className ?? "";
       const inner = <>{children}</>;
       const type = TAG_TYPE.li;
-      const start = node?.position?.start.line;
+      const start = node?.position?.start.line ? node.position.start.line + offset : undefined;
       if (!start || !blocks.find((b) => b.type === type && b.start === start)) return <li {...rest}>{children}</li>;
       return wrap("li", node, inner, cls);
     },
@@ -191,19 +239,66 @@ export function DocView(p: Props) {
     input: ({ node: _node, ...rest }) => <input {...rest} disabled className="task" />,
   };
 
+  const orphans = attachments.orphans.threads.length > 0 && (
+    <div className="orphans">
+      <h4 className="muted">Comments on lines that no longer exist</h4>
+      {attachments.orphans.threads.map((t) => (
+        <Thread key={t.root.id} root={t.root} replies={t.replies} actions={p.actions} highlighted={p.highlightComment === t.root.id} />
+      ))}
+    </div>
+  );
+
+  if (slidesOn) {
+    const s = slides[current];
+    const openOn = (sl: { start: number; end: number }) => threads.filter((t) => !t.root.resolved && t.root.anchor.line >= sl.start && t.root.anchor.line <= sl.end).length;
+    return (
+      <div className="slides">
+        <nav className="outline" aria-label="Slides">
+          {slides.map((sl) => {
+            const n = openOn(sl);
+            return (
+              <button key={sl.index} className={`outline-item ${sl.index === current ? "active" : ""}`} onClick={() => setSlide(sl.index)} type="button">
+                <span className="outline-n">{sl.index + 1}</span>
+                <span className="outline-title">{sl.title}</span>
+                {n > 0 && <span className="badge">{n}</span>}
+              </button>
+            );
+          })}
+        </nav>
+        <section className="slide-stage">
+          <div className="slide-progress">
+            <div className="fill" style={{ width: `${((current + 1) / slides.length) * 100}%` }} />
+          </div>
+          <div className="slide doc" key={`${p.doc.sha}:${current}`}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+              {s.content}
+            </ReactMarkdown>
+            {current === slides.length - 1 && orphans}
+          </div>
+          <footer className="slide-nav">
+            <button className="btn ghost" disabled={current === 0} onClick={() => setSlide(current - 1)} type="button" title="← / k">
+              ← Previous
+            </button>
+            <span className="muted small">
+              {current + 1} / {slides.length} · {s.title}
+            </span>
+            <span className="spacer" />
+            <span className="muted small hint">← → to move · f fullscreen</span>
+            <button className="btn primary" disabled={current === slides.length - 1} onClick={() => setSlide(current + 1)} type="button" title="→ / j / space">
+              Next →
+            </button>
+          </footer>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="doc">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {p.doc.content}
       </ReactMarkdown>
-      {attachments.orphans.threads.length > 0 && (
-        <div className="orphans">
-          <h4 className="muted">Comments on lines that no longer exist</h4>
-          {attachments.orphans.threads.map((t) => (
-            <Thread key={t.root.id} root={t.root} replies={t.replies} actions={p.actions} highlighted={p.highlightComment === t.root.id} />
-          ))}
-        </div>
-      )}
+      {orphans}
     </div>
   );
 }

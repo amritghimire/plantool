@@ -173,7 +173,7 @@ async fn prompt(State(state): State<AppState>, Path((repo, slug, stage)): Path<(
     let stage = match stage.as_str() {
         "next" => crate::prompts::next_stage(s.stage()).ok_or_else(|| bad_request(format!("nothing left to prompt for; the stage is {}", s.stage())))?,
         st if crate::prompts::STAGES.contains(&st) => st,
-        other => return Err(bad_request(format!("stage must be research, plan, implement, review or next (got {other})"))),
+        other => return Err(bad_request(format!("stage must be research, plan, implement, review, resume or next (got {other})"))),
     };
     let text = crate::prompts::render_at(&state.config.home, stage, &s.session(), &s.store.dir, q.extra.as_deref(), s.stage());
     Ok(Json(json!({ "stage": stage, "prompt": text, "session_stage": s.stage() })))

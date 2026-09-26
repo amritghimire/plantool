@@ -1,6 +1,6 @@
 import type { ChangesResponse, Comment, DocKind, DocResponse, NavTarget, RepoInfo, Run, Session, SessionView, Stage } from "./types";
 
-export type PromptStage = "research" | "plan" | "implement" | "review" | "next";
+export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "next";
 
 export function token(): string {
   const t = window.__PLANTOOL_TOKEN__ ?? "";
@@ -67,7 +67,7 @@ export const api = {
   navigate: (key: string, target: Partial<NavTarget>) => request<{ viewers: number }>("POST", `/api/sessions/${key}/navigate`, target),
   changes: (key: string) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes`),
   openChanges: (key: string) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, {}),
-  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
   prompt: (key: string, stage: PromptStage, extra?: string) =>
     request<{ stage: Exclude<PromptStage, "next">; prompt: string; session_stage: Stage }>("GET", `/api/sessions/${key}/prompt/${stage}${extra ? `?extra=${encodeURIComponent(extra)}` : ""}`),
   setBrief: (key: string, brief: string | null) => request<{ brief: string | null; session: Session }>("POST", `/api/sessions/${key}/brief`, { brief }),

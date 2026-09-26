@@ -13,7 +13,7 @@ export interface SidebarProps {
   onBrief: (brief: string | null) => Promise<void>;
   onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
-  onStartRun: (stage: "research" | "plan" | "implement") => void;
+  onStartRun: (stage: "research" | "plan" | "implement", resumeId?: string) => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
@@ -136,6 +136,11 @@ export function Sidebar(p: SidebarProps) {
             </button>
           </>
         )}
+        <div className="skip-row muted small">
+          <button className="link" onClick={() => p.onStartRun(stage === "new" || stage === "researching" || stage === "research-review" ? "research" : stage === "approved" || stage === "implementing" || stage === "implementation-review" ? "implement" : "plan")} disabled={p.busy} type="button">
+            run any stage…
+          </button>
+        </div>
         <label className="muted small stage-select">
           set stage
           <select value={stage} onChange={(e) => void p.onStage(e.target.value as Stage)} disabled={p.busy}>
@@ -218,6 +223,19 @@ export function Sidebar(p: SidebarProps) {
               </span>
               <span className="spacer" />
               <span className="muted small">{relTime(r.started_at)}</span>
+              {!isLive(r) && r.provider_session_id && (
+                <button
+                  className="run-remove"
+                  title="Resume this run: the agent keeps its context and picks up where it stopped"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    p.onStartRun(r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", r.id);
+                  }}
+                  type="button"
+                >
+                  ↻
+                </button>
+              )}
               {!isLive(r) && (
                 <button
                   className="run-remove"

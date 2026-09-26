@@ -18,6 +18,9 @@ pub struct Args {
     /// For implement: work in the current checkout instead of a git worktree.
     #[arg(long)]
     pub no_worktree: bool,
+    /// Resume an earlier run's provider session (keeps its context): a run id, or `last`.
+    #[arg(long)]
+    pub resume: Option<String>,
     #[arg(long)]
     pub no_open: bool,
     #[arg(long)]
@@ -26,17 +29,29 @@ pub struct Args {
 
 pub fn run(a: Args, stage: &str) -> anyhow::Result<()> {
     let c = Client::connect()?;
-    let (key, _) = c.resolve_key(&a.reference)?;
+    let (key, view) = c.resolve_key(&a.reference)?;
     let provider = a.provider.or_else(|| std::env::var("PLANTOOL_PROVIDER").ok()).unwrap_or_else(|| "claude".to_string());
+    let resume = match a.resume.as_deref() {
+        Some("last") => {
+            let runs = view["runs"].as_array().cloned().unwrap_or_default();
+            let mut sorted: Vec<&serde_json::Value> = runs.iter().filter(|r| r["provider"] == provider && !r["provider_session_id"].is_null()).collect();
+            sorted.sort_by(|x, y| x["started_at"].as_str().cmp(&y["started_at"].as_str()));
+            match sorted.last() {
+                Some(r) => Some(r["id"].as_str().unwrap_or_default().to_string()),
+                None => anyhow::bail!("no earlier {provider} run with a provider session to resume"),
+            }
+        }
+        other => other.map(|s| s.to_string()),
+    };
     let permission = a.permission.or_else(|| std::env::var("PLANTOOL_PERMISSION").ok());
-    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": permission, "worktree": !a.no_worktree });
+    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": permission, "worktree": !a.no_worktree, "resume_run": resume });
     let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/runs"), &body)?;
     if a.json {
         return print_json(&v);
     }
     let id = v.pointer("/run/id").and_then(|i| i.as_str()).unwrap_or("?");
     let url = format!("{}?run={id}", c.session_url(&key));
-    println!("started {provider} {stage} run {id}");
+    println!("started {provider} {stage} run {id}{}", if resume.is_some() { " (resumed)" } else { "" });
     println!("{url}");
     if !a.no_open {
         open_browser(&url);

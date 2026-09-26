@@ -12,6 +12,10 @@ changes in [difftool](https://github.com/skshetry/difftool) or your `git difftoo
   `~/.plantool/sessions/<repo>/<slug>/` (`research.md`, `plan.md`, …), captured with full history.
 - **Inline comments on documents.** Click a paragraph, a list item or a source line. Comments follow
   their line when the file changes and are marked *outdated* instead of lost.
+- **Read it as slides.** The Slides view shows one heading per slide with an outline, keyboard
+  navigation and fullscreen; Mermaid flowcharts, sequence diagrams and charts render inline and
+  take comments like any other block. The shipped skills ask the agent to write for that: one idea
+  per section, a diagram for any flow, a table for components.
 - **Agents drive it from the CLI.** `plantool session …` reads the board, writes comments, waits
   for your reply and moves the stage forward. `plantool skill` prints the instructions, and
   `plantool skill research|plan|implement` prints the stage skills, so any agent with a shell
@@ -93,12 +97,12 @@ approve straight away. In that case the agent first writes a ticket list (todo i
 | `plantool new <slug> [--brief <text> \| --brief-file <path>] [--repo <path>] [--worktree] [--base <branch>] [--mirror]` | Create or reopen a session for the git checkout containing the current directory, and print the prompt for the next stage |
 | `plantool list [--repo .] [--stage <s>]` | The inbox. The browser's list page has a **New session** button with your recent repositories to pick from |
 | `plantool open <ref>` | Open a session in the browser |
-| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree]` | Start a hosted run; implement runs work in a git worktree unless told otherwise |
+| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
 | `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |
 | `plantool skill [research\|plan\|implement]` | Print the agent instructions, or one stage skill, for any agent to read inline |
 | `plantool skill install [--agent claude\|codex] [--dir <d>] [--force]` | Optional: write the skills as slash commands (`/plantool-research <ref>` …). Nothing is installed unless you ask |
-| `plantool daemon start\|stop\|status`, `plantool serve` | The background daemon |
+| `plantool daemon start\|stop\|restart\|status`, `plantool serve` | The background daemon; `restart` picks up an upgraded binary and refuses while runs are live unless `--force` |
 | `plantool update` | Install the latest release |
 
 `<ref>` is the slug when it is unique, otherwise `<repo_slug>/<slug>`.

@@ -117,7 +117,7 @@ export function projectRun(lines: RunLine[]) {
   return { items, pending: [...pending.values()] };
 }
 
-export function RunPanel({ sessionKey, run, lines, onClose }: { sessionKey: string; run: Run | null; lines: RunLine[]; onClose: () => void }) {
+export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessionKey: string; run: Run | null; lines: RunLine[]; onClose: () => void; onResume?: (run: Run) => void }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -172,6 +172,11 @@ export function RunPanel({ sessionKey, run, lines, onClose }: { sessionKey: stri
         {live && (
           <button className="btn ghost" onClick={() => void api.stopRun(sessionKey, run.id)} type="button">
             Stop
+          </button>
+        )}
+        {!live && run.provider_session_id && onResume && (
+          <button className="btn primary small" onClick={() => onResume(run)} type="button" title="Start a new run that continues this one's session">
+            Resume
           </button>
         )}
         <button className="btn ghost" onClick={onClose} type="button" title="Hide">
