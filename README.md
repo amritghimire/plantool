@@ -6,7 +6,7 @@ plantool gives the research → plan → implement loop a shared surface. You op
 piece of work on a repo; the agent writes the research and the plan; you read them in a local web
 UI, comment on any line, and watch the agent revise while you read. Only you can approve the plan.
 Once it is approved the agent implements, ticking the plan's checkboxes live, and you review the
-changes in [difftool](https://github.com/amritghimire/difftool) or your `git difftool`.
+changes in [difftool](https://github.com/skshetry/difftool) or your `git difftool`.
 
 - **Any repo, nothing written into it.** Documents live in
   `~/.plantool/sessions/<repo>/<slug>/` (`research.md`, `plan.md`, …), captured with full history.
