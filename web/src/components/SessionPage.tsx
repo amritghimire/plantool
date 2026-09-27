@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, authorName, setAuthorName } from "../api";
 import { useLive } from "../lib/live";
+import { tabForStage } from "../lib/stage";
 import type { Comment, DocKind, DocResponse, LiveEvent, Run, SessionView, Stage } from "../types";
 import { ChangesTab } from "./ChangesTab";
 import { DocView, type ViewMode } from "./DocView";
@@ -62,6 +63,17 @@ export function SessionPage() {
     next.set("tab", t);
     setParams(next, { replace: true });
   };
+
+  const stage = view?.state.stage ?? null;
+  const seenStage = useRef<Stage | null>(null);
+  useEffect(() => {
+    if (!stage) return;
+    const prev = seenStage.current;
+    seenStage.current = stage;
+    if (prev === stage) return;
+    if (prev === null && params.get("tab")) return;
+    setTab(tabForStage(stage));
+  }, [stage]);
 
   const loadPrompt = useCallback(
     async (kind: DocKind) => {
