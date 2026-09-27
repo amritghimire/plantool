@@ -172,7 +172,7 @@ async fn brief_and_prompt() {
 
     let (st, _) = call(app, "DELETE", &format!("/api/sessions/{key}/runs/nope"), None, true, "127.0.0.1").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
-    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, implementation_mode: Default::default(), milestone_pending: false, milestone_review: None, task: None, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
+    let stopped = plantool_core::Run { id: "r1".into(), provider: plantool_core::Provider::Claude, provider_session_id: None, stage: plantool_core::Stage::Researching, implementation_mode: Default::default(), milestone_pending: false, milestone_review: None, milestone_base: None, milestones_approved: 0, milestone_commit: None, implementation_base: None, task: None, cwd: h.repo.clone(), status: plantool_core::RunStatus::Stopped, model: None, permission_mode: Default::default(), started_at: plantool_core::now(), ended_at: None, error: None, seq: 0 };
     live.upsert_run(stopped, |r| plantool_daemon::events::LiveEvent::RunStarted { run: r }).unwrap();
     live.append_run_event("r1", 1, json!({ "type": "status", "label": "x" })).unwrap();
     assert!(live.store.run_log_path("r1").is_file());
@@ -218,11 +218,17 @@ async fn step_mode_previews_one_ticket_and_reviews_uncommitted_changes() {
 
     let live = h.state.registry.get_key(&key).unwrap();
     live.set_stage(plantool_core::Stage::Implementing, plantool_core::Actor::Human).unwrap();
+    let first = plantool_daemon::git::head_sha(&h.repo).unwrap();
+    // milestone 1 was committed by approval; milestone 2 is in progress
+    std::fs::write(h.repo.join("a.txt"), "hi\nmilestone one\n").unwrap();
+    let base = plantool_daemon::git::commit_all(&h.repo, "Milestone 1: first").unwrap();
+    std::fs::write(h.repo.join("b.txt"), "milestone two\n").unwrap();
     let run = plantool_core::Run {
         id: "step-run".into(), provider: plantool_core::Provider::Claude,
         provider_session_id: None, stage: plantool_core::Stage::Implementing,
         implementation_mode: plantool_core::ImplementationMode::StepByStep,
         milestone_pending: true, milestone_review: None,
+        milestone_base: Some(base.clone()), milestones_approved: 1, milestone_commit: None, implementation_base: Some(first.clone()),
         task: Some("implement".into()), cwd: h.repo.clone(), status: plantool_core::RunStatus::Idle,
         model: None, permission_mode: Default::default(), started_at: plantool_core::now(),
         ended_at: None, error: None, seq: 0,
@@ -230,14 +236,45 @@ async fn step_mode_previews_one_ticket_and_reviews_uncommitted_changes() {
     live.upsert_run(run, |r| plantool_daemon::events::LiveEvent::RunStarted { run: r }).unwrap();
     let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/changes"), None, false, "127.0.0.1").await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    assert_eq!(v["base"], "HEAD");
+    assert_eq!(v["scope"], "step");
+    assert_eq!(v["base"], base);
+    assert_eq!(v["label"], "since milestone 1 was approved");
+    assert_eq!(v["step_available"], true);
+    let paths: Vec<&str> = v["stat"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, vec!["b.txt"], "only the current milestone is in the step scope");
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/changes?scope=all"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["scope"], "all");
+    assert_eq!(v["base"], first);
+    assert_eq!(v["label"], "in the whole implementation");
+    let mut paths: Vec<&str> = v["stat"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["a.txt", "b.txt"], "the whole implementation diffs against the base: {v}");
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/changes/file?path=b.txt"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["diff"].as_str().unwrap().contains("+milestone two"), "{v}");
+    assert_eq!(v["truncated"], false);
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/changes/file?path=a.txt&scope=all"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["diff"].as_str().unwrap().contains("+milestone one"), "{v}");
+    let (st, _) = call(app, "GET", &format!("/api/sessions/{key}/changes/file?path=../x"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_ne!(first, base);
     let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/prompt/implement?implementation_mode=step-by-step&resume_run=step-run"), None, false, "127.0.0.1").await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert!(v["prompt"].as_str().unwrap().contains("Do not start another plan ticket yet"));
     let (st, _) = call(app, "POST", &format!("/api/sessions/{key}/runs/step-run/milestone/approve"), Some(json!({})), false, "127.0.0.1").await;
     assert_eq!(st, StatusCode::FORBIDDEN);
-    let (st, _) = call(app, "POST", &format!("/api/sessions/{key}/runs/step-run/milestone/approve"), Some(json!({})), true, "127.0.0.1").await;
-    assert_eq!(st, StatusCode::CONFLICT);
+    let (st, v) = call(app, "GET", &format!("/api/sessions/{key}/runs/step-run/milestone"), None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["subject"], "Milestone 2");
+    assert_eq!(v["dirty"], true);
+    assert_eq!(v["live"], false);
+    let (st, v) = call(app, "POST", &format!("/api/sessions/{key}/runs/step-run/milestone/approve"), Some(json!({ "message": "custom subject" })), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap_or_default().contains("not live"), "{v}");
+    assert!(plantool_daemon::git::is_dirty(&h.repo).unwrap(), "a refused approval must not commit");
+    assert_eq!(live.run("step-run").unwrap().milestones_approved, 1);
 }
 
 #[tokio::test]

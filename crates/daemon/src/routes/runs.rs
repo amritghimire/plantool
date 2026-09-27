@@ -6,7 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use plantool_core::{Actor, ImplementationMode, PermissionMode, Provider, Stage};
+use plantool_core::{Actor, DocKind, ImplementationMode, PermissionMode, Provider, Stage};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -142,7 +142,44 @@ async fn input(State(state): State<AppState>, Path((repo, slug, id)): Path<(Stri
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn approve_milestone(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug, id)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+#[derive(Deserialize)]
+pub struct ApproveBody {
+    /// Commit the worktree as the milestone before the agent continues (default true).
+    #[serde(default = "default_true")]
+    pub commit: bool,
+    /// Commit message; empty or missing means the suggested one.
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The text of the last ticked checkbox in the plan, used as the milestone commit subject.
+fn last_checked_ticket(plan: &str) -> Option<String> {
+    plantool_core::markdown::checkboxes(plan).into_iter().rev().find(|c| c.checked).map(|c| c.text)
+}
+
+/// The commit subject offered for the next milestone of a run.
+fn suggested_subject(s: &crate::registry::LiveSession, run: &plantool_core::Run) -> String {
+    let n = run.milestones_approved + 1;
+    match s.doc(DocKind::Plan).and_then(|d| last_checked_ticket(&d.content)) {
+        Some(ticket) => format!("Milestone {n}: {ticket}"),
+        None => format!("Milestone {n}"),
+    }
+}
+
+async fn milestone(State(state): State<AppState>, Path((repo, slug, id)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let run = s.run(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown run {id}")))?;
+    let subject = suggested_subject(&s, &run);
+    let cwd = run.cwd.clone();
+    let dirty = tokio::task::spawn_blocking(move || crate::git::is_dirty(&cwd)).await.map_err(|e| anyhow::anyhow!(e))?.unwrap_or(false);
+    Ok(Json(json!({ "subject": subject, "dirty": dirty, "milestone": run.milestones_approved + 1, "pending": run.milestone_pending, "live": state.runs.is_live(&id) })))
+}
+
+async fn approve_milestone(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug, id)): Path<(String, String, String)>, body: Option<Json<ApproveBody>>) -> Result<Json<serde_json::Value>, ApiError> {
     if actor_from(&headers, &state) != Actor::Human {
         return Err(ApiError(StatusCode::FORBIDDEN, "only a human can approve a milestone in the browser".into()));
     }
@@ -151,21 +188,59 @@ async fn approve_milestone(State(state): State<AppState>, headers: HeaderMap, Pa
     if run.implementation_mode != ImplementationMode::StepByStep || !run.milestone_pending || run.status != plantool_core::RunStatus::Idle {
         return Err(ApiError(StatusCode::CONFLICT, "the milestone is not ready for approval".into()));
     }
+    if !state.runs.is_live(&id) {
+        return Err(ApiError(StatusCode::CONFLICT, format!("run {id} is not live; resume it before approving")));
+    }
     if let Some(review) = run.milestone_review.clone() {
         let open = tokio::task::spawn_blocking(move || crate::changes::unresolved_human_comments(&review)).await.map_err(|e| anyhow::anyhow!(e))??;
         if open > 0 {
             return Err(ApiError(StatusCode::CONFLICT, format!("{open} human difftool comment(s) are still open; resolve them in difftool before approving")));
         }
     }
+    let (commit, message) = body.map_or((true, None), |Json(b)| (b.commit, b.message));
+    let n = run.milestones_approved + 1;
+    let subject = match message.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()) {
+        Some(m) => m,
+        None => suggested_subject(&s, &run),
+    };
+    let cwd = run.cwd.clone();
+    let held = run.milestone_commit.clone();
+    let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<crate::git::CommitOutcome>> {
+        if !commit || !crate::git::is_dirty(&cwd)? {
+            return Ok(None);
+        }
+        let amend = held.is_some_and(|h| crate::git::head_sha(&cwd).ok().as_deref() == Some(h.as_str()));
+        Ok(Some(crate::git::commit_milestone(&cwd, &subject, amend)?))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?
+    .map_err(|e| ApiError(StatusCode::CONFLICT, format!("could not commit the milestone: {e}")))?;
+    let (sha, committed) = match outcome {
+        None => (crate::git::head_sha(&run.cwd).map_err(|e| anyhow::anyhow!(e))?, false),
+        Some(crate::git::CommitOutcome::Committed(sha)) => (sha, true),
+        Some(crate::git::CommitOutcome::HookRewrote { sha, files }) => {
+            if sha.is_some() && run.milestone_commit != sha {
+                run.milestone_commit = sha;
+                s.upsert_run(run, |r| crate::events::LiveEvent::RunUpdated { run: r })?;
+            }
+            let shown: Vec<&str> = files.iter().take(5).map(String::as_str).collect();
+            let more = if files.len() > 5 { format!(" and {} more", files.len() - 5) } else { String::new() };
+            return Err(ApiError(StatusCode::CONFLICT, format!("git hooks rewrote {} file(s): {}{more}. The rewritten files are staged; review them in the Changes tab and approve again to include them in the milestone commit.", files.len(), shown.join(", "))));
+        }
+    };
     let previous = run.clone();
     run.milestone_pending = false;
     run.milestone_review = None;
+    run.milestone_base = Some(sha.clone());
+    run.milestone_commit = None;
+    run.milestones_approved = n;
     s.upsert_run(run, |r| crate::events::LiveEvent::RunUpdated { run: r })?;
-    if let Err(e) = state.runs.send(&id, RunInput::Text("This milestone is approved. If unchecked plan tickets remain, implement exactly the next one and pause for review again. If every ticket is complete, run the full project checks and move to implementation-review.".into())).await {
+    let note = if committed { format!("This milestone is approved and committed as {}. Do not amend that commit. ", &sha[..sha.len().min(12)]) } else { "This milestone is approved. ".to_string() };
+    if let Err(e) = state.runs.send(&id, RunInput::Text(format!("{note}If unchecked plan tickets remain, implement exactly the next one and pause for review again. If every ticket is complete, run the full project checks and move to implementation-review."))).await {
         s.upsert_run(previous, |r| crate::events::LiveEvent::RunUpdated { run: r })?;
         return Err(ApiError(StatusCode::CONFLICT, e.to_string()));
     }
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "committed": committed, "sha": sha })))
 }
 
 async fn stop(State(state): State<AppState>, Path((repo, slug, id)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -210,6 +285,7 @@ pub fn routes() -> Router<AppState> {
         .route("/providers", get(providers))
         .route("/sessions/{repo}/{slug}/runs", post(start))
         .route("/sessions/{repo}/{slug}/runs/{id}/input", post(input))
+        .route("/sessions/{repo}/{slug}/runs/{id}/milestone", get(milestone))
         .route("/sessions/{repo}/{slug}/runs/{id}/milestone/approve", post(approve_milestone))
         .route("/sessions/{repo}/{slug}/runs/{id}/stop", post(stop))
         .route("/sessions/{repo}/{slug}/runs/{id}", delete(remove))

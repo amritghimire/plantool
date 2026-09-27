@@ -27,6 +27,7 @@ impl RunManager {
     #[allow(clippy::too_many_arguments)]
     pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, resume: Option<String>, permission_mode: PermissionMode, implementation_mode: ImplementationMode, previous_run: Option<&Run>) -> anyhow::Result<Run> {
         let sess = session.session();
+        let head = if implementation_mode == ImplementationMode::StepByStep { crate::git::head_sha(sess.cwd()).ok() } else { None };
         let run = Run {
             id: short_id(),
             provider,
@@ -35,6 +36,10 @@ impl RunManager {
             implementation_mode,
             milestone_pending: previous_run.is_some_and(|r| r.milestone_pending),
             milestone_review: previous_run.and_then(|r| r.milestone_review.clone()),
+            milestone_base: previous_run.and_then(|r| r.milestone_base.clone()).or_else(|| head.clone()),
+            milestones_approved: previous_run.map_or(0, |r| r.milestones_approved),
+            milestone_commit: previous_run.and_then(|r| r.milestone_commit.clone()),
+            implementation_base: previous_run.and_then(|r| r.implementation_base.clone()).or(head),
             task: Some(stage_name.to_string()),
             cwd: sess.cwd().clone(),
             status: RunStatus::Starting,
@@ -90,14 +95,15 @@ impl RunManager {
                     if turn_status == "completed" && current.implementation_mode == ImplementationMode::StepByStep && consumer_session.stage() == Stage::Implementing {
                         current.milestone_pending = true;
                         let existing = current.milestone_review.clone();
+                        let base = current.milestone_base.clone().unwrap_or_else(|| "HEAD".into());
                         let review_session = consumer_session.session();
                         let plan = consumer_session.doc_path(plantool_core::DocKind::Plan);
-                        let opened = tokio::task::spawn_blocking(move || crate::changes::open_review(&review_session, "HEAD", Some(plan), existing.as_ref())).await;
+                        let opened = tokio::task::spawn_blocking(move || crate::changes::open_review(&review_session, &base, Some(plan), existing.as_ref())).await;
                         match opened {
                             Ok(Ok((review, _))) => {
                                 let new_review = current.milestone_review.as_ref().and_then(review_ref) != review_ref(&review);
                                 current.milestone_review = Some(review.clone());
-                                let _ = consumer_session.set_review(review.clone());
+                                consumer_session.announce_review(review.clone());
                                 if new_review {
                                     if let Some(reference) = review_ref(&review) {
                                         tokio::spawn(watch_review(consumer_manager.clone(), consumer_session.clone(), consumer_id.clone(), reference.to_string()));

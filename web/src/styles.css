@@ -267,6 +267,20 @@ li.blk > .gutter { left: -50px; }
 .stat { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
 .stat td { padding: 4px 8px; border-bottom: 1px solid var(--line); }
 .stat td.added, .stat td.deleted { width: 60px; text-align: right; }
+.stat tr.file { cursor: pointer; }
+.stat tr.file:hover td { background: var(--bg-2); }
+.stat tr.file td.path .chev { display: inline-block; width: 16px; color: var(--fg-3); transition: transform 0.12s; }
+.stat tr.file.open td.path .chev { transform: rotate(90deg); }
+.stat tr.diff td { padding: 0; }
+.file-diff { margin: 0; padding: 8px 12px; font-size: 12px; line-height: 1.45; white-space: pre; overflow-x: auto; background: var(--code-bg); border: 0; border-radius: 0; }
+.file-diff .dl { display: block; }
+.file-diff .dl.add { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.file-diff .dl.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.file-diff .dl.hunk { color: var(--accent); }
+.file-diff .dl.meta { color: var(--fg-3); }
+.changes-scope { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.check-row { display: flex; gap: 6px; align-items: center; }
+.commit-message { width: 100%; box-sizing: border-box; font: inherit; font-size: 12.5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--fg); resize: vertical; }
 
 .run-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .run-scroll { flex: 1; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }

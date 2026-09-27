@@ -152,6 +152,73 @@ pub struct FileStat {
     pub deleted: u32,
 }
 
+pub fn head_sha(cwd: &Path) -> Result<String, GitError> {
+    git(cwd, &["rev-parse", "HEAD"])
+}
+
+pub fn is_dirty(cwd: &Path) -> Result<bool, GitError> {
+    Ok(!git(cwd, &["status", "--porcelain", "--untracked-files=all"])?.is_empty())
+}
+
+pub fn commit_all(cwd: &Path, message: &str) -> Result<String, GitError> {
+    match commit_milestone(cwd, message, false)? {
+        CommitOutcome::Committed(sha) | CommitOutcome::HookRewrote { sha: Some(sha), .. } => Ok(sha),
+        CommitOutcome::HookRewrote { files, .. } => Err(GitError::Failed { args: "commit".into(), stderr: format!("hooks rewrote {}", files.join(", ")) }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitOutcome {
+    Committed(String),
+    /// Hooks changed files. `sha` is set when the commit still landed; the rewritten files are staged either way.
+    HookRewrote { sha: Option<String>, files: Vec<String> },
+}
+
+/// Paths with edits that are not in the index. Everything is staged before a milestone commit
+/// runs, so anything unstaged afterwards came from a hook.
+fn unstaged_paths(cwd: &Path) -> Result<Vec<String>, GitError> {
+    let mut files: Vec<String> = git(cwd, &["diff", "--name-only"])?.lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
+    files.extend(git(cwd, &["ls-files", "--others", "--exclude-standard"])?.lines().filter(|l| !l.is_empty()).map(str::to_string));
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+/// Stage everything and commit it as a milestone. When a hook rewrites files, the rewritten
+/// files are staged and reported instead of being silently left behind.
+pub fn commit_milestone(cwd: &Path, message: &str, amend: bool) -> Result<CommitOutcome, GitError> {
+    git(cwd, &["add", "-A"])?;
+    let mut args = vec!["commit", "-q", "-m", message];
+    if amend {
+        args.push("--amend");
+    }
+    let result = git(cwd, &args);
+    let files = unstaged_paths(cwd)?;
+    match result {
+        Ok(_) if files.is_empty() => Ok(CommitOutcome::Committed(head_sha(cwd)?)),
+        Ok(_) => {
+            git(cwd, &["add", "-A"])?;
+            Ok(CommitOutcome::HookRewrote { sha: Some(head_sha(cwd)?), files })
+        }
+        Err(_) if !files.is_empty() => {
+            git(cwd, &["add", "-A"])?;
+            Ok(CommitOutcome::HookRewrote { sha: None, files })
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Unified diff of one path between `base` and the working tree. Untracked files diff against
+/// nothing, so the whole file shows as added.
+pub fn diff_file(cwd: &Path, base: &str, path: &str) -> Result<String, GitError> {
+    let tracked = git(cwd, &["ls-files", "--error-unmatch", "--", path]).is_ok();
+    if tracked {
+        return git(cwd, &["diff", "--no-color", base, "--", path]);
+    }
+    let out = Command::new("git").args(["diff", "--no-color", "--no-index", "--", "/dev/null", path]).current_dir(cwd).output()?;
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 pub fn diff_numstat(cwd: &Path, base: &str) -> Result<Vec<FileStat>, GitError> {
     let out = git(cwd, &["diff", "--numstat", base])?;
     let mut stats = Vec::new();
@@ -222,6 +289,85 @@ mod tests {
         assert_eq!(stat.len(), 1);
         assert_eq!(stat[0].path, "b.txt");
         assert_eq!(stat[0].added, 2);
+    }
+
+    #[test]
+    fn commits_and_diffs_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
+        git(&root, &["config", "user.email", "t@t"]).unwrap();
+        git(&root, &["config", "user.name", "t"]).unwrap();
+        std::fs::write(root.join("a.txt"), "hi\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(&root, &["commit", "-q", "-m", "init"]).unwrap();
+        let first = head_sha(&root).unwrap();
+        assert!(!is_dirty(&root).unwrap());
+
+        std::fs::write(root.join("a.txt"), "hi\nthere\n").unwrap();
+        std::fs::write(root.join("new.txt"), "x\n").unwrap();
+        assert!(is_dirty(&root).unwrap());
+        let tracked = diff_file(&root, "HEAD", "a.txt").unwrap();
+        assert!(tracked.contains("+there"), "{tracked}");
+        let untracked = diff_file(&root, "HEAD", "new.txt").unwrap();
+        assert!(untracked.contains("+x"), "{untracked}");
+
+        let second = commit_all(&root, "Milestone 1").unwrap();
+        assert_ne!(first, second);
+        assert!(!is_dirty(&root).unwrap());
+        assert!(diff_numstat(&root, &second).unwrap().is_empty());
+        assert_eq!(git(&root, &["log", "-1", "--format=%s"]).unwrap(), "Milestone 1");
+    }
+
+    fn hook_repo(hook: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
+        git(&root, &["config", "user.email", "t@t"]).unwrap();
+        git(&root, &["config", "user.name", "t"]).unwrap();
+        git(&root, &["config", "core.hooksPath", ".git/hooks"]).unwrap();
+        std::fs::write(root.join("a.txt"), "hi\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(&root, &["commit", "-q", "-m", "init"]).unwrap();
+        let path = root.join(".git/hooks/pre-commit");
+        std::fs::write(&path, hook).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(root.join("a.txt"), "hi\nchanged\n").unwrap();
+        (tmp, root)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_that_rewrites_and_fails_stages_its_edits() {
+        let (_tmp, root) = hook_repo("#!/bin/sh\nprintf 'formatted\\n' >> a.txt\nexit 1\n");
+        let out = commit_milestone(&root, "Milestone 1", false).unwrap();
+        assert_eq!(out, CommitOutcome::HookRewrote { sha: None, files: vec!["a.txt".into()] });
+        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 1, "nothing committed");
+        assert!(git(&root, &["diff", "--name-only"]).unwrap().is_empty(), "hook edits are staged");
+        // the hook appends again on the retry, so disable it to mimic a now-clean formatter run
+        std::fs::remove_file(root.join(".git/hooks/pre-commit")).unwrap();
+        assert!(matches!(commit_milestone(&root, "Milestone 1", false).unwrap(), CommitOutcome::Committed(_)));
+        assert!(std::fs::read_to_string(root.join("a.txt")).unwrap().contains("formatted"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_that_rewrites_but_passes_leaves_a_commit_to_amend() {
+        let (_tmp, root) = hook_repo("#!/bin/sh\nprintf 'formatted\\n' >> a.txt\nexit 0\n");
+        let out = commit_milestone(&root, "Milestone 1", false).unwrap();
+        let sha = match out { CommitOutcome::HookRewrote { sha: Some(sha), files } => { assert_eq!(files, vec!["a.txt".to_string()]); sha } other => panic!("{other:?}") };
+        assert_eq!(head_sha(&root).unwrap(), sha);
+        assert!(git(&root, &["diff", "--name-only"]).unwrap().is_empty(), "hook edits are staged");
+        std::fs::remove_file(root.join(".git/hooks/pre-commit")).unwrap();
+        assert!(matches!(commit_milestone(&root, "Milestone 1", true).unwrap(), CommitOutcome::Committed(_)));
+        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 2, "the retry amended instead of adding a commit");
+        assert!(git(&root, &["show", "HEAD:a.txt"]).unwrap().contains("formatted"));
     }
 
     #[test]

@@ -331,6 +331,12 @@ impl LiveSession {
         Ok(session)
     }
 
+    /// Tell open tabs a review was opened or refreshed without touching the session-level review.
+    pub fn announce_review(&self, review: ChangeReview) {
+        let mut g = self.lock();
+        self.broadcast(&mut g, LiveEvent::ChangesOpened { review });
+    }
+
     pub fn set_review(&self, review: ChangeReview) -> Result<(), RegistryError> {
         let mut g = self.lock();
         g.state.review = Some(review.clone());

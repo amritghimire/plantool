@@ -326,6 +326,17 @@ pub struct Run {
     pub milestone_pending: bool,
     #[serde(default)]
     pub milestone_review: Option<ChangeReview>,
+    /// Commit the current milestone's diff is measured from (step-by-step only).
+    #[serde(default)]
+    pub milestone_base: Option<String>,
+    #[serde(default)]
+    pub milestones_approved: u32,
+    /// A milestone commit that landed but was held back because hooks rewrote files; the next approval amends it.
+    #[serde(default)]
+    pub milestone_commit: Option<String>,
+    /// Commit the step-by-step implementation started from; the whole-implementation diff is measured from here.
+    #[serde(default)]
+    pub implementation_base: Option<String>,
     /// What the run was started to do: research, plan, implement, critique or resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,

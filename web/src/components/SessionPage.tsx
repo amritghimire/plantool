@@ -233,7 +233,6 @@ export function SessionPage() {
           break;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, loadDoc, reloadPrompts, loadReviewPrompt, toast],
   );
 
@@ -323,13 +322,15 @@ export function SessionPage() {
     }
   };
 
-  const onApproveMilestone = async (milestoneRun: Run) => {
+  const onApproveMilestone = async (milestoneRun: Run, commit: boolean, message: string) => {
     setBusy(true);
     try {
-      await api.approveMilestone(key, milestoneRun.id);
+      const r = await api.approveMilestone(key, milestoneRun.id, commit, message);
       setSelectedRun(milestoneRun.id);
-      toast("Milestone approved; the agent is continuing");
+      setChangesNonce((n) => n + 1);
+      toast(r.committed ? `Milestone committed as ${r.sha.slice(0, 12)}; the agent is continuing` : "Milestone approved; the agent is continuing");
     } catch (e) {
+      setChangesNonce((n) => n + 1);
       toast((e as Error).message, "error");
     } finally {
       setBusy(false);
@@ -435,7 +436,7 @@ export function SessionPage() {
         onJump={onJump}
         onStartRun={(s, resumeId) => setDialog({ stage: s, resumeId })}
         onContinueMilestone={(r) => void onContinueMilestone(r)}
-        onApproveMilestone={(r) => void onApproveMilestone(r)}
+        onApproveMilestone={(r, commit, message) => void onApproveMilestone(r, commit, message)}
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
         onRemoveRun={onRemoveRun}

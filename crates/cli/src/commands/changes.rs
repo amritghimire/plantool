@@ -11,16 +11,20 @@ pub struct Args {
     pub no_open: bool,
     #[arg(long)]
     pub json: bool,
+    /// Which changes to show during step-by-step implementation: step (current milestone) or all.
+    #[arg(long, value_parser = ["step", "all"])]
+    pub scope: Option<String>,
 }
 
 pub fn run(a: Args) -> anyhow::Result<()> {
     let c = Client::connect()?;
     let (key, _) = c.resolve_key(&a.reference)?;
+    let query = a.scope.as_deref().map(|s| format!("?scope={s}")).unwrap_or_default();
     if a.stat {
-        let v: serde_json::Value = c.get(&format!("/api/sessions/{key}/changes"))?;
+        let v: serde_json::Value = c.get(&format!("/api/sessions/{key}/changes{query}"))?;
         return print_changes(&v, a.json);
     }
-    let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/changes/open"), &serde_json::json!({}))?;
+    let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/changes/open"), &serde_json::json!({ "scope": a.scope }))?;
     if a.json {
         return print_json(&v);
     }
@@ -40,6 +44,9 @@ pub fn print_changes(v: &serde_json::Value, json: bool) -> anyhow::Result<()> {
         return print_json(v);
     }
     println!("tool: {}", v.get("tool").and_then(|t| t.as_str()).unwrap_or("?"));
+    if let Some(label) = v.get("label").and_then(|l| l.as_str()) {
+        println!("changes {label}");
+    }
     if let Some(url) = v.pointer("/review/url").and_then(|u| u.as_str()) {
         println!("review: {url}");
     }

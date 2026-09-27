@@ -134,6 +134,10 @@ export interface Run {
   implementation_mode?: ImplementationMode;
   milestone_pending?: boolean;
   milestone_review?: ChangeReview | null;
+  milestone_base?: string | null;
+  milestones_approved?: number;
+  milestone_commit?: string | null;
+  implementation_base?: string | null;
   task?: string;
   cwd: string;
   status: RunStatus;
@@ -186,12 +190,23 @@ export interface FileStat {
   deleted: number;
 }
 
+export type ChangeScope = "step" | "all";
+
 export interface ChangesResponse {
   tool: "difftool" | "git-difftool" | "none";
+  scope: ChangeScope;
   base: string;
+  label: string;
+  step_available: boolean;
   stat: FileStat[];
   review: ChangeReview | null;
   message?: string;
+}
+
+export interface FileDiff {
+  path: string;
+  diff: string;
+  truncated: boolean;
 }
 
 export type LiveEvent =

@@ -1,6 +1,6 @@
 use crate::git::{self, FileStat};
 use plantool_core::{ChangeReview, Session};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -33,23 +33,50 @@ pub fn detect_change_tool() -> ChangeTool {
     }
 }
 
+/// Which slice of the implementation a change view covers: the current milestone in
+/// step-by-step mode, or everything against the session base.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChangeScope {
+    #[default]
+    Step,
+    All,
+}
+
+/// The resolved diff window for one scope.
+#[derive(Debug, Clone)]
+pub struct Window {
+    pub scope: ChangeScope,
+    pub base: String,
+    pub label: String,
+    pub step_available: bool,
+    pub review: Option<ChangeReview>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Changes {
     pub tool: &'static str,
+    pub scope: ChangeScope,
     pub base: String,
+    pub label: String,
+    pub step_available: bool,
     pub stat: Vec<FileStat>,
     pub review: Option<ChangeReview>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
-pub fn stat(session: &Session, base: &str, review: Option<ChangeReview>) -> Changes {
+pub fn stat(session: &Session, window: &Window) -> Changes {
     let tool = detect_change_tool();
-    let (stat, message) = match git::diff_numstat(session.cwd(), base) {
+    let (stat, message) = match git::diff_numstat(session.cwd(), &window.base) {
         Ok(s) => (s, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
-    Changes { tool: tool.name(), base: base.to_string(), stat, review, message }
+    Changes { tool: tool.name(), scope: window.scope, base: window.base.clone(), label: window.label.clone(), step_available: window.step_available, stat, review: window.review.clone(), message }
+}
+
+fn is_sha(base: &str) -> bool {
+    base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 pub fn open_url(url: &str) {
@@ -83,7 +110,7 @@ pub fn open_review(session: &Session, base: &str, plan_path: Option<PathBuf>, ex
             }
             let mut cmd = Command::new(&path);
             cmd.arg("diff").arg("-C").arg(&cwd);
-            if base == "HEAD" { cmd.arg("--uncommitted"); } else { cmd.arg(base); }
+            if base == "HEAD" { cmd.arg("--uncommitted"); } else if is_sha(base) { cmd.arg(base).arg("--untracked"); } else { cmd.arg(base); }
             cmd.arg("--no-open");
             if let Some(p) = plan_path.filter(|p| p.is_file()) {
                 cmd.arg("--design").arg(p);

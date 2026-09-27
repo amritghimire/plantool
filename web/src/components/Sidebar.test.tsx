@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { api } from "../api";
 import { Sidebar } from "./Sidebar";
 import type { Comment, SessionView } from "../types";
 
@@ -88,11 +89,19 @@ describe("Sidebar comments", () => {
   });
 });
 
-it("offers milestone approval after a step-by-step turn", () => {
+it("offers milestone approval after a step-by-step turn with an editable commit message", async () => {
+  vi.spyOn(api, "milestone").mockResolvedValue({ subject: "Milestone 1: add the route", dirty: true, milestone: 1, pending: true, live: true });
   const run = { ...view.runs[0], stage: "implementing" as const, task: "implement", status: "idle" as const, implementation_mode: "step-by-step" as const, milestone_pending: true };
   const currentView = { ...view, state: { ...view.state, stage: "implementing" as const }, runs: [run] };
   const { onApproveMilestone } = setup(currentView);
+  const message = await screen.findByDisplayValue("Milestone 1: add the route");
+  fireEvent.change(message, { target: { value: "Milestone 1: guest home route" } });
   fireEvent.click(screen.getByText("Approve milestone and continue"));
-  expect(onApproveMilestone).toHaveBeenCalledWith(run);
+  expect(onApproveMilestone).toHaveBeenCalledWith(run, true, "Milestone 1: guest home route");
   expect(screen.getByText("Accept implementation")).toBeDisabled();
+
+  fireEvent.click(screen.getByLabelText("commit this milestone"));
+  expect(screen.queryByLabelText("Commit message")).toBeNull();
+  fireEvent.click(screen.getByText("Approve milestone and continue"));
+  expect(onApproveMilestone).toHaveBeenLastCalledWith(run, false, "Milestone 1: guest home route");
 });

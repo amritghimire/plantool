@@ -62,8 +62,9 @@ and tick each one as you finish it.
   refreshes the change review. If difftool is available, the run watches its human comments and
   sends them back to you in this same provider session. Read the whole open board with the
   difftool-review skill, make the requested fixes, refresh the review, and reply. Stay on this
-  ticket while feedback is open. The human approves the milestone in plantool after review and
-  may commit it before approval. Only then start the next ticket. After the final approval, run
+  ticket while feedback is open. The human approves the milestone in plantool after review;
+  plantool then commits it on the session branch, so do not commit it yourself. Only then start
+  the next ticket. After the final approval, run
   the full checks and move to `implementation-review`. For hosted runs, finish each turn instead of
   starting a blocking difftool watch; plantool watches difftool and sends new comments to this run.
 - Stay on the route the plan drew. Work that turns out to be beyond the plan goes into the

@@ -1,4 +1,4 @@
-import type { ChangesResponse, Comment, DocKind, DocResponse, NavTarget, RepoInfo, Run, Session, SessionView, Stage } from "./types";
+import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage } from "./types";
 
 export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "next";
 
@@ -65,8 +65,9 @@ export const api = {
   removeComments: (key: string, ids: string[]) => request<{ removed: number }>("POST", `/api/sessions/${key}/comments/remove`, { ids }),
   setStage: (key: string, to: Stage) => request<{ stage: Stage }>("POST", `/api/sessions/${key}/stage`, { to }),
   navigate: (key: string, target: Partial<NavTarget>) => request<{ viewers: number }>("POST", `/api/sessions/${key}/navigate`, target),
-  changes: (key: string) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes`),
-  openChanges: (key: string) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, {}),
+  changes: (key: string, scope?: ChangeScope) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes${scope ? `?scope=${scope}` : ""}`),
+  openChanges: (key: string, scope?: ChangeScope) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, { scope: scope ?? null }),
+  changesFile: (key: string, path: string, scope?: ChangeScope) => request<FileDiff>("GET", `/api/sessions/${key}/changes/file?path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ""}`),
   startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
   prompt: (key: string, stage: PromptStage, extra?: string, implementationMode?: string, resumeRun?: string) => {
     const query = new URLSearchParams();
@@ -77,7 +78,8 @@ export const api = {
   },
   setBrief: (key: string, brief: string | null) => request<{ brief: string | null; session: Session }>("POST", `/api/sessions/${key}/brief`, { brief }),
   runInput: (key: string, id: string, body: unknown) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/input`, body),
-  approveMilestone: (key: string, id: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/milestone/approve`, {}),
+  milestone: (key: string, id: string) => request<{ subject: string; dirty: boolean; milestone: number; pending: boolean; live: boolean }>("GET", `/api/sessions/${key}/runs/${id}/milestone`),
+  approveMilestone: (key: string, id: string, commit: boolean, message: string) => request<{ ok: boolean; committed: boolean; sha: string }>("POST", `/api/sessions/${key}/runs/${id}/milestone/approve`, { commit, message }),
   stopRun: (key: string, id: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/stop`, {}),
   removeRun: (key: string, id: string) => request<{ ok: boolean; removed: string }>("DELETE", `/api/sessions/${key}/runs/${id}`),
   runEvents: (key: string, id: string, since = 0) => request<{ events: { seq: number; at: string; event: unknown }[] }>("GET", `/api/sessions/${key}/runs/${id}/events?since=${since}`),

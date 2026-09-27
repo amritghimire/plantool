@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { api } from "../api";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
 import { relTime, shortPath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
@@ -15,7 +16,7 @@ export interface SidebarProps {
   onJump: (c: Comment) => void;
   onStartRun: (stage: "research" | "plan" | "implement" | "critique", resumeId?: string) => void;
   onContinueMilestone: (run: Run) => void;
-  onApproveMilestone: (run: Run) => void;
+  onApproveMilestone: (run: Run, commit: boolean, message: string) => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
@@ -33,6 +34,8 @@ export function Sidebar(p: SidebarProps) {
   const resolvedThreads = p.comments.filter((c) => !c.parent && c.resolved).sort((a, b) => b.seq - a.seq);
   const repliesOf = (root: Comment) => p.comments.filter((c) => c.parent === root.id).sort((a, b) => a.seq - b.seq);
   const [showResolvedList, setShowResolvedList] = useState(false);
+  const [commitMilestone, setCommitMilestone] = useState(true);
+  const [commitMessage, setCommitMessage] = useState("");
   const activeDoc = p.view.docs.find((d) => d.kind === p.activeTab);
   const askAgent = (c: Comment) =>
     p.onSendToRun(
@@ -47,6 +50,26 @@ export function Sidebar(p: SidebarProps) {
   const liveRun = p.view.runs.find(isLive) ?? null;
   const latestImplementation = p.view.runs.filter((r) => r.task === "implement").sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
   const stepMode = latestImplementation?.implementation_mode === "step-by-step";
+  const awaitingApproval = stage === "implementing" && stepMode && latestImplementation?.milestone_pending && latestImplementation.status === "idle";
+  const approvalRun = awaitingApproval ? latestImplementation.id : null;
+  const approvalCount = awaitingApproval ? (latestImplementation.milestones_approved ?? 0) : 0;
+  const planSha = plan?.sha ?? null;
+  useEffect(() => {
+    if (!approvalRun) return;
+    let cancelled = false;
+    setCommitMessage("");
+    api
+      .milestone(p.view.key, approvalRun)
+      .then((m) => {
+        if (!cancelled) setCommitMessage(m.subject);
+      })
+      .catch(() => {
+        if (!cancelled) setCommitMessage(`Milestone ${approvalCount + 1}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [p.view.key, approvalRun, approvalCount, planSha]);
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
   const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
 
@@ -140,11 +163,28 @@ export function Sidebar(p: SidebarProps) {
             </button>
             {stage === "implementing" && stepMode && latestImplementation?.milestone_pending && (
               <>
-                <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Resolve open comments and commit the milestone if you want a separate commit.</div>
+                <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Approving commits the milestone on the session branch and the agent starts the next ticket.</div>
                 {latestImplementation.status === "idle" ? (
-                  <button className="btn primary" onClick={() => p.onApproveMilestone(latestImplementation)} disabled={p.busy} type="button">
-                    Approve milestone and continue
-                  </button>
+                  <>
+                    <label className="muted small check-row">
+                      <input type="checkbox" checked={commitMilestone} onChange={(e) => setCommitMilestone(e.target.checked)} disabled={p.busy} />
+                      commit this milestone
+                    </label>
+                    {commitMilestone && (
+                      <textarea
+                        className="commit-message"
+                        aria-label="Commit message"
+                        rows={2}
+                        value={commitMessage}
+                        onChange={(e) => setCommitMessage(e.target.value)}
+                        disabled={p.busy}
+                        placeholder="Commit message"
+                      />
+                    )}
+                    <button className="btn primary" onClick={() => p.onApproveMilestone(latestImplementation, commitMilestone, commitMessage)} disabled={p.busy || (commitMilestone && commitMessage.trim() === "")} type="button">
+                      Approve milestone and continue
+                    </button>
+                  </>
                 ) : !isLive(latestImplementation) ? (
                   <button className="btn primary" onClick={() => p.onContinueMilestone(latestImplementation)} disabled={p.busy} type="button">
                     Resume milestone review
