@@ -102,12 +102,14 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
             const isOpen = open.has(f.path);
             const state = diffs[f.path];
             return [
-              <tr key={f.path} className={`file ${isOpen ? "open" : ""}`} onClick={() => toggle(f.path)} aria-expanded={isOpen}>
+              <tr key={f.path} className={`file ${isOpen ? "open" : ""}`}>
                 <td className="added">+{f.added}</td>
                 <td className="deleted">−{f.deleted}</td>
                 <td className="path">
-                  <span className="chev" aria-hidden="true">›</span>
-                  {f.path}
+                  <button className="file-toggle" onClick={() => toggle(f.path)} type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Collapse" : "Expand"} ${f.path}`}>
+                    <span className="chev" aria-hidden="true">›</span>
+                    {f.path}
+                  </button>
                 </td>
               </tr>,
               isOpen ? (

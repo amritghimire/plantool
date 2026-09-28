@@ -1,3 +1,9 @@
+import type { Session } from "../types";
+
+export function workspacePath(session: Session): string {
+  return session.worktree ?? session.repo.root;
+}
+
 export function relTime(iso: string | null | undefined): string {
   if (!iso) return "";
   const t = Date.parse(iso);

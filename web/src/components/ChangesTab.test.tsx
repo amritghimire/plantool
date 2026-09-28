@@ -18,9 +18,11 @@ test("switches scope and expands a file to show its diff", async () => {
   const file = vi.spyOn(api, "changesFile").mockResolvedValue({ path: "src/auth.rs", diff: "diff --git a/src/auth.rs b/src/auth.rs\n@@ -1,2 +1,3 @@\n context\n-old\n+new\n", truncated: false });
   render(<ChangesTab sessionKey="repo/x" nonce={0} />);
   await screen.findByText("src/auth.rs");
+  expect(screen.getByRole("button", { name: "Expand src/auth.rs" })).toBeInTheDocument();
   expect(screen.getByText(/since milestone 1 was approved/)).toBeTruthy();
 
   fireEvent.click(screen.getByText("src/auth.rs"));
+  expect(screen.getByRole("button", { name: "Collapse src/auth.rs" })).toBeInTheDocument();
   await waitFor(() => expect(file).toHaveBeenCalledWith("repo/x", "src/auth.rs", "step"));
   const added = await screen.findByText("+new");
   expect(added.className).toContain("add");

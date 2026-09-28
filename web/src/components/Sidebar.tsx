@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
-import { relTime, shortPath } from "../lib/format";
+import { relTime, shortPath, workspacePath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
 import { Thread, type ThreadActions } from "./Thread";
 
@@ -36,6 +36,9 @@ export function Sidebar(p: SidebarProps) {
   const [showResolvedList, setShowResolvedList] = useState(false);
   const [commitMilestone, setCommitMilestone] = useState(true);
   const [commitMessage, setCommitMessage] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [removeWorktree, setRemoveWorktree] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const activeDoc = p.view.docs.find((d) => d.kind === p.activeTab);
   const askAgent = (c: Comment) =>
     p.onSendToRun(
@@ -72,20 +75,38 @@ export function Sidebar(p: SidebarProps) {
   }, [p.view.key, approvalRun, approvalCount, planSha]);
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
   const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
+  useEffect(() => {
+    if (!deleting) return;
+    const previous = document.activeElement as HTMLElement | null;
+    dialogRef.current?.querySelector<HTMLButtonElement>("button[data-cancel]")?.focus();
+    return () => previous?.focus();
+  }, [deleting]);
 
   return (
     <aside className="sidebar">
+      <div className="mobile-next">
+        <span className={`stage-pill stage-${stage}`}>{STAGE_LABEL[stage]}</span>
+        <span className="spacer" />
+        {stage === "new" && <button className="btn primary small" disabled={p.busy} onClick={() => p.onStartRun("research")}>Start research</button>}
+        {(stage === "researching" || stage === "research-review") && <button className="btn primary small" disabled={p.busy} onClick={() => p.onStartRun("plan")}>Plan it</button>}
+        {(stage === "planning" || stage === "plan-review") && <button className="btn primary small" disabled={p.busy || !plan?.exists} onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}>Approve plan</button>}
+        {stage === "approved" && <button className="btn primary small" disabled={p.busy} onClick={() => p.onStartRun("implement")}>Start implementation</button>}
+        {stage === "implementing" && <button className="btn primary small" disabled={p.busy} onClick={p.onOpenChanges}>Review changes</button>}
+        {stage === "implementation-review" && <button className="btn primary small" disabled={p.busy} onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}>Accept implementation</button>}
+      </div>
       <div className="side-block">
         <div className="side-title">{s.title}</div>
         <div className="muted small">{p.view.key}</div>
+        <div className="workspace-detail" title={workspacePath(s)}>
+          <span className="muted small">Workspace</span>
+          <span className="workspace-line">
+            <span className="workspace-path">{workspacePath(s)}</span>
+            <CopyButton text={workspacePath(s)} label="Copy" className="btn ghost small workspace-copy" />
+          </span>
+        </div>
         <div className="muted small" title={`repository: ${s.repo.root}`}>
           {shortPath(s.repo.root)} · {s.repo.branch} → {s.base}
         </div>
-        {s.worktree && (
-          <div className="muted small" title={`worktree: ${s.worktree}`}>
-            worktree {shortPath(s.worktree)}
-          </div>
-        )}
         <div className="muted small" title={`${s.created_at}${s.created_in ? ` in ${s.created_in}` : ""}`}>
           created {relTime(s.created_at)}
           {s.created_in && s.created_in !== s.repo.root ? ` from ${shortPath(s.created_in)}` : ""}
@@ -301,14 +322,14 @@ export function Sidebar(p: SidebarProps) {
         {p.view.runs.length === 0 && <div className="muted small">No hosted runs yet.</div>}
         <ul className="run-list">
           {[...p.view.runs].reverse().map((r) => (
-            <li key={r.id} className={p.selectedRun === r.id ? "active" : ""} onClick={() => p.onSelectRun(r.id)}>
-              <span className={`run-status ${r.status}`} />
-              <span>
-                {r.provider} · {r.task ?? r.stage}
-              </span>
-              <span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span>
-              <span className="spacer" />
-              <span className="muted small">{relTime(r.started_at)}</span>
+            <li key={r.id} className={p.selectedRun === r.id ? "active" : ""}>
+              <button className="run-select" onClick={() => p.onSelectRun(r.id)} type="button" aria-label={`Open ${r.provider} ${r.task ?? r.stage} run, ${RUN_WORD[r.status]}`}>
+                <span className={`run-status ${r.status}`} />
+                <span>{r.provider} · {r.task ?? r.stage}</span>
+                <span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span>
+                <span className="spacer" />
+                <span className="muted small">{relTime(r.started_at)}</span>
+              </button>
               {!isLive(r) && r.provider_session_id && (
                 <button
                   className="run-remove"
@@ -344,15 +365,37 @@ export function Sidebar(p: SidebarProps) {
         <button
           className="link danger"
           disabled={p.busy}
-          onClick={() => {
-            const wt = s.worktree ? window.confirm(`Also remove the git worktree at ${s.worktree}? (Cancel keeps it.)`) : false;
-            if (window.confirm(`Drop session ${p.view.key}? Its documents, comments and run transcripts are deleted. This cannot be undone.`)) void p.onDelete(wt);
-          }}
+          onClick={() => { setRemoveWorktree(false); setDeleting(true); }}
           type="button"
         >
           {stage === "done" ? "Drop this finished session" : "Drop session"}
         </button>
       </div>
+      {deleting && (
+        <div className="modal-backdrop" onClick={() => !p.busy && setDeleting(false)}>
+          <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="drop-session-title" aria-describedby="drop-session-description" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => {
+            if (e.key === "Escape" && !p.busy) setDeleting(false);
+            if (e.key !== "Tab") return;
+            const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])];
+            if (e.shiftKey && document.activeElement === controls[0]) { e.preventDefault(); controls[controls.length - 1]?.focus(); }
+            else if (!e.shiftKey && document.activeElement === controls[controls.length - 1]) { e.preventDefault(); controls[0]?.focus(); }
+          }}>
+            <h3 id="drop-session-title">Drop {p.view.key}?</h3>
+            <p id="drop-session-description">This deletes the session's documents, comments, and run transcripts. You cannot undo it.</p>
+            {s.worktree && (
+              <label className="check">
+                <input type="checkbox" checked={removeWorktree} disabled={p.busy} onChange={(e) => setRemoveWorktree(e.target.checked)} />
+                <span>Also remove worktree <span className="workspace-path">{s.worktree}</span></span>
+              </label>
+            )}
+            <div className="composer-actions">
+              <span className="spacer" />
+              <button className="btn ghost" data-cancel disabled={p.busy} onClick={() => setDeleting(false)} type="button">Cancel</button>
+              <button className="btn danger" disabled={p.busy} onClick={() => void p.onDelete(removeWorktree)} type="button">Drop session</button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
@@ -444,17 +487,16 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
   };
   return (
     <li className={`${replying || expanded ? "replying" : ""} ${c.resolved ? "resolved" : ""}`}>
-      <div className="comment-row" onClick={onJump}>
-        <span className={`kind kind-${c.kind}`}>{c.kind}</span>
-        <span className="muted small">
-          {c.doc}:{c.anchor.line}
-        </span>
-        {count > 1 && (
-          <span className="muted small" title={last ? `last reply by ${last.author}` : ""}>
-            · {count} {last?.kind === "agent" ? "· agent replied" : ""}
-          </span>
-        )}
-        <span className="spacer" />
+      <div className="comment-row">
+        <button className="comment-jump" onClick={onJump} type="button" aria-label={`Jump to ${c.doc} line ${c.anchor.line}`}>
+          <span className={`kind kind-${c.kind}`}>{c.kind}</span>
+          <span className="muted small">{c.doc}:{c.anchor.line}</span>
+          {count > 1 && (
+            <span className="muted small" title={last ? `last reply by ${last.author}` : ""}>
+              · {count} {last?.kind === "agent" ? "· agent replied" : ""}
+            </span>
+          )}
+        </button>
         <button className="row-action" title={expanded ? "Collapse the conversation" : "Read the conversation"} onClick={(e) => { e.stopPropagation(); setExpanded((x) => !x); }} type="button">
           {expanded ? "▾" : "▸"}
         </button>
@@ -470,7 +512,7 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
           {c.resolved ? "↺" : "✓"}
         </button>
       </div>
-      {!expanded && <div className="preview" onClick={onJump}>{(last ?? c).body.split("\n")[0]}</div>}
+      {!expanded && <button className="preview" onClick={onJump} type="button">{(last ?? c).body.split("\n")[0]}</button>}
       {expanded && (
         <div className="side-thread" onClick={(e) => e.stopPropagation()}>
           <Thread root={c} replies={replies} actions={actions} />

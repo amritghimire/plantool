@@ -36,6 +36,7 @@ function setup(currentView = view) {
   const onSendToRun = vi.fn(async () => {});
   const onContinueMilestone = vi.fn();
   const onApproveMilestone = vi.fn();
+  const onDelete = vi.fn(async () => {});
   render(
     <Sidebar
       view={currentView}
@@ -44,7 +45,7 @@ function setup(currentView = view) {
       onTab={() => {}}
       onStage={async () => {}}
       onBrief={async () => {}}
-      onDelete={async () => {}}
+      onDelete={onDelete}
       onJump={() => {}}
       onStartRun={() => {}}
       onContinueMilestone={onContinueMilestone}
@@ -59,7 +60,7 @@ function setup(currentView = view) {
       onSendToRun={onSendToRun}
     />,
   );
-  return { actions, onSendToRun, onContinueMilestone, onApproveMilestone };
+  return { actions, onSendToRun, onContinueMilestone, onApproveMilestone, onDelete };
 }
 
 describe("Sidebar comments", () => {
@@ -87,6 +88,28 @@ describe("Sidebar comments", () => {
     fireEvent.click(screen.getByText("Send comments to the running agent"));
     await vi.waitFor(() => expect(onSendToRun).toHaveBeenCalledWith("Act on the review comments"));
   });
+});
+
+it("shows the session's active workspace", () => {
+  setup();
+  expect(screen.getByText("/r", { selector: ".workspace-path" })).toBeInTheDocument();
+});
+
+it("shows the worktree as the active workspace", () => {
+  setup({ ...view, session: { ...view.session, worktree: "/r/.claude/worktrees/x" } });
+  expect(screen.getByText("/r/.claude/worktrees/x", { selector: ".workspace-path" })).toBeInTheDocument();
+});
+
+it("confirms session deletion once and makes worktree removal optional", () => {
+  const { onDelete } = setup({ ...view, session: { ...view.session, worktree: "/worktrees/x" } });
+  fireEvent.click(screen.getByRole("button", { name: "Drop session" }));
+  expect(screen.getByRole("dialog", { name: "Drop repo/x?" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Drop session" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Also remove worktree/ }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Drop session" }).at(-1)!);
+  expect(onDelete).toHaveBeenCalledWith(true);
 });
 
 it("offers milestone approval after a step-by-step turn with an editable commit message", async () => {
