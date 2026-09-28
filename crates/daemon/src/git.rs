@@ -1,4 +1,5 @@
 use plantool_core::Checkout;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,7 +16,14 @@ pub enum GitError {
 }
 
 pub fn git(cwd: &Path, args: &[&str]) -> Result<String, GitError> {
-    let out = Command::new("git").args(args).current_dir(cwd).output().map_err(|e| {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd);
+    if args.first() == Some(&"commit") {
+        if let Some(path) = commit_hook_path(cwd) {
+            command.env("PATH", path);
+        }
+    }
+    let out = command.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             GitError::Missing
         } else {
@@ -29,6 +37,26 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String, GitError> {
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// Git hooks run under the daemon's environment, which may not include the repo's virtualenv.
+fn commit_hook_path(cwd: &Path) -> Option<OsString> {
+    let mut paths = Vec::new();
+    let checkout_bin = cwd.join(".venv").join(if cfg!(windows) { "Scripts" } else { "bin" });
+    if checkout_bin.is_dir() {
+        paths.push(checkout_bin);
+    }
+    if let Ok(common_dir) = git(cwd, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) {
+        let main_bin = main_root(Path::new(&common_dir)).join(".venv").join(if cfg!(windows) { "Scripts" } else { "bin" });
+        if main_bin.is_dir() && !paths.contains(&main_bin) {
+            paths.push(main_bin);
+        }
+    }
+    if paths.is_empty() {
+        return None;
+    }
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    std::env::join_paths(paths).ok()
 }
 
 pub fn detect_checkout(start: &Path) -> Result<Checkout, GitError> {
@@ -458,6 +486,27 @@ mod tests {
         assert!(matches!(commit_milestone(&root, "Milestone 1", true).unwrap(), CommitOutcome::Committed(_)));
         assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 2, "the retry amended instead of adding a commit");
         assert!(git(&root, &["show", "HEAD:a.txt"]).unwrap().contains("formatted"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn milestone_hook_finds_pre_commit_in_main_checkout_venv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, root) = hook_repo("#!/bin/sh\npre-commit\n");
+        let hooks = root.join(".git/hooks");
+        git(&root, &["config", "core.hooksPath", hooks.to_str().unwrap()]).unwrap();
+        let bin = root.join(".venv/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let pre_commit = bin.join("pre-commit");
+        std::fs::write(&pre_commit, "#!/bin/sh\nprintf 'ran' > hook-ran\n").unwrap();
+        std::fs::set_permissions(&pre_commit, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let worktree = root.parent().unwrap().join("worktree");
+        git(&root, &["worktree", "add", "-q", "-b", "milestone", worktree.to_str().unwrap()]).unwrap();
+        std::fs::write(worktree.join("a.txt"), "changed\n").unwrap();
+        assert!(matches!(commit_milestone(&worktree, "Milestone 1", false).unwrap(), CommitOutcome::HookRewrote { .. }));
+        assert_eq!(std::fs::read_to_string(worktree.join("hook-ran")).unwrap(), "ran");
     }
 
     #[test]
