@@ -320,7 +320,7 @@ impl LiveSession {
         if session.worktree.is_some() {
             return Ok(session);
         }
-        let dir = dir.unwrap_or_else(|| git::main_root(&session.repo.common_dir).join(".claude").join("worktrees").join(&session.slug));
+        let dir = dir.unwrap_or_else(|| git::default_worktree_dir(&session.repo, &session.slug));
         git::worktree_add(&session.repo, &dir, &session.slug, &session.base)?;
         let mut g = self.lock();
         g.session.worktree = Some(dir);
@@ -626,7 +626,7 @@ impl Registry {
             let dir = intent
                 .worktree_dir
                 .clone()
-                .unwrap_or_else(|| git::main_root(&checkout.common_dir).join(".claude").join("worktrees").join(&intent.slug));
+                .unwrap_or_else(|| git::default_worktree_dir(&checkout, &intent.slug));
             git::worktree_add(&checkout, &dir, &intent.slug, &base)?;
             Some(dir)
         } else {

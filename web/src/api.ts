@@ -1,4 +1,4 @@
-import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage } from "./types";
+import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
 export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "next";
 
@@ -83,6 +83,13 @@ export const api = {
   stopRun: (key: string, id: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/runs/${id}/stop`, {}),
   removeRun: (key: string, id: string) => request<{ ok: boolean; removed: string }>("DELETE", `/api/sessions/${key}/runs/${id}`),
   runEvents: (key: string, id: string, since = 0) => request<{ events: { seq: number; at: string; event: unknown }[] }>("GET", `/api/sessions/${key}/runs/${id}/events?since=${since}`),
+  worktreeDir: (repo?: string, preview?: string) => {
+    const query = new URLSearchParams();
+    if (repo) query.set("repo", repo);
+    if (preview) query.set("preview", preview);
+    return request<WorktreeDirSetting>("GET", `/api/settings/worktree-dir${query.size ? `?${query}` : ""}`);
+  },
+  setWorktreeDir: (scope: "global" | "repo", value: string | null, repo?: string) => request<WorktreeDirSetting>("POST", "/api/settings/worktree-dir", { scope, repo, value }),
   providers: () => request<{ providers: { id: string; available: boolean; version?: string; error?: string; models: { id: string; label: string }[] }[] }>("GET", "/api/providers"),
 };
 

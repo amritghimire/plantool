@@ -24,7 +24,7 @@ pub struct Args {
     /// Create a git worktree named after the slug for the work.
     #[arg(long)]
     pub worktree: bool,
-    /// Where to create the worktree (default: <repo>/.claude/worktrees/<slug>).
+    /// Where to create the worktree (default: git config plantool.worktreeDir, else <repo>/.worktree/<slug>).
     #[arg(long)]
     pub worktree_dir: Option<PathBuf>,
     /// Base branch for the worktree and the change review (default: origin/HEAD or main).

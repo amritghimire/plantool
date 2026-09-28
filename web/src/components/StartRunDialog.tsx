@@ -163,7 +163,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           <label className="check">
             <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
             <span>
-              Work in a git worktree <span className="muted small">(.claude/worktrees/&lt;slug&gt; off the base branch; your checkout stays untouched)</span>
+              Work in a git worktree <span className="muted small">(.worktree/&lt;slug&gt; or git config plantool.worktreeDir, off the base branch; your checkout stays untouched)</span>
             </span>
           </label>
         )}

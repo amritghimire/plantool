@@ -298,3 +298,34 @@ async fn bad_slug_and_missing_repo() {
     let (st, _) = call(&h.app, "GET", "/api/sessions/nope", None, false, "127.0.0.1").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn worktree_dir_setting_per_repo() {
+    let h = harness();
+    let app = &h.app;
+    let repo = h.repo.canonicalize().unwrap();
+    let q = format!("/api/settings/worktree-dir?repo={}", repo.display());
+    let (st, v) = call(app, "GET", &q, None, false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["repo"]["value"], Value::Null);
+
+    let body = json!({ "scope": "repo", "repo": repo, "value": "../{repo}-worktrees/{slug}" });
+    let (st, _) = call(app, "POST", "/api/settings/worktree-dir", Some(body.clone()), false, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (st, v) = call(app, "POST", "/api/settings/worktree-dir", Some(body), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["repo"]["value"], "../{repo}-worktrees/{slug}");
+    assert_eq!(v["effective"], "../{repo}-worktrees/{slug}");
+    let example = repo.parent().unwrap().join("repo-worktrees").join("<slug>");
+    assert_eq!(v["example"], json!(example));
+
+    let (_, v) = call(app, "GET", &format!("{q}&preview=trees"), None, false, "127.0.0.1").await;
+    assert_eq!(v["example"], json!(repo.join("trees").join("<slug>")));
+
+    let (st, v) = call(app, "POST", "/api/settings/worktree-dir", Some(json!({ "scope": "repo", "repo": repo, "value": null })), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["repo"]["value"], Value::Null);
+
+    let (st, _) = call(app, "POST", "/api/settings/worktree-dir", Some(json!({ "scope": "repo", "value": "x" })), true, "127.0.0.1").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}

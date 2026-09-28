@@ -21,7 +21,7 @@ CLI reference.
    **If there is no plan**, the human skipped planning. Write the tickets first (below).
 3. Work in the session's checkout: `session.worktree` when set, else `session.repo.root`. If there
    is no worktree and you would rather not touch the user's checkout, run
-   `plantool session worktree --session <ref>` first; it creates `.claude/worktrees/<slug>` off
+   `plantool session worktree --session <ref>` first; it creates `.worktree/<slug>` (or `git config plantool.worktreeDir`) off
    the base branch and prints the path. Hosted implement runs do this automatically.
 4. `plantool session stage --session <ref> --set implementing`.
 

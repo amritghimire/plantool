@@ -19,13 +19,13 @@ const base: SessionView = {
 it("shows the workspace for sessions with and without a worktree", async () => {
   vi.spyOn(api, "sessions").mockResolvedValue([
     base,
-    { ...base, key: "repo/two", url_path: "/s/repo/two", session: { ...base.session, slug: "two", title: "Two", worktree: "/repo/.claude/worktrees/two" } },
+    { ...base, key: "repo/two", url_path: "/s/repo/two", session: { ...base.session, slug: "two", title: "Two", worktree: "/repo/.worktree/two" } },
   ]);
 
   render(<MemoryRouter><SessionList /></MemoryRouter>);
 
   expect(await screen.findByText("/repo", { selector: ".workspace-path" })).toBeInTheDocument();
-  expect(screen.getByText("/repo/.claude/worktrees/two", { selector: ".workspace-path" })).toBeInTheDocument();
+  expect(screen.getByText("/repo/.worktree/two", { selector: ".workspace-path" })).toBeInTheDocument();
 });
 
 it("refreshes run status when the window regains focus", async () => {

@@ -4,12 +4,14 @@ import { api } from "../api";
 import { relTime, shortPath, workspacePath } from "../lib/format";
 import { STAGE_LABEL, type SessionView } from "../types";
 import { NewSessionDialog } from "./NewSessionDialog";
+import { SettingsDialog } from "./SettingsDialog";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function SessionList() {
   const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [settings, setSettings] = useState(false);
   useEffect(() => {
     let active = true;
     let request = 0;
@@ -49,9 +51,13 @@ export function SessionList() {
         <button className="btn primary" onClick={() => setCreating(true)} type="button">
           New session
         </button>
+        <button className="btn" onClick={() => setSettings(true)} type="button">
+          Settings
+        </button>
         <ThemeToggle />
       </header>
       {creating && <NewSessionDialog onClose={() => setCreating(false)} />}
+      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
       <main className="list">
         {error && <p className="error">{error}</p>}
         {sessions && sessions.length === 0 && (

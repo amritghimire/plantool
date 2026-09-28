@@ -3,6 +3,7 @@ pub mod comments;
 pub mod live;
 pub mod runs;
 pub mod sessions;
+pub mod settings;
 
 use crate::registry::RegistryError;
 use crate::AppState;
@@ -97,7 +98,8 @@ pub fn router(state: AppState) -> Router {
         .merge(comments::routes())
         .merge(changes::routes())
         .merge(live::routes())
-        .merge(runs::routes());
+        .merge(runs::routes())
+        .merge(settings::routes());
     Router::new()
         .nest("/api", api)
         .route("/health", get(health))

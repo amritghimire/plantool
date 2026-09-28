@@ -93,6 +93,15 @@ export interface Session {
   created_at: string;
 }
 
+export interface WorktreeDirSetting {
+  key: string;
+  default: string;
+  global: string | null;
+  repo: { root: string; value: string | null } | null;
+  effective: string;
+  example: string | null;
+}
+
 export interface RepoInfo {
   root: string;
   repo_slug: string;

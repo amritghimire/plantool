@@ -96,8 +96,8 @@ it("shows the session's active workspace", () => {
 });
 
 it("shows the worktree as the active workspace", () => {
-  setup({ ...view, session: { ...view.session, worktree: "/r/.claude/worktrees/x" } });
-  expect(screen.getByText("/r/.claude/worktrees/x", { selector: ".workspace-path" })).toBeInTheDocument();
+  setup({ ...view, session: { ...view.session, worktree: "/r/.worktree/x" } });
+  expect(screen.getByText("/r/.worktree/x", { selector: ".workspace-path" })).toBeInTheDocument();
 });
 
 it("confirms session deletion once and makes worktree removal optional", () => {

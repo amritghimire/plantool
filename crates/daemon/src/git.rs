@@ -119,6 +119,70 @@ pub fn default_base(c: &Checkout) -> String {
     c.branch.clone()
 }
 
+pub const DEFAULT_WORKTREE_DIR: &str = ".worktree/{slug}";
+
+/// Where a session's worktree goes when none is given: `git config plantool.worktreeDir`, else
+/// `.worktree/{slug}`. `{repo}` is the main checkout's folder name and `{slug}` the session slug
+/// (appended when absent); `~/` is the home directory and relative paths start at the main checkout.
+pub fn default_worktree_dir(c: &Checkout, slug: &str) -> PathBuf {
+    let root = main_root(&c.common_dir);
+    resolve_worktree_dir(&root, &worktree_dir_template(&root), slug)
+}
+
+pub const WORKTREE_DIR_KEY: &str = "plantool.worktreeDir";
+
+/// The template in effect for a checkout: its own value, else the global one, else the default.
+pub fn worktree_dir_template(root: &Path) -> String {
+    git(root, &["config", "--get", WORKTREE_DIR_KEY])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKTREE_DIR.to_string())
+}
+
+/// `plantool.worktreeDir` as set in the global git config, or in this checkout's own config.
+pub fn worktree_dir_setting(root: &Path, global: bool) -> Option<String> {
+    let scope = if global { "--global" } else { "--local" };
+    git(root, &["config", scope, "--get", WORKTREE_DIR_KEY]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// Set `plantool.worktreeDir` in the global or the checkout's config; an empty value unsets it.
+pub fn set_worktree_dir_setting(root: &Path, global: bool, value: Option<&str>) -> Result<(), GitError> {
+    let scope = if global { "--global" } else { "--local" };
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => git(root, &["config", scope, WORKTREE_DIR_KEY, v]).map(|_| ()),
+        None if worktree_dir_setting(root, global).is_none() => Ok(()),
+        None => git(root, &["config", scope, "--unset-all", WORKTREE_DIR_KEY]).map(|_| ()),
+    }
+}
+
+pub fn resolve_worktree_dir(root: &Path, template: &str, slug: &str) -> PathBuf {
+    let repo = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".to_string());
+    let mut path = template.replace("{repo}", &repo);
+    if path.contains("{slug}") {
+        path = path.replace("{slug}", slug);
+    } else {
+        path = format!("{}/{slug}", path.trim_end_matches('/'));
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let path = match (path.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(path),
+    };
+    let path = if path.is_absolute() { path } else { root.join(path) };
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 pub fn worktree_remove(c: &Checkout, path: &Path) -> Result<(), GitError> {
     if !path.exists() {
         return Ok(());
@@ -258,6 +322,32 @@ mod tests {
         assert_eq!(sanitize_slug("My Repo!!"), "my-repo");
         assert_eq!(sanitize_slug("a__b.c"), "a__b.c");
         assert_eq!(sanitize_slug("///"), "repo");
+    }
+
+    #[test]
+    fn resolves_worktree_dir_templates() {
+        let root = Path::new("/code/app");
+        assert_eq!(resolve_worktree_dir(root, DEFAULT_WORKTREE_DIR, "fix-x"), PathBuf::from("/code/app/.worktree/fix-x"));
+        assert_eq!(resolve_worktree_dir(root, "../{repo}-worktrees/{slug}", "fix-x"), PathBuf::from("/code/app-worktrees/fix-x"));
+        assert_eq!(resolve_worktree_dir(root, "/tmp/wt/", "fix-x"), PathBuf::from("/tmp/wt/fix-x"));
+        assert_eq!(resolve_worktree_dir(root, "./trees/{repo}-{slug}", "fix-x"), PathBuf::from("/code/app/trees/app-fix-x"));
+    }
+
+    #[test]
+    fn reads_worktree_dir_from_git_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
+        let c = detect_checkout(&root).unwrap();
+        let main = main_root(&c.common_dir);
+        assert_eq!(default_worktree_dir(&c, "s"), main.join(".worktree").join("s"));
+        set_worktree_dir_setting(&root, false, Some("../{repo}-worktrees")).unwrap();
+        assert_eq!(worktree_dir_setting(&root, false).as_deref(), Some("../{repo}-worktrees"));
+        assert_eq!(default_worktree_dir(&c, "s"), main.parent().unwrap().join("repo-worktrees").join("s"));
+        set_worktree_dir_setting(&root, false, Some("  ")).unwrap();
+        assert_eq!(worktree_dir_setting(&root, false), None);
+        set_worktree_dir_setting(&root, false, None).unwrap();
     }
 
     #[test]
