@@ -309,6 +309,21 @@ pub fn is_dirty(cwd: &Path) -> Result<bool, GitError> {
     Ok(!git(cwd, &["status", "--porcelain", "--untracked-files=all"])?.is_empty())
 }
 
+/// Paths `git status` reports, staged or not, including untracked files. Renames list the new path.
+pub fn changed_paths(cwd: &Path) -> Result<Vec<String>, GitError> {
+    let out = git(cwd, &["status", "--porcelain", "-z", "--untracked-files=all"])?;
+    let mut entries = out.split('\0').filter(|e| !e.is_empty());
+    let mut files = Vec::new();
+    while let Some(entry) = entries.next() {
+        let (status, path) = entry.split_at(entry.len().min(3));
+        if status.starts_with(['R', 'C']) {
+            entries.next();
+        }
+        files.push(path.to_string());
+    }
+    Ok(files)
+}
+
 pub fn commit_all(cwd: &Path, message: &str) -> Result<String, GitError> {
     match commit_milestone(cwd, message, false)? {
         CommitOutcome::Committed(sha) | CommitOutcome::HookRewrote { sha: Some(sha), .. } => Ok(sha),
@@ -608,6 +623,27 @@ mod tests {
         std::fs::write(worktree.join("a.txt"), "changed\n").unwrap();
         assert!(matches!(commit_milestone(&worktree, "Milestone 1", false).unwrap(), CommitOutcome::HookRewrote { .. }));
         assert_eq!(std::fs::read_to_string(worktree.join("hook-ran")).unwrap(), "ran");
+    }
+
+    #[test]
+    fn changed_paths_lists_edits_untracked_and_renames() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
+        git(&root, &["config", "user.email", "t@t"]).unwrap();
+        git(&root, &["config", "user.name", "t"]).unwrap();
+        std::fs::write(root.join("a.txt"), "hi\n").unwrap();
+        std::fs::write(root.join("b.txt"), "bye\n").unwrap();
+        git(&root, &["add", "."]).unwrap();
+        git(&root, &["commit", "-q", "-m", "init"]).unwrap();
+        assert!(changed_paths(&root).unwrap().is_empty());
+        std::fs::write(root.join("a.txt"), "changed\n").unwrap();
+        git(&root, &["mv", "b.txt", "c d.txt"]).unwrap();
+        std::fs::create_dir_all(root.join("new")).unwrap();
+        std::fs::write(root.join("new/e.txt"), "new\n").unwrap();
+        let mut files = changed_paths(&root).unwrap();
+        files.sort();
+        assert_eq!(files, vec!["a.txt", "c d.txt", "new/e.txt"]);
     }
 
     #[test]

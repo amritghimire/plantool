@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use plantool_core::{Actor, PullRequest, Session, Stage};
+use plantool_core::{Actor, PullRequest, RunStatus, Session, Stage};
 use serde::{Deserialize, Serialize};
 use std::path::Path as FsPath;
 use std::time::Duration;
@@ -55,6 +55,8 @@ struct Preflight {
     repository: String,
     push_remote: String,
     dirty: bool,
+    changed_files: Vec<String>,
+    live_run: bool,
     commits_ahead: u64,
     existing: Option<PullRequest>,
 }
@@ -168,15 +170,33 @@ async fn preflight_session(session: &Session) -> Result<Preflight, ApiError> {
     )
     .await?;
     let existing = lookup(cwd, &repository, &head, &session.base).await?;
+    let changed_files = if dirty {
+        git::changed_paths(cwd).map_err(|e| bad_request(e.to_string()))?
+    } else {
+        Vec::new()
+    };
     Ok(Preflight {
         head,
         base: session.base.clone(),
         repository,
         push_remote,
         dirty,
+        changed_files,
+        live_run: false,
         commits_ahead,
         existing,
     })
+}
+
+fn require_pr_stage(s: &crate::registry::LiveSession) -> Result<(), ApiError> {
+    if matches!(s.stage(), Stage::ImplementationReview | Stage::Done) {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "PRs are available at implementation review or done".into(),
+        ))
+    }
 }
 
 async fn preview(
@@ -184,13 +204,14 @@ async fn preview(
     Path((repo, slug)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
-    if !matches!(s.stage(), Stage::ImplementationReview | Stage::Done) {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "PRs are available at implementation review or done".into(),
-        ));
-    }
-    let info = preflight_session(&s.session()).await?;
+    require_pr_stage(&s)?;
+    let mut info = preflight_session(&s.session()).await?;
+    info.live_run = s.runs().iter().any(|run| {
+        matches!(
+            run.status,
+            RunStatus::Starting | RunStatus::Running | RunStatus::Waiting
+        ) && state.runs.is_live(&run.id)
+    });
     Ok(Json(serde_json::to_value(info).map_err(|e| {
         ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
     })?))
@@ -250,6 +271,90 @@ async fn save_draft(
     Ok(Json(serde_json::json!({ "saved": true })))
 }
 
+fn commit_draft_path(s: &crate::registry::LiveSession) -> std::path::PathBuf {
+    s.store.dir.join("commit-draft.md")
+}
+
+async fn get_commit_draft(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let content = tokio::fs::read_to_string(commit_draft_path(&s))
+        .await
+        .unwrap_or_default();
+    let draft = content.trim();
+    let message = if draft.is_empty() {
+        let session = s.session();
+        format!("{}\n\nSession: {}", session.title, session.slug)
+    } else {
+        draft.to_string()
+    };
+    Ok(Json(
+        serde_json::json!({ "message": message, "exists": !draft.is_empty() }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct CommitBody {
+    message: String,
+}
+
+async fn commit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<CommitBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    human(&headers, &state)?;
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    require_pr_stage(&s)?;
+    let message = body.message.trim().to_string();
+    if message.is_empty() {
+        return Err(bad_request("a commit message is required"));
+    }
+    let session = s.session();
+    let (_, dirty, _) = checked_workspace(&session)?;
+    if !dirty {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "nothing to commit; refresh the checks".into(),
+        ));
+    }
+    let cwd = session.cwd().clone();
+    let outcome = tokio::task::spawn_blocking(move || git::commit_milestone(&cwd, &message, false))
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::CONFLICT, format!("could not commit: {e}")))?;
+    let (sha, rewritten) = match outcome {
+        git::CommitOutcome::Committed(sha) => (sha, Vec::new()),
+        git::CommitOutcome::HookRewrote {
+            sha: Some(sha),
+            files,
+        } => (sha, files),
+        git::CommitOutcome::HookRewrote { sha: None, files } => {
+            let shown: Vec<&str> = files.iter().take(5).map(String::as_str).collect();
+            let more = if files.len() > 5 {
+                format!(" and {} more", files.len() - 5)
+            } else {
+                String::new()
+            };
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                format!(
+                    "git hooks rewrote {} file(s): {}{more}. They are staged; press Commit again to include them.",
+                    files.len(),
+                    shown.join(", ")
+                ),
+            ));
+        }
+    };
+    let _ = tokio::fs::remove_file(commit_draft_path(&s)).await;
+    Ok(Json(
+        serde_json::json!({ "sha": sha, "rewritten": rewritten }),
+    ))
+}
+
 #[derive(Deserialize)]
 struct CreateBody {
     head: String,
@@ -267,12 +372,7 @@ async fn create(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     human(&headers, &state)?;
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
-    if !matches!(s.stage(), Stage::ImplementationReview | Stage::Done) {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "PRs are available at implementation review or done".into(),
-        ));
-    }
+    require_pr_stage(&s)?;
     let session = s.session();
     let info = preflight_session(&session).await?;
     if info.head != body.head || info.repository != body.repository {
@@ -381,6 +481,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/sessions/{repo}/{slug}/pr/draft",
             get(get_draft).post(save_draft),
+        )
+        .route(
+            "/sessions/{repo}/{slug}/pr/commit",
+            get(get_commit_draft).post(commit),
         )
         .route("/sessions/{repo}/{slug}/pr", post(create))
         .route("/sessions/{repo}/{slug}/pr/refresh", post(refresh))

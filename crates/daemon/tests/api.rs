@@ -591,3 +591,47 @@ async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
     assert!(result.is_err());
     assert!(!dir.exists());
 }
+
+#[tokio::test]
+async fn pr_commit_from_dialog() {
+    let h = harness();
+    let (_, created) = call(&h.app, "POST", "/api/sessions", Some(json!({ "slug": "fix-it", "cwd": h.repo, "worktree": true })), false, "127.0.0.1").await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    let wt = live.session().worktree.unwrap();
+    let route = format!("/api/sessions/{key}/pr/commit");
+    let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "Add change" })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "not at implementation review yet");
+    live.set_stage(plantool_core::Stage::ImplementationReview, plantool_core::Actor::Human).unwrap();
+
+    let (status, draft) = call(&h.app, "GET", &route, None, false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(draft["exists"], false);
+    assert!(draft["message"].as_str().unwrap().contains("Session: fix-it"), "{draft}");
+    std::fs::write(live.store.dir.join("commit-draft.md"), "Add the change\n\nSession: repo/fix-it\n").unwrap();
+    let (_, draft) = call(&h.app, "GET", &route, None, false, "127.0.0.1").await;
+    assert_eq!(draft["exists"], true);
+    assert_eq!(draft["message"], "Add the change\n\nSession: repo/fix-it");
+
+    let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "Add change" })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::CONFLICT, "clean tree");
+    std::fs::write(wt.join("change.txt"), "change").unwrap();
+    let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "Add change" })), false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "agents cannot commit");
+    let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "  " })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, result) = call(&h.app, "POST", &route, Some(json!({ "message": "Add the change\n\nSession: repo/fix-it" })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let head = plantool_daemon::git::head_sha(&wt).unwrap();
+    assert_eq!(result["sha"], head);
+    assert!(!plantool_daemon::git::is_dirty(&wt).unwrap());
+    assert_eq!(plantool_daemon::git::git(&wt, &["rev-list", "--count", "main..HEAD"]).unwrap(), "1");
+    assert_eq!(plantool_daemon::git::git(&wt, &["log", "-1", "--format=%s"]).unwrap(), "Add the change");
+    assert!(!live.store.dir.join("commit-draft.md").exists());
+
+    git(&wt, &["checkout", "-q", "--detach"]);
+    std::fs::write(wt.join("more.txt"), "more").unwrap();
+    let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "More" })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "detached HEAD");
+}

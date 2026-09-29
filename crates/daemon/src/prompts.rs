@@ -21,6 +21,7 @@ The checkout is `{checkout}` and the session files are in `{session_dir}`. Read 
 pub const DRAFT_PR: &str = r#"Draft a pull request for plantool session `{key}`.
 
 Read the git-workflow skill and its PR voice files. Review the changes and commits in `{checkout}` against `{base}`. Write a title on the first line as `# Title` and the PR body below it to `{session_dir}/pr-draft.md`. Do not push, create a PR, or change the session stage. The human will edit the draft and confirm the final action in the browser.
+If `{checkout}` has uncommitted changes, also write a commit message for them to `{session_dir}/commit-draft.md`: subject line, blank line, body, in the git-workflow commit voice, referencing the session slug `{key}`. Do not commit.
 {brief}
 {extra}"#;
 
