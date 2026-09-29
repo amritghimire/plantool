@@ -86,6 +86,7 @@ export interface Session {
   title: string;
   repo: Checkout;
   worktree: string | null;
+  pull_request?: { number: number; url: string; state: string; draft: boolean; updated_at: string } | null;
   base: string;
   mirror: boolean;
   brief?: string | null;
@@ -167,6 +168,7 @@ export interface SessionView {
   docs: DocSummary[];
   runs: Run[];
   open_comments: number;
+  workspace_branch?: string | null;
 }
 
 export interface Heading {
@@ -233,7 +235,7 @@ export type LiveEvent =
   | { type: "session-removed"; seq: number; key: string }
   | { type: "run-started"; seq: number; run: Run }
   | { type: "run-updated"; seq: number; run: Run }
-  | { type: "run-event"; seq: number; run_id: string; event: RunEvent }
+  | { type: "run-event"; seq: number; at?: string; run_id: string; event: RunEvent }
   | { type: "run-ended"; seq: number; run: Run }
   | { type: "run-removed"; seq: number; id: string }
   | { type: "changes-opened"; seq: number; review: ChangeReview }

@@ -5,11 +5,11 @@ import { SettingsDialog } from "./SettingsDialog";
 
 const setting: WorktreeDirSetting = {
   key: "plantool.worktreeDir",
-  default: ".worktree/{slug}",
+  default: ".worktrees/{slug}",
   global: null,
   repo: { root: "/code/app", value: null },
-  effective: ".worktree/{slug}",
-  example: "/code/app/.worktree/<slug>",
+  effective: ".worktrees/{slug}",
+  example: "/code/app/.worktrees/<slug>",
 };
 
 beforeEach(() => {
@@ -23,8 +23,8 @@ it("previews and saves the global worktree location", async () => {
   const set = vi.spyOn(api, "setWorktreeDir").mockResolvedValue({ ...setting, global: "../{repo}-worktrees/{slug}" });
   render(<SettingsDialog onClose={() => {}} />);
 
-  const input = await screen.findByPlaceholderText(".worktree/{slug}");
-  expect(await screen.findByText("/code/app/.worktree/<slug>")).toBeInTheDocument();
+  const input = await screen.findByPlaceholderText(".worktrees/{slug}");
+  expect(await screen.findByText("/code/app/.worktrees/<slug>")).toBeInTheDocument();
   fireEvent.change(input, { target: { value: "../{repo}-worktrees/{slug}" } });
   expect(await screen.findByText("/code/app-worktrees/<slug>")).toBeInTheDocument();
   expect(get).toHaveBeenCalledWith("/code/app", "../{repo}-worktrees/{slug}");

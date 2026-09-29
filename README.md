@@ -147,7 +147,7 @@ Hosted-run prompts can be overridden per stage in `~/.plantool/prompts/{research
 Placeholders: `{slug}`, `{title}`, `{key}`, `{checkout}`, `{session_dir}`, `{research_path}`,
 `{plan_path}`, `{extra}`.
 
-Session worktrees go to `<repo>/.worktree/<slug>` unless `--worktree-dir` / `--dir` says otherwise.
+Session worktrees go to `<repo>/.worktrees/<slug>` unless `--worktree-dir` / `--dir` says otherwise.
 To change the default, set the git config key `plantool.worktreeDir`, per repo or with `--global`.
 It takes `{repo}` (the main checkout's folder name) and `{slug}` (appended when missing); relative
 paths start at the main checkout and `~/` is your home directory. It is read each time a worktree is

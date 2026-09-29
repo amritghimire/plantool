@@ -147,10 +147,10 @@ pub fn default_base(c: &Checkout) -> String {
     c.branch.clone()
 }
 
-pub const DEFAULT_WORKTREE_DIR: &str = ".worktree/{slug}";
+pub const DEFAULT_WORKTREE_DIR: &str = ".worktrees/{slug}";
 
 /// Where a session's worktree goes when none is given: `git config plantool.worktreeDir`, else
-/// `.worktree/{slug}`. `{repo}` is the main checkout's folder name and `{slug}` the session slug
+/// `.worktrees/{slug}`. `{repo}` is the main checkout's folder name and `{slug}` the session slug
 /// (appended when absent); `~/` is the home directory and relative paths start at the main checkout.
 pub fn default_worktree_dir(c: &Checkout, slug: &str) -> PathBuf {
     let root = main_root(&c.common_dir);
@@ -222,7 +222,14 @@ pub fn worktree_remove(c: &Checkout, path: &Path) -> Result<(), GitError> {
 
 pub fn worktree_add(c: &Checkout, path: &Path, branch: &str, base: &str) -> Result<(), GitError> {
     if path.exists() {
-        return Ok(());
+        return if verify_worktree(c, path, Some(branch)).is_ok() {
+            Ok(())
+        } else {
+            Err(GitError::Failed {
+                args: "worktree add".into(),
+                stderr: format!("{} is occupied by another checkout or file", path.display()),
+            })
+        };
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -235,6 +242,56 @@ pub fn worktree_add(c: &Checkout, path: &Path, branch: &str, base: &str) -> Resu
         git(&c.root, &["worktree", "add", "-b", branch, &p, base])?;
     }
     Ok(())
+}
+
+pub fn verify_worktree(
+    c: &Checkout,
+    path: &Path,
+    branch: Option<&str>,
+) -> Result<Checkout, GitError> {
+    if !path.is_dir() {
+        return Err(GitError::NotARepo(path.to_path_buf()));
+    }
+    let found = detect_checkout(path)?;
+    if found.root != path.canonicalize()?
+        || found.common_dir != c.common_dir.canonicalize()?
+        || found.root == c.root
+    {
+        return Err(GitError::Failed {
+            args: "worktree verify".into(),
+            stderr: format!(
+                "{} is not a worktree of {}",
+                path.display(),
+                c.root.display()
+            ),
+        });
+    }
+    if found.branch == "HEAD" || branch.is_some_and(|name| found.branch != name) {
+        return Err(GitError::Failed {
+            args: "worktree verify".into(),
+            stderr: format!(
+                "{} is on branch {}, expected {}",
+                path.display(),
+                found.branch,
+                branch.unwrap_or("an attached branch")
+            ),
+        });
+    }
+    Ok(found)
+}
+
+pub fn worktree_candidates(c: &Checkout, branch: &str) -> Result<Vec<Checkout>, GitError> {
+    let output = git(&c.root, &["worktree", "list", "--porcelain"])?;
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            let path = PathBuf::from(path);
+            if let Ok(found) = verify_worktree(c, &path, Some(branch)) {
+                paths.push(found);
+            }
+        }
+    }
+    Ok(paths)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -355,10 +412,22 @@ mod tests {
     #[test]
     fn resolves_worktree_dir_templates() {
         let root = Path::new("/code/app");
-        assert_eq!(resolve_worktree_dir(root, DEFAULT_WORKTREE_DIR, "fix-x"), PathBuf::from("/code/app/.worktree/fix-x"));
-        assert_eq!(resolve_worktree_dir(root, "../{repo}-worktrees/{slug}", "fix-x"), PathBuf::from("/code/app-worktrees/fix-x"));
-        assert_eq!(resolve_worktree_dir(root, "/tmp/wt/", "fix-x"), PathBuf::from("/tmp/wt/fix-x"));
-        assert_eq!(resolve_worktree_dir(root, "./trees/{repo}-{slug}", "fix-x"), PathBuf::from("/code/app/trees/app-fix-x"));
+        assert_eq!(
+            resolve_worktree_dir(root, DEFAULT_WORKTREE_DIR, "fix-x"),
+            PathBuf::from("/code/app/.worktrees/fix-x")
+        );
+        assert_eq!(
+            resolve_worktree_dir(root, "../{repo}-worktrees/{slug}", "fix-x"),
+            PathBuf::from("/code/app-worktrees/fix-x")
+        );
+        assert_eq!(
+            resolve_worktree_dir(root, "/tmp/wt/", "fix-x"),
+            PathBuf::from("/tmp/wt/fix-x")
+        );
+        assert_eq!(
+            resolve_worktree_dir(root, "./trees/{repo}-{slug}", "fix-x"),
+            PathBuf::from("/code/app/trees/app-fix-x")
+        );
     }
 
     #[test]
@@ -369,7 +438,10 @@ mod tests {
         git(&root, &["init", "-q", "-b", "main"]).unwrap();
         let c = detect_checkout(&root).unwrap();
         let main = main_root(&c.common_dir);
-        assert_eq!(default_worktree_dir(&c, "s"), main.join(".worktree").join("s"));
+        assert_eq!(
+            default_worktree_dir(&c, "s"),
+            main.join(".worktrees").join("s")
+        );
         set_worktree_dir_setting(&root, false, Some("../{repo}-worktrees")).unwrap();
         assert_eq!(worktree_dir_setting(&root, false).as_deref(), Some("../{repo}-worktrees"));
         assert_eq!(default_worktree_dir(&c, "s"), main.parent().unwrap().join("repo-worktrees").join("s"));
@@ -407,6 +479,35 @@ mod tests {
         assert_eq!(stat.len(), 1);
         assert_eq!(stat[0].path, "b.txt");
         assert_eq!(stat[0].added, 2);
+    }
+
+    #[test]
+    fn rejects_occupied_paths_and_checks_worktree_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
+        git(&root, &["config", "user.email", "t@t"]).unwrap();
+        git(&root, &["config", "user.name", "t"]).unwrap();
+        std::fs::write(root.join("a"), "a").unwrap();
+        git(&root, &["add", "a"]).unwrap();
+        git(&root, &["commit", "-q", "-m", "init"]).unwrap();
+        let checkout = detect_checkout(&root).unwrap();
+        let occupied = tmp.path().join("occupied");
+        std::fs::create_dir_all(&occupied).unwrap();
+        assert!(worktree_add(&checkout, &occupied, "session", "main").is_err());
+        let wt = tmp.path().join("session");
+        worktree_add(&checkout, &wt, "session", "main").unwrap();
+        worktree_add(&checkout, &wt, "session", "main").unwrap();
+        assert_eq!(worktree_candidates(&checkout, "session").unwrap().len(), 1);
+        git(&wt, &["branch", "-m", "renamed"]).unwrap();
+        assert!(worktree_candidates(&checkout, "session")
+            .unwrap()
+            .is_empty());
+        assert!(verify_worktree(&checkout, &wt, None).is_ok());
+        git(&wt, &["checkout", "--detach", "-q"]).unwrap();
+        assert!(verify_worktree(&checkout, &wt, None).is_err());
+        std::fs::remove_dir_all(&occupied).unwrap();
     }
 
     #[test]

@@ -46,4 +46,17 @@ describe("projectRun", () => {
     ]);
     expect(items.map((i) => (i.t === "msg" ? `${i.m.role}:${i.m.content}` : i.t))).toEqual(["assistant:I'll start by reading.", "act", "assistant:Next.", "user:hi"]);
   });
+
+  it("marks completed turns and leaves pending requests separate", () => {
+    const result = projectRun([
+      { seq: 1, at: "2026-01-01T00:00:00Z", event: { type: "turn-started", turn_id: "t" } },
+      { seq: 2, event: { type: "activity-start", id: "a", kind: "tool", title: "Read files" } },
+      { seq: 3, event: { type: "activity-complete", id: "a", status: "completed" } },
+      { seq: 4, event: { type: "message", id: "answer", role: "assistant", content: "Finished" } },
+      { seq: 5, at: "2026-01-01T00:00:04Z", event: { type: "turn-completed", turn_id: "t", status: "completed" } },
+      { seq: 6, event: { type: "permission", request_id: "p", kind: "permission", title: "Approve" } },
+    ]);
+    expect(result.turns).toMatchObject([{ completed: true, duration: "4s", start: 0, end: 2 }]);
+    expect(result.pending).toHaveLength(1);
+  });
 });

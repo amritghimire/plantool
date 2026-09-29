@@ -1,7 +1,28 @@
 use plantool_core::{ChangeReview, DocKind, ImplementationMode, Session};
 use std::path::Path;
 
-pub const STAGES: [&str; 6] = ["research", "plan", "implement", "review", "resume", "critique"];
+pub const STAGES: [&str; 8] = [
+    "research",
+    "plan",
+    "implement",
+    "review",
+    "resume",
+    "critique",
+    "assist",
+    "draft-pr",
+];
+
+pub const ASSIST: &str = r#"Help with plantool session `{key}` at stage `{stage}`.
+
+The checkout is `{checkout}` and the session files are in `{session_dir}`. Read `plantool skill` for the session commands. Answer or carry out the user's request below. Keep the stage unchanged. Before the plan is approved, do not implement it.
+{brief}
+{extra}"#;
+
+pub const DRAFT_PR: &str = r#"Draft a pull request for plantool session `{key}`.
+
+Read the git-workflow skill and its PR voice files. Review the changes and commits in `{checkout}` against `{base}`. Write a title on the first line as `# Title` and the PR body below it to `{session_dir}/pr-draft.md`. Do not push, create a PR, or change the session stage. The human will edit the draft and confirm the final action in the browser.
+{brief}
+{extra}"#;
 
 pub const RESEARCH: &str = r#"Research for plantool session `{key}`: {title}
 
@@ -79,6 +100,8 @@ pub fn template(home: &Path, stage: &str) -> String {
         "review" => REVIEW.to_string(),
         "resume" => RESUME.to_string(),
         "critique" => CRITIQUE.to_string(),
+        "assist" => ASSIST.to_string(),
+        "draft-pr" => DRAFT_PR.to_string(),
         _ => String::new(),
     }
 }
@@ -123,6 +146,7 @@ pub fn render_at(home: &Path, stage: &str, session: &Session, session_dir: &Path
             .replace("{key}", &session.key())
             .replace("{repo_slug}", &session.repo_slug)
             .replace("{checkout}", &session.cwd().display().to_string())
+            .replace("{base}", &session.base)
             .replace("{session_dir}", &session_dir.display().to_string())
             .replace("{research_path}", &session_dir.join(DocKind::Research.file_name()).display().to_string())
             .replace("{plan_path}", &session_dir.join(DocKind::Plan.file_name()).display().to_string())
@@ -178,6 +202,7 @@ mod tests {
             title: "fix it".into(),
             repo: Checkout { root: "/r".into(), common_dir: "/r/.git".into(), branch: "main".into() },
             worktree: None,
+            pull_request: None,
             base: "main".into(),
             mirror: false,
             brief: brief.map(|b| b.to_string()),
