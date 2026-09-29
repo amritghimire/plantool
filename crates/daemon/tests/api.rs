@@ -329,3 +329,265 @@ async fn worktree_dir_setting_per_repo() {
     let (st, _) = call(app, "POST", "/api/settings/worktree-dir", Some(json!({ "scope": "repo", "value": "x" })), true, "127.0.0.1").await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn workspace_adoption_checks_identity_and_missing_paths() {
+    let h = harness();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({ "slug": "fix-it", "cwd": h.repo })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let wt = h.repo.parent().unwrap().join("external-wt");
+    git(
+        &h.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "fix-it",
+            wt.to_str().unwrap(),
+            "main",
+        ],
+    );
+    let canonical_wt = wt.canonicalize().unwrap();
+    let (status, candidates) = call(
+        &h.app,
+        "GET",
+        &format!("/api/sessions/{key}/workspace/candidates"),
+        None,
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        candidates["candidates"][0]["root"],
+        canonical_wt.to_str().unwrap()
+    );
+    let route = format!("/api/sessions/{key}/workspace/adopt");
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &route,
+        Some(json!({ "path": wt })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, adopted) = call(
+        &h.app,
+        "POST",
+        &route,
+        Some(json!({ "path": wt })),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{adopted}");
+    assert_eq!(
+        adopted["session"]["worktree"],
+        canonical_wt.to_str().unwrap()
+    );
+    git(&h.repo, &["worktree", "remove", "-f", wt.to_str().unwrap()]);
+    let (status, check) = call(
+        &h.app,
+        "GET",
+        &format!("/api/sessions/{key}/workspace/candidates"),
+        None,
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(check["missing"], true);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &format!("/api/sessions/{key}/runs"),
+        Some(json!({ "provider": "codex", "stage": "assist", "prompt": "check this" })),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn recorded_old_worktree_path_survives_reload() {
+    let h = harness();
+    let old = h.repo.join(".worktree").join("fix-it");
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({ "slug": "fix-it", "cwd": h.repo, "worktree": true, "worktree_dir": old })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(
+        created["session"]["session"]["worktree"],
+        old.to_str().unwrap()
+    );
+    let reloaded = Registry::load(h.state.config.home.clone()).unwrap();
+    assert_eq!(
+        reloaded
+            .get_key("repo/fix-it")
+            .unwrap()
+            .session()
+            .worktree
+            .as_deref(),
+        Some(old.as_path())
+    );
+}
+
+#[tokio::test]
+async fn pr_drafts_require_human_and_old_meta_loads() {
+    let h = harness();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({ "slug": "fix-it", "cwd": h.repo })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    let mut old: Value =
+        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
+    old.as_object_mut().unwrap().remove("pull_request");
+    let parsed: plantool_core::Session = serde_json::from_value(old).unwrap();
+    assert!(parsed.pull_request.is_none());
+    let route = format!("/api/sessions/{key}/pr/draft");
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &route,
+        Some(json!({ "title": "Fix thing", "body": "Why it matters" })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &route,
+        Some(json!({ "title": "Fix thing", "body": "Why it matters" })),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, draft) = call(&h.app, "GET", &route, None, false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(draft["title"], "Fix thing");
+    let (status, _) = call(&h.app, "POST", &format!("/api/sessions/{key}/pr"), Some(json!({ "head": "fix-it", "repository": "owner/repo", "title": "x", "body": "x", "draft": true })), false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pr_create_error_links_pr_found_on_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = harness();
+    let bare = h._tmp.path().join("remote.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare"]);
+    git(
+        &h.repo,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({ "slug": "fix-it", "cwd": h.repo, "worktree": true })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    let wt = live.session().worktree.unwrap();
+    std::fs::write(wt.join("change.txt"), "change").unwrap();
+    git(&wt, &["add", "change.txt"]);
+    git(&wt, &["commit", "-q", "-m", "change"]);
+    live.set_stage(
+        plantool_core::Stage::ImplementationReview,
+        plantool_core::Actor::Human,
+    )
+    .unwrap();
+    let marker = h._tmp.path().join("created");
+    let script = h._tmp.path().join("gh-stub");
+    std::fs::write(&script, format!(r#"#!/bin/sh
+if [ "$1 $2" = "repo view" ]; then echo 'owner/repo'; exit 0; fi
+if [ "$1 $2" = "pr list" ]; then
+  if [ -e '{}' ]; then echo '[{{"number":23,"url":"https://github.com/owner/repo/pull/23","state":"OPEN","isDraft":true,"headRefName":"fix-it","baseRefName":"main"}}]'; else echo '[]'; fi
+  exit 0
+fi
+if [ "$1 $2" = "pr create" ]; then touch '{}'; echo 'request timed out' >&2; exit 1; fi
+exit 1
+"#, marker.display(), marker.display())).unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    std::env::set_var("PLANTOOL_GH_BIN", &script);
+    let (status, preview) = call(
+        &h.app,
+        "GET",
+        &format!("/api/sessions/{key}/pr/preview"),
+        None,
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["head"], "fix-it");
+    assert_eq!(preview["commits_ahead"], 1);
+    let (status, result) = call(&h.app, "POST", &format!("/api/sessions/{key}/pr"), Some(json!({ "head": "fix-it", "repository": "owner/repo", "title": "Fix it", "body": "Why it matters", "draft": true })), true, "127.0.0.1").await;
+    std::env::remove_var("PLANTOOL_GH_BIN");
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["pull_request"]["number"], 23);
+    let saved: plantool_core::Session =
+        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
+    assert_eq!(saved.pull_request.unwrap().number, 23);
+}
+
+#[tokio::test]
+async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
+    let h = harness();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({ "slug": "fix-it", "cwd": h.repo })),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    let dir = live.store.dir.clone();
+    h.state.registry.remove(key, false).unwrap();
+    assert!(!dir.exists());
+    let result = live.set_pull_request(plantool_core::PullRequest {
+        number: 23,
+        url: "https://github.com/owner/repo/pull/23".into(),
+        state: "OPEN".into(),
+        draft: false,
+        updated_at: plantool_core::now(),
+    });
+    assert!(result.is_err());
+    assert!(!dir.exists());
+}

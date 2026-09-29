@@ -44,10 +44,28 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
         "plan" => Stage::Planning,
         "implement" => Stage::Implementing,
         "critique" => current,
-        other => return Err(bad_request(format!("stage must be research, plan, implement or critique (got {other})"))),
+        "assist" | "draft-pr" => current,
+        other => return Err(bad_request(format!("unknown run task {other}"))),
     };
-    if stage_name == "implement" && !matches!(current, Stage::Approved | Stage::Implementing | Stage::ImplementationReview) {
-        return Err(ApiError(StatusCode::FORBIDDEN, format!("the plan must be approved before implementation starts (stage is {current})")));
+    if stage_name == "draft-pr" && !matches!(current, Stage::ImplementationReview | Stage::Done) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "PR drafting is available at implementation review or done".into(),
+        ));
+    }
+    if stage_name == "assist" && body.prompt.as_deref().is_none_or(|p| p.trim().is_empty()) {
+        return Err(bad_request("give the agent a request"));
+    }
+    if stage_name == "implement"
+        && !matches!(
+            current,
+            Stage::Approved | Stage::Implementing | Stage::ImplementationReview
+        )
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            format!("the plan must be approved before implementation starts (stage is {current})"),
+        ));
     }
     let resume_from = body.resume_run.as_deref().and_then(|rid| s.run(rid));
     if body.resume_run.is_some() && resume_from.is_none() {
@@ -68,6 +86,7 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
         let ws = s.clone();
         tokio::task::spawn_blocking(move || ws.ensure_worktree(None)).await.map_err(|e| anyhow::anyhow!(e))??;
     }
+    s.verify_workspace()?;
     if target.index() > current.index() {
         s.set_stage(target, Actor::Agent)?;
     }
@@ -83,16 +102,58 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
             .filter(|r| r.task.as_deref() == Some("implement") && r.implementation_mode == ImplementationMode::StepByStep && r.milestone_pending)
             .max_by(|a, b| a.started_at.cmp(&b.started_at)))
     } else { None };
-    let prompt_stage = if resume_from.is_some() && implementation_mode != ImplementationMode::StepByStep { "resume" } else { stage_name };
-    let prompt = if let Some(reviewing) = previous_milestone.as_ref().filter(|r| r.milestone_pending) {
-        crate::prompts::render_milestone_review(&sess, &s.store.dir, reviewing.milestone_review.as_ref(), extra)
+    let prompt_stage = if resume_from.is_some()
+        && implementation_mode != ImplementationMode::StepByStep
+        && !matches!(stage_name, "assist" | "draft-pr")
+    {
+        "resume"
     } else {
-        crate::prompts::render_run(&state.config.home, prompt_stage, &sess, &s.store.dir, extra, s.stage(), implementation_mode)
+        stage_name
     };
-    let resume = resume_from.as_ref().and_then(|r| r.provider_session_id.clone());
-    let mode = body.permission_mode.as_deref().map(parse_mode).transpose()?.unwrap_or_default();
-    let run = state.runs.start(s.clone(), provider, target, stage_name, prompt.clone(), body.model.clone(), resume, mode, implementation_mode, previous_milestone.as_ref())?;
-    Ok((StatusCode::CREATED, Json(json!({ "run": run, "prompt": prompt }))))
+    let prompt =
+        if let Some(reviewing) = previous_milestone.as_ref().filter(|r| r.milestone_pending) {
+            crate::prompts::render_milestone_review(
+                &sess,
+                &s.store.dir,
+                reviewing.milestone_review.as_ref(),
+                extra,
+            )
+        } else {
+            crate::prompts::render_run(
+                &state.config.home,
+                prompt_stage,
+                &sess,
+                &s.store.dir,
+                extra,
+                s.stage(),
+                implementation_mode,
+            )
+        };
+    let resume = resume_from
+        .as_ref()
+        .and_then(|r| r.provider_session_id.clone());
+    let mode = body
+        .permission_mode
+        .as_deref()
+        .map(parse_mode)
+        .transpose()?
+        .unwrap_or_default();
+    let run = state.runs.start(
+        s.clone(),
+        provider,
+        target,
+        stage_name,
+        prompt.clone(),
+        body.model.clone(),
+        resume,
+        mode,
+        implementation_mode,
+        previous_milestone.as_ref(),
+    )?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "run": run, "prompt": prompt })),
+    ))
 }
 
 #[derive(Deserialize)]

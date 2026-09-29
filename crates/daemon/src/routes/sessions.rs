@@ -9,7 +9,10 @@ use axum::{Json, Router};
 use plantool_core::{DocKind, Stage};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -24,7 +27,29 @@ async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Resu
         Some(s) => Some(Stage::parse(s).ok_or_else(|| bad_request(format!("unknown stage {s}")))?),
         None => None,
     };
-    Ok(Json(state.registry.list(q.repo.as_deref(), stage)))
+    let views = state.registry.list(q.repo.as_deref(), stage);
+    static ATTEMPTS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    let attempts = ATTEMPTS.get_or_init(|| Mutex::new(HashMap::new()));
+    for view in &views {
+        if view.session.pull_request.is_none() {
+            continue;
+        }
+        let mut guard = attempts.lock().unwrap_or_else(|e| e.into_inner());
+        if guard
+            .get(&view.key)
+            .is_some_and(|last| last.elapsed() < Duration::from_secs(300))
+        {
+            continue;
+        }
+        guard.insert(view.key.clone(), Instant::now());
+        drop(guard);
+        if let Some(session) = state.registry.get_key(&view.key) {
+            tokio::spawn(async move {
+                let _ = super::pr::refresh_saved(&session).await;
+            });
+        }
+    }
+    Ok(Json(views))
 }
 
 async fn create(State(state): State<AppState>, Json(intent): Json<CreateSession>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
@@ -162,6 +187,48 @@ async fn worktree(State(state): State<AppState>, Path((repo, slug)): Path<(Strin
     Ok(Json(json!({ "created": created, "worktree": session.worktree, "session": session })))
 }
 
+async fn workspace_candidates(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let current = s.session();
+    let missing = current
+        .worktree
+        .as_ref()
+        .is_some_and(|path| !path.is_dir() || s.verify_workspace().is_err());
+    let candidates = tokio::task::spawn_blocking(move || s.workspace_candidates())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+    Ok(Json(
+        json!({ "recorded": current.worktree, "missing": missing, "candidates": candidates }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct AdoptBody {
+    path: PathBuf,
+}
+
+async fn adopt_workspace(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<AdoptBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if actor_from(&headers, &state) != Actor::Human {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only a human can adopt a workspace".into(),
+        ));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let session = tokio::task::spawn_blocking(move || s.adopt_worktree(&body.path))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+    Ok(Json(json!({ "session": session })))
+}
+
 #[derive(Deserialize)]
 pub struct PromptQuery {
     #[serde(default)]
@@ -218,5 +285,13 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{repo}/{slug}/navigate", post(navigate))
         .route("/sessions/{repo}/{slug}/brief", post(set_brief))
         .route("/sessions/{repo}/{slug}/worktree", post(worktree))
+        .route(
+            "/sessions/{repo}/{slug}/workspace/candidates",
+            get(workspace_candidates),
+        )
+        .route(
+            "/sessions/{repo}/{slug}/workspace/adopt",
+            post(adopt_workspace),
+        )
         .route("/sessions/{repo}/{slug}/prompt/{stage}", get(prompt))
 }

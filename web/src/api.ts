@@ -1,6 +1,6 @@
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
-export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "next";
+export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "assist" | "draft-pr" | "next";
 
 export function token(): string {
   const t = window.__PLANTOOL_TOKEN__ ?? "";
@@ -55,6 +55,13 @@ export const api = {
   createSession: (body: { slug: string; repo: string; title?: string; brief?: string; worktree?: boolean; base?: string }) =>
     request<{ created: boolean; session: SessionView; url: string }>("POST", "/api/sessions", body),
   removeSession: (key: string, worktree: boolean) => request<{ removed: string; worktree_removed: boolean }>("DELETE", `/api/sessions/${key}?worktree=${worktree}`),
+  workspaceCandidates: (key: string) => request<{ recorded: string | null; missing: boolean; candidates: { root: string; branch: string }[] }>("GET", `/api/sessions/${key}/workspace/candidates`),
+  adoptWorkspace: (key: string, path: string) => request<{ session: Session }>("POST", `/api/sessions/${key}/workspace/adopt`, { path }),
+  prDraft: (key: string) => request<{ title: string; body: string; exists: boolean }>("GET", `/api/sessions/${key}/pr/draft`),
+  savePrDraft: (key: string, title: string, body: string) => request<{ saved: boolean }>("POST", `/api/sessions/${key}/pr/draft`, { title, body }),
+  prPreview: (key: string) => request<{ head: string; base: string; repository: string; push_remote: string; dirty: boolean; commits_ahead: number; existing: NonNullable<Session["pull_request"]> | null }>("GET", `/api/sessions/${key}/pr/preview`),
+  createPr: (key: string, body: { head: string; repository: string; title: string; body: string; draft: boolean }) => request<{ pull_request: NonNullable<Session["pull_request"]>; session: Session }>("POST", `/api/sessions/${key}/pr`, body),
+  refreshPr: (key: string) => request<{ pull_request: NonNullable<Session["pull_request"]>; session: Session }>("POST", `/api/sessions/${key}/pr/refresh`),
   doc: (key: string, kind: DocKind) => request<DocResponse>("GET", `/api/sessions/${key}/docs/${kind}`),
   docPath: (key: string, kind: DocKind) => request<{ kind: DocKind; path: string; exists: boolean }>("GET", `/api/sessions/${key}/docs/${kind}/path`),
   comments: (key: string) => request<{ seq: number; comments: Comment[] }>("GET", `/api/sessions/${key}/comments`),

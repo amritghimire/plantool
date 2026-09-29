@@ -123,6 +123,7 @@ pub struct SessionView {
     pub docs: Vec<DocSummary>,
     pub runs: Vec<Run>,
     pub open_comments: usize,
+    pub workspace_branch: Option<String>,
 }
 
 pub struct LiveSession {
@@ -137,6 +138,7 @@ struct Inner {
     state: State,
     docs: BTreeMap<DocKind, DocRevision>,
     runs: BTreeMap<String, Run>,
+    removed: bool,
 }
 
 fn short_id() -> String {
@@ -164,7 +166,7 @@ impl LiveSession {
         let runs = store.load_runs()?.into_iter().map(|r| (r.id.clone(), r)).collect();
         let (tx, _) = broadcast::channel(256);
         let key = session.key();
-        Ok(Some(Arc::new(LiveSession { key, store, inner: Mutex::new(Inner { session, state, docs, runs }), tx })))
+        Ok(Some(Arc::new(LiveSession { key, store, inner: Mutex::new(Inner { session, state, docs, runs, removed: false }), tx })))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -230,6 +232,16 @@ impl LiveSession {
             docs,
             runs: g.runs.values().cloned().collect(),
             open_comments,
+            workspace_branch: match &g.session.worktree {
+                Some(path) => git::verify_worktree(&g.session.repo, path, None)
+                    .ok()
+                    .map(|found| found.branch),
+                None => git::git(
+                    &g.session.repo.root,
+                    &["symbolic-ref", "--quiet", "--short", "HEAD"],
+                )
+                .ok(),
+            },
         }
     }
 
@@ -314,10 +326,32 @@ impl LiveSession {
         Ok(session)
     }
 
+    pub fn set_pull_request(
+        &self,
+        pr: plantool_core::PullRequest,
+    ) -> Result<Session, RegistryError> {
+        let mut g = self.lock();
+        if g.removed {
+            return Err(RegistryError::NotFound(self.key.clone()));
+        }
+        g.session.pull_request = Some(pr);
+        self.store.save_meta(&g.session)?;
+        let session = g.session.clone();
+        self.broadcast(
+            &mut g,
+            LiveEvent::SessionUpdated {
+                session: session.clone(),
+            },
+        );
+        self.persist_state(&g)?;
+        Ok(session)
+    }
+
     /// Create the session's git worktree if it has none, and record it on the session.
     pub fn ensure_worktree(&self, dir: Option<PathBuf>) -> Result<Session, RegistryError> {
         let session = self.session();
         if session.worktree.is_some() {
+            self.verify_workspace()?;
             return Ok(session);
         }
         let dir = dir.unwrap_or_else(|| git::default_worktree_dir(&session.repo, &session.slug));
@@ -327,6 +361,40 @@ impl LiveSession {
         self.store.save_meta(&g.session)?;
         let session = g.session.clone();
         self.broadcast(&mut g, LiveEvent::SessionUpdated { session: session.clone() });
+        self.persist_state(&g)?;
+        Ok(session)
+    }
+
+    pub fn verify_workspace(&self) -> Result<(), RegistryError> {
+        let session = self.session();
+        if let Some(path) = &session.worktree {
+            git::verify_worktree(&session.repo, path, None)?;
+        }
+        Ok(())
+    }
+
+    pub fn workspace_candidates(&self) -> Result<Vec<plantool_core::Checkout>, RegistryError> {
+        let session = self.session();
+        Ok(git::worktree_candidates(&session.repo, &session.slug)?)
+    }
+
+    pub fn adopt_worktree(&self, path: &Path) -> Result<Session, RegistryError> {
+        let current = self.session();
+        if current.worktree.as_deref() == Some(path) {
+            self.verify_workspace()?;
+            return Ok(current);
+        }
+        let candidate = git::verify_worktree(&current.repo, path, Some(&current.slug))?;
+        let mut g = self.lock();
+        g.session.worktree = Some(candidate.root);
+        self.store.save_meta(&g.session)?;
+        let session = g.session.clone();
+        self.broadcast(
+            &mut g,
+            LiveEvent::SessionUpdated {
+                session: session.clone(),
+            },
+        );
         self.persist_state(&g)?;
         Ok(session)
     }
@@ -638,6 +706,7 @@ impl Registry {
             title: intent.title.clone().unwrap_or_else(|| intent.slug.replace(['-', '_'], " ")),
             repo: checkout,
             worktree,
+            pull_request: None,
             base,
             mirror: intent.mirror,
             brief: intent.brief.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(|b| b.to_string()),
@@ -668,6 +737,7 @@ impl Registry {
         }
         {
             let mut g = live.lock();
+            g.removed = true;
             live.broadcast(&mut g, LiveEvent::SessionRemoved { key: key.to_string() });
         }
         self.sessions.write().unwrap_or_else(|e| e.into_inner()).remove(key);

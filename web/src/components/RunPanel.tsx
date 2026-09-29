@@ -7,6 +7,7 @@ import { PERMISSION_MODES, type PermissionMode, type Run, type RunEvent } from "
 export interface RunLine {
   seq: number;
   event: RunEvent;
+  at?: string;
 }
 
 interface Activity {
@@ -25,6 +26,7 @@ interface Message {
 }
 
 type Item = { t: "msg"; m: Message } | { t: "act"; a: Activity } | { t: "status"; label: string; detail?: string };
+interface Turn { id: string; start: number; end: number | null; completed: boolean; duration?: string }
 
 interface Pending {
   request_id: string;
@@ -66,9 +68,10 @@ export function projectRun(lines: RunLine[]) {
   const acts = new Map<string, Activity>();
   const msgs = new Map<string, Message>();
   const pending = new Map<string, Pending>();
+  const turns: Turn[] = [];
   let streaming: Message | null = null;
   let lastStreamed: Message | null = null;
-  for (const { event: e } of lines) {
+  for (const { event: e, at } of lines) {
     switch (e.type) {
       case "message": {
         const m = msgs.get(e.id);
@@ -128,10 +131,20 @@ export function projectRun(lines: RunLine[]) {
         break;
       case "turn-started":
         streaming = null;
+        turns.push({ id: e.turn_id, start: items.length, end: null, completed: false, duration: at });
         break;
       case "turn-completed":
         streaming = null;
         if (e.status !== "completed") items.push({ t: "status", label: `turn ${e.status}`, detail: e.error });
+        {
+          const turn = [...turns].reverse().find((t) => t.id === e.turn_id && t.end === null);
+          if (turn) {
+            turn.end = items.length;
+            turn.completed = true;
+            if (at && turn.duration) turn.duration = `${Math.max(0, Math.round((Date.parse(at) - Date.parse(turn.duration)) / 1000))}s`;
+            else turn.duration = undefined;
+          }
+        }
         break;
       case "status":
         items.push({ t: "status", label: e.label, detail: e.detail });
@@ -140,7 +153,7 @@ export function projectRun(lines: RunLine[]) {
         break;
     }
   }
-  return { items, pending: [...pending.values()] };
+  return { items, pending: [...pending.values()], turns };
 }
 
 export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessionKey: string; run: Run | null; lines: RunLine[]; onClose: () => void; onResume?: (run: Run) => void }) {
@@ -148,7 +161,20 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const { items, pending } = useMemo(() => projectRun(lines), [lines]);
+  const { items, pending, turns } = useMemo(() => projectRun(lines), [lines]);
+  const segments = useMemo(() => {
+    if (!turns.length) return [{ id: "transcript", items, completed: !run || !["starting", "running", "waiting", "idle"].includes(run.status), duration: undefined }];
+    const groups: { id: string; items: Item[]; completed: boolean; duration?: string }[] = [];
+    let cursor = 0;
+    for (const turn of turns) {
+      if (turn.start > cursor) groups.push({ id: `before-${cursor}`, items: items.slice(cursor, turn.start), completed: false });
+      const end = turn.end ?? items.length;
+      groups.push({ id: turn.id, items: items.slice(turn.start, end), completed: turn.completed, duration: turn.duration });
+      cursor = end;
+    }
+    if (cursor < items.length) groups.push({ id: `after-${cursor}`, items: items.slice(cursor), completed: false });
+    return groups;
+  }, [items, turns, run?.status]);
   const phase = run ? phaseOf(run, items, pending) : null;
   useEffect(() => {
     const el = scroller.current;
@@ -220,22 +246,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
         </div>
       )}
       <div className="run-scroll" ref={scroller}>
-        {items.map((it, i) => {
-          if (it.t === "msg") {
-            return (
-              <div key={it.m.id + i} className={`run-msg ${it.m.role}`}>
-                {it.m.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.m.content}</ReactMarkdown> : <pre>{it.m.content}</pre>}
-              </div>
-            );
-          }
-          if (it.t === "act") return <ActivityView key={it.a.id + i} a={it.a} />;
-          return (
-            <div key={i} className="run-status-line muted small">
-              {it.label}
-              {it.detail ? ` — ${it.detail}` : ""}
-            </div>
-          );
-        })}
+        {segments.map((segment) => <TurnView key={segment.id} items={segment.items} completed={segment.completed} duration={segment.duration} />)}
         {items.length === 0 && <div className="muted small">Waiting for the agent…</div>}
       </div>
       {pending.map((pd) => (
@@ -304,6 +315,31 @@ function ActivityView({ a }: { a: Activity }) {
       {open && (a.detail || a.output) && <pre className="activity-body">{[a.detail, a.output].filter(Boolean).join("\n\n")}</pre>}
     </div>
   );
+}
+
+function ItemView({ item }: { item: Item }) {
+  if (item.t === "msg") return <div className={`run-msg ${item.m.role}`}>{item.m.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.m.content}</ReactMarkdown> : <pre>{item.m.content}</pre>}</div>;
+  if (item.t === "act") return <ActivityView a={item.a} />;
+  return <div className="run-status-line muted small">{item.label}{item.detail ? ` — ${item.detail}` : ""}</div>;
+}
+
+function ItemList({ items }: { items: Item[] }) {
+  const groups: Item[][] = [];
+  for (const item of items) {
+    const last = groups.at(-1);
+    if (item.t === "act" && item.a.status === "completed" && last?.every((entry) => entry.t === "act" && entry.a.status === "completed")) last.push(item);
+    else groups.push([item]);
+  }
+  return <>{groups.map((group, index) => group.length > 1 ? <details key={index} className="activity-group"><summary>{group.length} completed activities</summary>{group.map((item, i) => <ItemView key={i} item={item} />)}</details> : <ItemView key={index} item={group[0]} />)}</>;
+}
+
+function TurnView({ items, completed, duration }: { items: Item[]; completed: boolean; duration?: string }) {
+  if (!completed) return <ItemList items={items} />;
+  let finalIndex = -1;
+  items.forEach((item, index) => { if (item.t === "msg" && item.m.role === "assistant") finalIndex = index; });
+  const routine = items.filter((item, index) => index !== finalIndex && !(item.t === "msg" && item.m.role === "user") && !(item.t === "act" && ["failed", "denied"].includes(item.a.status)) && item.t !== "status");
+  const visible = items.filter((item, index) => index === finalIndex || (item.t === "msg" && item.m.role === "user") || (item.t === "act" && ["failed", "denied"].includes(item.a.status)) || item.t === "status");
+  return <div className="run-turn">{routine.length > 0 && <details className="turn-work"><summary>Finished turn{duration ? ` · ${duration}` : ""} · {routine.length} work items</summary><ItemList items={routine} /></details>}<ItemList items={visible} /></div>;
 }
 
 function InputAnswer({ pd, busy, onAnswer }: { pd: Pending; busy: boolean; onAnswer: (answers: Record<string, string>) => void }) {

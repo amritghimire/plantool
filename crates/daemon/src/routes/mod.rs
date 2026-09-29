@@ -1,6 +1,7 @@
 pub mod changes;
 pub mod comments;
 pub mod live;
+pub mod pr;
 pub mod runs;
 pub mod sessions;
 pub mod settings;
@@ -99,7 +100,8 @@ pub fn router(state: AppState) -> Router {
         .merge(changes::routes())
         .merge(live::routes())
         .merge(runs::routes())
-        .merge(settings::routes());
+        .merge(settings::routes())
+        .merge(pr::routes());
     Router::new()
         .nest("/api", api)
         .route("/health", get(health))

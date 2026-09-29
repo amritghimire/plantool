@@ -102,7 +102,7 @@ pub enum Cmd {
     Worktree {
         #[command(flatten)]
         target: Target,
-        /// Where to create it (default: git config plantool.worktreeDir, else <repo>/.worktree/<slug>).
+        /// Where to create it (default: git config plantool.worktreeDir, else <repo>/.worktrees/<slug>).
         #[arg(long)]
         dir: Option<PathBuf>,
         #[arg(long)]

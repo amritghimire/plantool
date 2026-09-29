@@ -24,8 +24,8 @@ it("shows the workspace for sessions with and without a worktree", async () => {
 
   render(<MemoryRouter><SessionList /></MemoryRouter>);
 
-  expect(await screen.findByText("/repo", { selector: ".workspace-path" })).toBeInTheDocument();
-  expect(screen.getByText("/repo/.worktree/two", { selector: ".workspace-path" })).toBeInTheDocument();
+  expect(await screen.findByText(".", { selector: ".workspace-path" })).toBeInTheDocument();
+  expect(screen.getByText(/\.worktree\/two/, { selector: ".workspace-path" })).toBeInTheDocument();
 });
 
 it("refreshes run status when the window regains focus", async () => {
@@ -36,4 +36,25 @@ it("refreshes run status when the window regains focus", async () => {
   fireEvent.focus(window);
   expect(await screen.findByText("Needs input")).toBeInTheDocument();
   expect(sessions).toHaveBeenCalledTimes(2);
+});
+
+it("filters by attention and keeps PR and drop actions separate", async () => {
+  const needs = { ...base, key: "repo/review", url_path: "/s/repo/review", session: { ...base.session, slug: "review", title: "Review" }, state: { ...base.state, stage: "plan-review" as const } };
+  const done = { ...base, key: "repo/done", url_path: "/s/repo/done", session: { ...base.session, slug: "done", title: "Done", pull_request: { number: 12, url: "https://github.com/o/r/pull/12", state: "OPEN", draft: false, updated_at: base.session.created_at } }, state: { ...base.state, stage: "done" as const } };
+  vi.spyOn(api, "sessions").mockResolvedValue([base, needs, done]);
+  const remove = vi.spyOn(api, "removeSession").mockResolvedValue({ removed: needs.key, worktree_removed: false });
+  render(<MemoryRouter><SessionList /></MemoryRouter>);
+  expect(await screen.findByRole("link", { name: "Open PR #12" })).toHaveAttribute("href", "https://github.com/o/r/pull/12");
+  fireEvent.click(screen.getByRole("button", { name: /Needs you/ }));
+  expect(screen.getByRole("link", { name: "Open Review" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Open Done" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Drop Review" }));
+  const dialog = screen.getByRole("dialog", { name: "Drop repo/review?" });
+  expect(dialog).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Drop Review" }));
+  fireEvent.click(screen.getByRole("button", { name: "Drop session" }));
+  await vi.waitFor(() => expect(remove).toHaveBeenCalledWith("repo/review", false));
 });

@@ -130,6 +130,8 @@ pub struct Session {
     pub repo: Checkout,
     #[serde(default)]
     pub worktree: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PullRequest>,
     pub base: String,
     #[serde(default)]
     pub mirror: bool,
@@ -139,6 +141,15 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_in: Option<PathBuf>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequest {
+    pub number: u64,
+    pub url: String,
+    pub state: String,
+    pub draft: bool,
+    pub updated_at: String,
 }
 
 impl Session {

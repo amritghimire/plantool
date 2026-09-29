@@ -48,6 +48,10 @@ function setup(currentView = view) {
       onDelete={onDelete}
       onJump={() => {}}
       onStartRun={() => {}}
+      onAskAgent={() => {}}
+      onWorkspace={() => {}}
+      onPr={() => {}}
+      onRefreshPr={() => {}}
       onContinueMilestone={onContinueMilestone}
       onApproveMilestone={onApproveMilestone}
       onOpenChanges={() => {}}
@@ -98,6 +102,16 @@ it("shows the session's active workspace", () => {
 it("shows the worktree as the active workspace", () => {
   setup({ ...view, session: { ...view.session, worktree: "/r/.worktree/x" } });
   expect(screen.getByText("/r/.worktree/x", { selector: ".workspace-path" })).toBeInTheDocument();
+});
+
+it("keeps stopped runs collapsed until opened and shows failures", () => {
+  const stopped = { ...view.runs[0], id: "old", status: "failed" as const, provider_session_id: "provider-session" };
+  setup({ ...view, runs: [view.runs[0], stopped] });
+  expect(screen.getByRole("button", { name: /Finished runs/ })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("button", { name: /Open claude researching run, failed/ })).toBeNull();
+  expect(screen.getByText("1 failed")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Finished runs/ }));
+  expect(screen.getByRole("button", { name: /Open claude researching run, failed/ })).toBeInTheDocument();
 });
 
 it("confirms session deletion once and makes worktree removal optional", () => {

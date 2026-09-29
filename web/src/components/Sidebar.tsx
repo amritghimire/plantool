@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
 import { relTime, shortPath, workspacePath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
 import { Thread, type ThreadActions } from "./Thread";
+import { DropSessionDialog } from "./DropSessionDialog";
 
 export interface SidebarProps {
   view: SessionView;
@@ -14,12 +15,16 @@ export interface SidebarProps {
   onBrief: (brief: string | null) => Promise<void>;
   onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
-  onStartRun: (stage: "research" | "plan" | "implement" | "critique", resumeId?: string) => void;
+  onStartRun: (stage: "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr", resumeId?: string) => void;
+  onAskAgent: () => void;
+  onPr: () => void;
+  onRefreshPr: () => void;
   onContinueMilestone: (run: Run) => void;
   onApproveMilestone: (run: Run, commit: boolean, message: string) => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
+  onWorkspace: (session: SessionView["session"]) => void;
   actions: ThreadActions;
   reviewPrompt: string | null;
   onSendToRun: (text: string) => Promise<void>;
@@ -37,8 +42,14 @@ export function Sidebar(p: SidebarProps) {
   const [commitMilestone, setCommitMilestone] = useState(true);
   const [commitMessage, setCommitMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
-  const [removeWorktree, setRemoveWorktree] = useState(false);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const [showFinished, setShowFinished] = useState(() => {
+    try { return localStorage.getItem(`plantool.finished.${p.view.key}`) === "open"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { setShowFinished(localStorage.getItem(`plantool.finished.${p.view.key}`) === "open"); } catch { setShowFinished(false); }
+  }, [p.view.key]);
+  const [workspaceCheck, setWorkspaceCheck] = useState<{ missing: boolean; candidates: { root: string; branch: string }[] } | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const activeDoc = p.view.docs.find((d) => d.kind === p.activeTab);
   const askAgent = (c: Comment) =>
     p.onSendToRun(
@@ -50,6 +61,21 @@ export function Sidebar(p: SidebarProps) {
   const s = p.view.session;
 
   const finished = p.view.runs.filter((r) => !isLive(r));
+  const activeRuns = p.view.runs.filter(isLive);
+  useEffect(() => {
+    if (p.selectedRun && finished.some((r) => r.id === p.selectedRun)) setShowFinished(true);
+  }, [p.selectedRun, p.view.runs]);
+  const toggleFinished = () => {
+    setShowFinished((open) => {
+      try { localStorage.setItem(`plantool.finished.${p.view.key}`, open ? "closed" : "open"); } catch { /* ignore */ }
+      return !open;
+    });
+  };
+  const runRow = (r: Run) => <li key={r.id} className={p.selectedRun === r.id ? "active" : ""}>
+    <button className="run-select" onClick={() => p.onSelectRun(r.id)} type="button" aria-label={`Open ${r.provider} ${r.task ?? r.stage} run, ${RUN_WORD[r.status]}`}><span className={`run-status ${r.status}`} /><span>{r.provider} · {r.task ?? r.stage}</span><span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span><span className="spacer" /><span className="muted small">{relTime(r.started_at)}</span></button>
+    {!isLive(r) && r.provider_session_id && <button className="run-remove" title="Resume this run: the agent keeps its context and picks up where it stopped" onClick={() => p.onStartRun(r.task === "assist" ? "assist" : r.task === "draft-pr" ? "draft-pr" : r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", r.id)} type="button">↻</button>}
+    {!isLive(r) && <button className="run-remove" title="Clear this run and its transcript" onClick={() => window.confirm("Clear this run and its transcript?") && void p.onRemoveRun(r.id)} type="button">×</button>}
+  </li>;
   const liveRun = p.view.runs.find(isLive) ?? null;
   const latestImplementation = p.view.runs.filter((r) => r.task === "implement").sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
   const stepMode = latestImplementation?.implementation_mode === "step-by-step";
@@ -75,12 +101,6 @@ export function Sidebar(p: SidebarProps) {
   }, [p.view.key, approvalRun, approvalCount, planSha]);
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
   const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
-  useEffect(() => {
-    if (!deleting) return;
-    const previous = document.activeElement as HTMLElement | null;
-    dialogRef.current?.querySelector<HTMLButtonElement>("button[data-cancel]")?.focus();
-    return () => previous?.focus();
-  }, [deleting]);
 
   return (
     <aside className="sidebar">
@@ -98,12 +118,25 @@ export function Sidebar(p: SidebarProps) {
         <div className="side-title">{s.title}</div>
         <div className="muted small">{p.view.key}</div>
         <div className="workspace-detail" title={workspacePath(s)}>
-          <span className="muted small">Workspace</span>
+          <span className="muted small">Workspace <button className="link" type="button" onClick={() => {
+            setWorkspaceError(null);
+            void api.workspaceCandidates(p.view.key).then(setWorkspaceCheck).catch((e: Error) => setWorkspaceError(e.message));
+          }}>Refresh</button></span>
           <span className="workspace-line">
             <span className="workspace-path">{workspacePath(s)}</span>
             <CopyButton text={workspacePath(s)} label="Copy" className="btn ghost small workspace-copy" />
           </span>
         </div>
+        {s.worktree && p.view.workspace_branch === null && <div className="error small">Workspace missing, detached, or no longer in this repository. Refresh to choose a valid worktree.</div>}
+        {workspaceCheck?.missing && <div className="error small">Recorded workspace is missing or no longer belongs to this repository. New runs are blocked until you choose a valid workspace.</div>}
+        {workspaceCheck?.candidates.filter((candidate) => candidate.root !== s.worktree).map((candidate) => (
+          <button key={candidate.root} className="link small" type="button" onClick={() => {
+            if (!window.confirm(`Use ${candidate.root} on branch ${candidate.branch} for this session?`)) return;
+            void api.adoptWorkspace(p.view.key, candidate.root).then((result) => { p.onWorkspace(result.session); setWorkspaceCheck(null); }).catch((e: Error) => setWorkspaceError(e.message));
+          }}>Use {shortPath(candidate.root)} · {candidate.branch}</button>
+        ))}
+        {workspaceCheck && !workspaceCheck.missing && workspaceCheck.candidates.length === 0 && <div className="muted small">No matching worktree found.</div>}
+        {workspaceError && <div className="error small">{workspaceError}</div>}
         <div className="muted small" title={`repository: ${s.repo.root}`}>
           {shortPath(s.repo.root)} · {s.repo.branch} → {s.base}
         </div>
@@ -111,6 +144,7 @@ export function Sidebar(p: SidebarProps) {
           created {relTime(s.created_at)}
           {s.created_in && s.created_in !== s.repo.root ? ` from ${shortPath(s.created_in)}` : ""}
         </div>
+        {s.pull_request && <div className="small">PR <a href={s.pull_request.url} target="_blank" rel="noreferrer">#{s.pull_request.number}</a> · {s.pull_request.state.toLowerCase()}{s.pull_request.draft ? " draft" : ""} <button className="link" type="button" onClick={p.onRefreshPr}>Refresh</button><span className="muted">checked {relTime(s.pull_request.updated_at)}</span></div>}
       </div>
 
       <Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} />
@@ -125,6 +159,8 @@ export function Sidebar(p: SidebarProps) {
       </ol>
 
       <div className="side-block actions">
+        <button className="btn ghost" onClick={p.onAskAgent} disabled={p.busy} type="button">Ask agent…</button>
+        {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
         {stage === "new" && (
           <>
             <button className="btn primary" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
@@ -320,82 +356,24 @@ export function Sidebar(p: SidebarProps) {
           )}
         </div>
         {p.view.runs.length === 0 && <div className="muted small">No hosted runs yet.</div>}
-        <ul className="run-list">
-          {[...p.view.runs].reverse().map((r) => (
-            <li key={r.id} className={p.selectedRun === r.id ? "active" : ""}>
-              <button className="run-select" onClick={() => p.onSelectRun(r.id)} type="button" aria-label={`Open ${r.provider} ${r.task ?? r.stage} run, ${RUN_WORD[r.status]}`}>
-                <span className={`run-status ${r.status}`} />
-                <span>{r.provider} · {r.task ?? r.stage}</span>
-                <span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span>
-                <span className="spacer" />
-                <span className="muted small">{relTime(r.started_at)}</span>
-              </button>
-              {!isLive(r) && r.provider_session_id && (
-                <button
-                  className="run-remove"
-                  title="Resume this run: the agent keeps its context and picks up where it stopped"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    p.onStartRun(r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", r.id);
-                  }}
-                  type="button"
-                >
-                  ↻
-                </button>
-              )}
-              {!isLive(r) && (
-                <button
-                  className="run-remove"
-                  title="Clear this run and its transcript"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (window.confirm("Clear this run and its transcript?")) void p.onRemoveRun(r.id);
-                  }}
-                  type="button"
-                >
-                  ×
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <ul className="run-list">{[...activeRuns].reverse().map(runRow)}</ul>
+        {finished.length > 0 && <>
+          <button className="link finished-toggle" type="button" aria-expanded={showFinished} onClick={toggleFinished}>{showFinished ? "▾" : "▸"} Finished runs <span className="badge">{finished.length}</span>{finished.some((r) => r.status === "failed") && <span className="run-word failed">{finished.filter((r) => r.status === "failed").length} failed</span>}</button>
+          {showFinished && <ul className="run-list">{[...finished].reverse().map(runRow)}</ul>}
+        </>}
       </div>
 
       <div className="side-block danger-zone">
         <button
           className="link danger"
           disabled={p.busy}
-          onClick={() => { setRemoveWorktree(false); setDeleting(true); }}
+          onClick={() => setDeleting(true)}
           type="button"
         >
           {stage === "done" ? "Drop this finished session" : "Drop session"}
         </button>
       </div>
-      {deleting && (
-        <div className="modal-backdrop" onClick={() => !p.busy && setDeleting(false)}>
-          <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="drop-session-title" aria-describedby="drop-session-description" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => {
-            if (e.key === "Escape" && !p.busy) setDeleting(false);
-            if (e.key !== "Tab") return;
-            const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])];
-            if (e.shiftKey && document.activeElement === controls[0]) { e.preventDefault(); controls[controls.length - 1]?.focus(); }
-            else if (!e.shiftKey && document.activeElement === controls[controls.length - 1]) { e.preventDefault(); controls[0]?.focus(); }
-          }}>
-            <h3 id="drop-session-title">Drop {p.view.key}?</h3>
-            <p id="drop-session-description">This deletes the session's documents, comments, and run transcripts. You cannot undo it.</p>
-            {s.worktree && (
-              <label className="check">
-                <input type="checkbox" checked={removeWorktree} disabled={p.busy} onChange={(e) => setRemoveWorktree(e.target.checked)} />
-                <span>Also remove worktree <span className="workspace-path">{s.worktree}</span></span>
-              </label>
-            )}
-            <div className="composer-actions">
-              <span className="spacer" />
-              <button className="btn ghost" data-cancel disabled={p.busy} onClick={() => setDeleting(false)} type="button">Cancel</button>
-              <button className="btn danger" disabled={p.busy} onClick={() => void p.onDelete(removeWorktree)} type="button">Drop session</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {deleting && <DropSessionDialog view={p.view} busy={p.busy} onClose={() => setDeleting(false)} onDelete={p.onDelete} />}
     </aside>
   );
 }
