@@ -4,7 +4,7 @@ use crate::store::{self, SessionStore};
 use plantool_core::anchor;
 use plantool_core::markdown;
 use plantool_core::{
-    transition, Actor, ChangeReview, Comment, CommentKind, DocKind, DocRevision, DocState, Run, Session, Stage, State,
+    transition, Actor, ChangeReview, Comment, CommentKind, CommitJob, CommitPhase, CommitScope, DocKind, DocRevision, DocState, Run, Session, Stage, State,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -124,6 +124,8 @@ pub struct SessionView {
     pub runs: Vec<Run>,
     pub open_comments: usize,
     pub workspace_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<CommitJob>,
 }
 
 pub struct LiveSession {
@@ -139,7 +141,10 @@ struct Inner {
     docs: BTreeMap<DocKind, DocRevision>,
     runs: BTreeMap<String, Run>,
     removed: bool,
+    commit: Option<(CommitJob, Arc<tokio::sync::Notify>)>,
 }
+
+const COMMIT_LINES: usize = 40;
 
 fn short_id() -> String {
     let u = uuid::Uuid::new_v4().simple().to_string();
@@ -166,7 +171,7 @@ impl LiveSession {
         let runs = store.load_runs()?.into_iter().map(|r| (r.id.clone(), r)).collect();
         let (tx, _) = broadcast::channel(256);
         let key = session.key();
-        Ok(Some(Arc::new(LiveSession { key, store, inner: Mutex::new(Inner { session, state, docs, runs, removed: false }), tx })))
+        Ok(Some(Arc::new(LiveSession { key, store, inner: Mutex::new(Inner { session, state, docs, runs, removed: false, commit: None }), tx })))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -242,6 +247,7 @@ impl LiveSession {
                 )
                 .ok(),
             },
+            commit: g.commit.as_ref().map(|(job, _)| job.clone()),
         }
     }
 
@@ -604,6 +610,52 @@ impl LiveSession {
         let mut g = self.lock();
         self.broadcast(&mut g, LiveEvent::RunEvent { run_id: run_id.to_string(), seq, event });
         Ok(())
+    }
+
+    /// Record a commit as running and announce it, or `None` when one is already running.
+    pub fn begin_commit(&self, scope: CommitScope) -> Option<(String, Arc<tokio::sync::Notify>)> {
+        let mut g = self.lock();
+        if g.commit.is_some() {
+            return None;
+        }
+        let job = CommitJob { id: short_id(), scope, phase: CommitPhase::Staging, started_at: plantool_core::now(), lines: Vec::new(), error: None };
+        let cancel = Arc::new(tokio::sync::Notify::new());
+        let id = job.id.clone();
+        g.commit = Some((job.clone(), cancel.clone()));
+        self.broadcast(&mut g, LiveEvent::CommitProgress { commit: job });
+        Some((id, cancel))
+    }
+
+    /// Change the running commit; `announce` broadcasts the new state.
+    pub fn update_commit(&self, id: &str, announce: bool, change: impl FnOnce(&mut CommitJob)) {
+        let mut g = self.lock();
+        let Some((job, _)) = g.commit.as_mut().filter(|(job, _)| job.id == id) else { return };
+        change(job);
+        let excess = job.lines.len().saturating_sub(COMMIT_LINES);
+        job.lines.drain(..excess);
+        let job = job.clone();
+        if announce {
+            self.broadcast(&mut g, LiveEvent::CommitProgress { commit: job });
+        }
+    }
+
+    /// Announce the commit's final phase and forget it.
+    pub fn finish_commit(&self, id: &str, phase: CommitPhase, error: Option<String>) {
+        let mut g = self.lock();
+        let Some((mut job, _)) = g.commit.take_if(|(job, _)| job.id == id) else { return };
+        job.phase = phase;
+        job.error = error;
+        self.broadcast(&mut g, LiveEvent::CommitProgress { commit: job });
+    }
+
+    pub fn cancel_commit(&self) -> bool {
+        match &self.lock().commit {
+            Some((_, cancel)) => {
+                cancel.notify_one();
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn seq(&self) -> u64 {

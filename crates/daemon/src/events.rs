@@ -1,4 +1,4 @@
-use plantool_core::{ChangeReview, Comment, DocKind, Run, Session, Stage};
+use plantool_core::{ChangeReview, CommitJob, Comment, DocKind, Run, Session, Stage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,7 @@ pub enum LiveEvent {
     RunRemoved { id: String },
     ChangesOpened { review: ChangeReview },
     Navigate { target: NavTarget, viewers: usize },
+    CommitProgress { commit: CommitJob },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod changes;
+pub mod commits;
 pub mod config;
 pub mod events;
 pub mod git;

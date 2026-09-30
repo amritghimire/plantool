@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use plantool_core::{Actor, PullRequest, RunStatus, Session, Stage};
+use plantool_core::{Actor, CommitScope, PullRequest, RunStatus, Session, Stage};
 use serde::{Deserialize, Serialize};
 use std::path::Path as FsPath;
 use std::time::Duration;
@@ -322,10 +322,9 @@ async fn commit(
         ));
     }
     let cwd = session.cwd().clone();
-    let outcome = tokio::task::spawn_blocking(move || git::commit_milestone(&cwd, &message, false))
+    let outcome = crate::commits::run_commit(s.clone(), CommitScope::Pr, cwd, message, false)
         .await
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| ApiError(StatusCode::CONFLICT, format!("could not commit: {e}")))?;
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.message("could not commit")))?;
     let (sha, rewritten) = match outcome {
         git::CommitOutcome::Committed(sha) => (sha, Vec::new()),
         git::CommitOutcome::HookRewrote {

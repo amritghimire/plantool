@@ -352,11 +352,20 @@ fn unstaged_paths(cwd: &Path) -> Result<Vec<String>, GitError> {
 /// files are staged and reported instead of being silently left behind.
 pub fn commit_milestone(cwd: &Path, message: &str, amend: bool) -> Result<CommitOutcome, GitError> {
     git(cwd, &["add", "-A"])?;
+    let result = git(cwd, &commit_args(message, amend)).map(drop);
+    classify_commit(cwd, result)
+}
+
+fn commit_args(message: &str, amend: bool) -> Vec<&str> {
     let mut args = vec!["commit", "-q", "-m", message];
     if amend {
         args.push("--amend");
     }
-    let result = git(cwd, &args);
+    args
+}
+
+/// Turn the result of `git commit` into an outcome, staging anything a hook rewrote.
+fn classify_commit(cwd: &Path, result: Result<(), GitError>) -> Result<CommitOutcome, GitError> {
     let files = unstaged_paths(cwd)?;
     match result {
         Ok(_) if files.is_empty() => Ok(CommitOutcome::Committed(head_sha(cwd)?)),
@@ -370,6 +379,95 @@ pub fn commit_milestone(cwd: &Path, message: &str, amend: bool) -> Result<Commit
         }
         Err(e) => Err(e),
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CommitError {
+    #[error("commit cancelled")]
+    Cancelled,
+    #[error(transparent)]
+    Git(#[from] GitError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitStep {
+    /// Everything is staged and `git commit` (with its hooks) has started.
+    Committing,
+    Line(String),
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, GitError> + Send + 'static) -> Result<T, GitError> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| GitError::Io(std::io::Error::other(e)))?
+}
+
+/// `commit_milestone`, streaming git's and the hooks' output line by line. Notifying `cancel`
+/// kills `git commit` and every process it started; the files stay staged.
+pub async fn commit_streaming(cwd: &Path, message: &str, amend: bool, cancel: std::sync::Arc<tokio::sync::Notify>, mut on_step: impl FnMut(CommitStep) + Send) -> Result<CommitOutcome, CommitError> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let dir = cwd.to_path_buf();
+    blocking(move || git(&dir, &["add", "-A"])).await?;
+    on_step(CommitStep::Committing);
+    let mut command = tokio::process::Command::new("git");
+    command.args(commit_args(message, amend)).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    if let Some(path) = commit_hook_path(cwd) {
+        command.env("PATH", path);
+    }
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { GitError::Missing } else { GitError::Io(e) })?;
+    let mut stdout = child.stdout.take().map(|s| BufReader::new(s).lines());
+    let mut stderr = child.stderr.take().map(|s| BufReader::new(s).lines());
+    let mut errors = Vec::new();
+    let cancelled = loop {
+        tokio::select! {
+            line = async { stdout.as_mut().unwrap().next_line().await }, if stdout.is_some() => match line {
+                Ok(Some(line)) => on_step(CommitStep::Line(line)),
+                _ => stdout = None,
+            },
+            line = async { stderr.as_mut().unwrap().next_line().await }, if stderr.is_some() => match line {
+                Ok(Some(line)) => {
+                    errors.push(line.clone());
+                    on_step(CommitStep::Line(line));
+                }
+                _ => stderr = None,
+            },
+            _ = cancel.notified(), if stdout.is_some() || stderr.is_some() => break true,
+            else => break false,
+        }
+    };
+    let status = if cancelled {
+        None
+    } else {
+        tokio::select! {
+            status = child.wait() => Some(status.map_err(GitError::Io)?),
+            _ = cancel.notified() => None,
+        }
+    };
+    let Some(status) = status else {
+        terminate(&mut child).await;
+        return Err(CommitError::Cancelled);
+    };
+    let result = if status.success() { Ok(()) } else { Err(GitError::Failed { args: commit_args(message, amend).join(" "), stderr: errors.join("\n").trim().to_string() }) };
+    let dir = cwd.to_path_buf();
+    Ok(blocking(move || classify_commit(&dir, result)).await?)
+}
+
+/// Stop a commit and its hooks. On Unix the commit leads its own process group, so the whole
+/// group gets SIGTERM, then SIGKILL if it is still around after 3 s.
+async fn terminate(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        let group = format!("-{pid}");
+        let _ = tokio::process::Command::new("kill").args(["-TERM", "--", &group]).status().await;
+        if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await.is_ok() {
+            return;
+        }
+        let _ = tokio::process::Command::new("kill").args(["-KILL", "--", &group]).status().await;
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 /// Unified diff of one path between `base` and the working tree. Untracked files diff against
@@ -623,6 +721,59 @@ mod tests {
         std::fs::write(worktree.join("a.txt"), "changed\n").unwrap();
         assert!(matches!(commit_milestone(&worktree, "Milestone 1", false).unwrap(), CommitOutcome::HookRewrote { .. }));
         assert_eq!(std::fs::read_to_string(worktree.join("hook-ran")).unwrap(), "ran");
+    }
+
+    #[cfg(unix)]
+    async fn stream(root: &Path, cancel: std::sync::Arc<tokio::sync::Notify>) -> (Result<CommitOutcome, CommitError>, Vec<CommitStep>) {
+        let mut steps = Vec::new();
+        let out = commit_streaming(root, "Milestone 1", false, cancel, |step| steps.push(step)).await;
+        (out, steps)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn streaming_commit_reports_hook_output_as_it_runs() {
+        let (_tmp, root) = hook_repo("#!/bin/sh\necho 'ruff....Passed'\necho 'mypy failed on nothing' >&2\n");
+        let (out, steps) = stream(&root, Default::default()).await;
+        assert!(matches!(out.unwrap(), CommitOutcome::Committed(_)));
+        assert_eq!(steps[0], CommitStep::Committing);
+        assert!(steps.contains(&CommitStep::Line("ruff....Passed".into())), "{steps:?}");
+        assert!(steps.contains(&CommitStep::Line("mypy failed on nothing".into())), "{steps:?}");
+        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn streaming_commit_keeps_the_failure_and_rewrite_rules() {
+        let (_tmp, root) = hook_repo("#!/bin/sh\necho 'lint says no' >&2\nexit 1\n");
+        match stream(&root, Default::default()).await.0 {
+            Err(CommitError::Git(GitError::Failed { stderr, .. })) => assert_eq!(stderr, "lint says no"),
+            other => panic!("{other:?}"),
+        }
+        let (_tmp, root) = hook_repo("#!/bin/sh\nprintf 'formatted\\n' >> a.txt\nexit 1\n");
+        assert_eq!(stream(&root, Default::default()).await.0.unwrap(), CommitOutcome::HookRewrote { sha: None, files: vec!["a.txt".into()] });
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelling_a_streaming_commit_kills_the_hook_and_keeps_files_staged() {
+        let (_tmp, root) = hook_repo("#!/bin/sh\necho started\nsleep 30 &\nwait\n");
+        let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+        let trigger = cancel.clone();
+        let started = std::time::Instant::now();
+        let mut steps = Vec::new();
+        let out = commit_streaming(&root, "Milestone 1", false, cancel, |step| {
+            if step == CommitStep::Line("started".into()) {
+                trigger.notify_one();
+            }
+            steps.push(step);
+        })
+        .await;
+        assert!(matches!(out, Err(CommitError::Cancelled)), "{out:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "the hook was killed, not waited for");
+        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 1, "nothing committed");
+        assert_eq!(git(&root, &["diff", "--cached", "--name-only"]).unwrap(), "a.txt", "files stay staged");
+        assert!(!root.join(".git/index.lock").exists());
     }
 
     #[test]

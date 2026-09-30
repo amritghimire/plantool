@@ -36,6 +36,7 @@ function setup(currentView = view) {
   const onSendToRun = vi.fn(async () => {});
   const onContinueMilestone = vi.fn();
   const onApproveMilestone = vi.fn();
+  const onCancelCommit = vi.fn();
   const onDelete = vi.fn(async () => {});
   render(
     <Sidebar
@@ -54,6 +55,7 @@ function setup(currentView = view) {
       onRefreshPr={() => {}}
       onContinueMilestone={onContinueMilestone}
       onApproveMilestone={onApproveMilestone}
+      onCancelCommit={onCancelCommit}
       onOpenChanges={() => {}}
       onSelectRun={() => {}}
       onRemoveRun={async () => {}}
@@ -64,7 +66,7 @@ function setup(currentView = view) {
       onSendToRun={onSendToRun}
     />,
   );
-  return { actions, onSendToRun, onContinueMilestone, onApproveMilestone, onDelete };
+  return { actions, onSendToRun, onContinueMilestone, onApproveMilestone, onCancelCommit, onDelete };
 }
 
 describe("Sidebar comments", () => {
@@ -141,4 +143,17 @@ it("offers milestone approval after a step-by-step turn with an editable commit 
   expect(screen.queryByLabelText("Commit message")).toBeNull();
   fireEvent.click(screen.getByText("Approve milestone and continue"));
   expect(onApproveMilestone).toHaveBeenLastCalledWith(run, false, "Milestone 1: guest home route");
+});
+
+it("shows the milestone commit's progress instead of the approve form while it runs", async () => {
+  vi.spyOn(api, "milestone").mockResolvedValue({ subject: "Milestone 1: add the route", dirty: true, milestone: 1, pending: true, live: true });
+  const run = { ...view.runs[0], stage: "implementing" as const, task: "implement", status: "idle" as const, implementation_mode: "step-by-step" as const, milestone_pending: true };
+  const commit = { id: "c1", scope: { kind: "milestone" as const, run_id: run.id }, phase: "hooks" as const, started_at: new Date(Date.now() - 12_000).toISOString(), lines: ["mypy.....running"] };
+  const { onCancelCommit } = setup({ ...view, state: { ...view.state, stage: "implementing" as const }, runs: [run], commit });
+  const progress = screen.getByRole("status", { name: "Committing milestone…" });
+  expect(progress).toHaveTextContent("mypy.....running");
+  expect(progress).toHaveTextContent("running hooks · 12s");
+  expect(screen.queryByText("Approve milestone and continue")).toBeNull();
+  fireEvent.click(screen.getByText("Cancel commit"));
+  expect(onCancelCommit).toHaveBeenCalled();
 });

@@ -62,6 +62,7 @@ export const api = {
   prPreview: (key: string) => request<{ head: string; base: string; repository: string; push_remote: string; dirty: boolean; changed_files: string[]; live_run: boolean; commits_ahead: number; existing: NonNullable<Session["pull_request"]> | null }>("GET", `/api/sessions/${key}/pr/preview`),
   prCommitDraft: (key: string) => request<{ message: string; exists: boolean }>("GET", `/api/sessions/${key}/pr/commit`),
   prCommit: (key: string, message: string) => request<{ sha: string; rewritten: string[] }>("POST", `/api/sessions/${key}/pr/commit`, { message }),
+  cancelCommit: (key: string) => request<{ ok: boolean }>("POST", `/api/sessions/${key}/commit/cancel`),
   createPr: (key: string, body: { head: string; repository: string; title: string; body: string; draft: boolean }) => request<{ pull_request: NonNullable<Session["pull_request"]>; session: Session }>("POST", `/api/sessions/${key}/pr`, body),
   refreshPr: (key: string) => request<{ pull_request: NonNullable<Session["pull_request"]>; session: Session }>("POST", `/api/sessions/${key}/pr/refresh`),
   doc: (key: string, kind: DocKind) => request<DocResponse>("GET", `/api/sessions/${key}/docs/${kind}`),
