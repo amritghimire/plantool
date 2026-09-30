@@ -95,6 +95,17 @@ async fn remove(State(state): State<AppState>, headers: HeaderMap, Path((repo, s
     Ok(Json(json!({ "removed": session.key(), "worktree_removed": q.worktree && session.worktree.is_some() })))
 }
 
+async fn cancel_commit(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    if actor_from(&headers, &state) != Actor::Human {
+        return Err(ApiError(StatusCode::FORBIDDEN, "only a human can cancel a commit; use the browser".into()));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    if !s.cancel_commit() {
+        return Err(ApiError(StatusCode::CONFLICT, "no commit is running".into()));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn repos(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "repos": state.registry.repos() }))
 }
@@ -284,6 +295,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{repo}/{slug}/docs/{kind}/touch", post(touch_doc))
         .route("/sessions/{repo}/{slug}/navigate", post(navigate))
         .route("/sessions/{repo}/{slug}/brief", post(set_brief))
+        .route("/sessions/{repo}/{slug}/commit/cancel", post(cancel_commit))
         .route("/sessions/{repo}/{slug}/worktree", post(worktree))
         .route(
             "/sessions/{repo}/{slug}/workspace/candidates",

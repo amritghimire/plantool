@@ -635,3 +635,65 @@ async fn pr_commit_from_dialog() {
     let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "More" })), true, "127.0.0.1").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "detached HEAD");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pr_commit_streams_progress_blocks_a_second_commit_and_cancels() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = harness();
+    let (_, created) = call(&h.app, "POST", "/api/sessions", Some(json!({ "slug": "fix-it", "cwd": h.repo, "worktree": true })), false, "127.0.0.1").await;
+    let key = created["session"]["key"].as_str().unwrap().to_string();
+    let live = h.state.registry.get_key(&key).unwrap();
+    live.set_stage(plantool_core::Stage::ImplementationReview, plantool_core::Actor::Human).unwrap();
+    let wt = live.session().worktree.unwrap();
+    let hook = h.repo.join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho 'ruff....Passed'\nsleep 30 &\nwait\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let route = format!("/api/sessions/{key}/pr/commit");
+    let mut events = live.tx.subscribe();
+
+    let (status, _) = call(&h.app, "POST", &route, Some(json!({ "message": "Add change" })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::CONFLICT, "clean tree");
+    assert!(events.try_recv().is_err(), "a clean tree announces no commit");
+
+    std::fs::write(wt.join("change.txt"), "change").unwrap();
+    let app = h.app.clone();
+    let first_route = route.clone();
+    let first = tokio::spawn(async move { call(&app, "POST", &first_route, Some(json!({ "message": "Add change" })), true, "127.0.0.1").await });
+    let running = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let msg = serde_json::to_value(events.recv().await.unwrap()).unwrap();
+            if msg["type"] == "commit-progress" && msg["commit"]["lines"].as_array().is_some_and(|l| !l.is_empty()) {
+                return msg;
+            }
+        }
+    })
+    .await
+    .expect("the hook's output arrives while it runs");
+    assert_eq!(running["commit"]["phase"], "hooks");
+    assert_eq!(running["commit"]["scope"]["kind"], "pr");
+    assert_eq!(running["commit"]["lines"][0], "ruff....Passed");
+
+    let (_, view) = call(&h.app, "GET", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
+    assert_eq!(view["commit"]["phase"], "hooks", "a reload sees the running commit");
+    let (status, busy) = call(&h.app, "POST", &route, Some(json!({ "message": "Again" })), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(busy["error"].as_str().unwrap().contains("already running"), "{busy}");
+
+    let cancel = format!("/api/sessions/{key}/commit/cancel");
+    let (status, _) = call(&h.app, "POST", &cancel, None, false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "agents cannot cancel");
+    let (status, _) = call(&h.app, "POST", &cancel, None, true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, result) = tokio::time::timeout(std::time::Duration::from_secs(10), first).await.expect("cancel stops the hook").unwrap();
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(result["error"], "commit cancelled");
+
+    let (_, view) = call(&h.app, "GET", &format!("/api/sessions/{key}"), None, false, "127.0.0.1").await;
+    assert!(view.get("commit").is_none(), "{view}");
+    assert_eq!(plantool_daemon::git::git(&wt, &["rev-list", "--count", "main..HEAD"]).unwrap(), "0");
+    assert_eq!(plantool_daemon::git::git(&wt, &["diff", "--cached", "--name-only"]).unwrap(), "change.txt");
+    let (status, _) = call(&h.app, "POST", &cancel, None, true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::CONFLICT, "nothing left to cancel");
+}

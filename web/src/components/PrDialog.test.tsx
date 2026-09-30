@@ -14,7 +14,7 @@ it("defaults to draft and saves edits before create", async () => {
   vi.spyOn(api, "prPreview").mockResolvedValue(preview);
   const save = vi.spyOn(api, "savePrDraft").mockResolvedValue({ saved: true });
   const create = vi.spyOn(api, "createPr").mockResolvedValue({ pull_request: { number: 7, url: "https://github.com/owner/repo/pull/7", state: "OPEN", draft: true, updated_at: "now" }, session: {} as never });
-  render(<PrDialog sessionKey="repo/x" onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
+  render(<PrDialog sessionKey="repo/x" commit={null} onCancelCommit={() => {}} onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
   expect(await screen.findByText(/will not be in the PR/)).toBeInTheDocument();
   await screen.findByDisplayValue("This fixes the issue.");
   expect(screen.getByLabelText("Draft", { selector: "input" })).toBeChecked();
@@ -29,7 +29,7 @@ it("defaults to draft and saves edits before create", async () => {
 it("says why Create PR is disabled when only uncommitted changes exist", async () => {
   vi.spyOn(api, "prDraft").mockResolvedValue({ title: "Fix it", body: "Body", exists: true });
   vi.spyOn(api, "prPreview").mockResolvedValue({ ...preview, commits_ahead: 0 });
-  render(<PrDialog sessionKey="repo/x" onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
+  render(<PrDialog sessionKey="repo/x" commit={null} onCancelCommit={() => {}} onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
   expect(await screen.findByText("Commit your changes first")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Create PR" })).toBeDisabled();
 });
@@ -38,7 +38,7 @@ it("commits with the edited suggested message and reloads the checks", async () 
   vi.spyOn(api, "prDraft").mockResolvedValue({ title: "Fix it", body: "Body", exists: true });
   const previewCall = vi.spyOn(api, "prPreview").mockResolvedValueOnce({ ...preview, commits_ahead: 0 }).mockResolvedValue({ ...preview, dirty: false, changed_files: [], commits_ahead: 1 });
   const commit = vi.spyOn(api, "prCommit").mockResolvedValue({ sha: "abcdef1234567890", rewritten: [] });
-  render(<PrDialog sessionKey="repo/x" onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
+  render(<PrDialog sessionKey="repo/x" commit={null} onCancelCommit={() => {}} onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
   const message = await screen.findByDisplayValue(/Session: fix-it/);
   fireEvent.change(message, { target: { value: "Fix the session view" } });
   fireEvent.click(screen.getByRole("button", { name: "Commit all changes" }));
@@ -51,7 +51,20 @@ it("commits with the edited suggested message and reloads the checks", async () 
 it("keeps creation disabled while GitHub is unavailable", async () => {
   vi.spyOn(api, "prDraft").mockResolvedValue({ title: "Fix it", body: "Body", exists: true });
   vi.spyOn(api, "prPreview").mockRejectedValue(new Error("gh is signed out"));
-  render(<PrDialog sessionKey="repo/x" onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
+  render(<PrDialog sessionKey="repo/x" commit={null} onCancelCommit={() => {}} onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
   expect(await screen.findByText("gh is signed out")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Create PR" })).toBeDisabled();
+});
+
+it("shows the running commit's output and cancels it", async () => {
+  vi.spyOn(api, "prDraft").mockResolvedValue({ title: "Fix it", body: "Body", exists: true });
+  vi.spyOn(api, "prPreview").mockResolvedValue({ ...preview, commits_ahead: 0 });
+  const onCancelCommit = vi.fn();
+  const commit = { id: "c1", scope: { kind: "pr" as const }, phase: "hooks" as const, started_at: new Date().toISOString(), lines: ["uv-lock....Passed", "ruff....Passed"] };
+  render(<PrDialog sessionKey="repo/x" commit={commit} onCancelCommit={onCancelCommit} onClose={() => {}} onDraftAgent={() => {}} onSaved={() => {}} />);
+  const progress = await screen.findByRole("status", { name: "Committing…" });
+  expect(progress).toHaveTextContent("ruff....Passed");
+  expect(screen.queryByText("Commit all changes")).toBeNull();
+  fireEvent.click(screen.getByText("Cancel commit"));
+  expect(onCancelCommit).toHaveBeenCalled();
 });

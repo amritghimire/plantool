@@ -6,7 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use plantool_core::{Actor, DocKind, ImplementationMode, PermissionMode, Provider, Stage};
+use plantool_core::{Actor, CommitScope, DocKind, ImplementationMode, PermissionMode, Provider, Stage};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -266,16 +266,24 @@ async fn approve_milestone(State(state): State<AppState>, headers: HeaderMap, Pa
     };
     let cwd = run.cwd.clone();
     let held = run.milestone_commit.clone();
-    let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<crate::git::CommitOutcome>> {
-        if !commit || !crate::git::is_dirty(&cwd)? {
+    let check = cwd.clone();
+    let pending = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<bool>> {
+        if !commit || !crate::git::is_dirty(&check)? {
             return Ok(None);
         }
-        let amend = held.is_some_and(|h| crate::git::head_sha(&cwd).ok().as_deref() == Some(h.as_str()));
-        Ok(Some(crate::git::commit_milestone(&cwd, &subject, amend)?))
+        Ok(Some(held.is_some_and(|h| crate::git::head_sha(&check).ok().as_deref() == Some(h.as_str()))))
     })
     .await
     .map_err(|e| anyhow::anyhow!(e))?
     .map_err(|e| ApiError(StatusCode::CONFLICT, format!("could not commit the milestone: {e}")))?;
+    let outcome = match pending {
+        Some(amend) => Some(
+            crate::commits::run_commit(s.clone(), CommitScope::Milestone { run_id: id.clone() }, cwd, subject, amend)
+                .await
+                .map_err(|e| ApiError(StatusCode::CONFLICT, e.message("could not commit the milestone")))?,
+        ),
+        None => None,
+    };
     let (sha, committed) = match outcome {
         None => (crate::git::head_sha(&run.cwd).map_err(|e| anyhow::anyhow!(e))?, false),
         Some(crate::git::CommitOutcome::Committed(sha)) => (sha, true),

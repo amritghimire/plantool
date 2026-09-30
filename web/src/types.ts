@@ -169,6 +169,19 @@ export interface SessionView {
   runs: Run[];
   open_comments: number;
   workspace_branch?: string | null;
+  commit?: CommitJob | null;
+}
+
+export type CommitScope = { kind: "milestone"; run_id: string } | { kind: "pr" };
+export type CommitPhase = "staging" | "hooks" | "done" | "failed" | "cancelled";
+
+export interface CommitJob {
+  id: string;
+  scope: CommitScope;
+  phase: CommitPhase;
+  started_at: string;
+  lines: string[];
+  error?: string | null;
 }
 
 export interface Heading {
@@ -239,7 +252,8 @@ export type LiveEvent =
   | { type: "run-ended"; seq: number; run: Run }
   | { type: "run-removed"; seq: number; id: string }
   | { type: "changes-opened"; seq: number; review: ChangeReview }
-  | { type: "navigate"; seq: number; target: NavTarget; viewers: number };
+  | { type: "navigate"; seq: number; target: NavTarget; viewers: number }
+  | { type: "commit-progress"; seq: number; commit: CommitJob };
 
 export type RunEvent =
   | { type: "message"; id: string; role: "user" | "assistant"; content: string }

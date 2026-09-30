@@ -377,3 +377,6 @@ li.blk > .gutter { left: -50px; }
 .pr-notice ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--mono); font-size: 12px; }
 .gutter.has-draft { opacity: 1; border-color: var(--warn); color: var(--warn); }
 .banner.small { font-size: 12.5px; margin: 6px 0; }
+.commit-progress { display: grid; gap: 6px; font-size: 12.5px; }
+.commit-progress-head { display: flex; gap: 6px; align-items: center; }
+.commit-progress-log { margin: 0; max-height: 160px; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }

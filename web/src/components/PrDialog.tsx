@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Session } from "../types";
+import type { CommitJob, Session } from "../types";
+import { CommitProgress } from "./CommitProgress";
 
 type Preview = Awaited<ReturnType<typeof api.prPreview>>;
 
@@ -24,7 +25,7 @@ function Checks({ preview, busy, onRefresh }: { preview: Preview; busy: boolean;
   </div>;
 }
 
-function CommitSection({ preview, message, onMessage, busy, error, onCommit }: { preview: Preview; message: string; onMessage: (message: string) => void; busy: boolean; error: string | null; onCommit: () => void }) {
+function CommitSection({ preview, message, onMessage, busy, error, onCommit, commit, onCancelCommit }: { preview: Preview; message: string; onMessage: (message: string) => void; busy: boolean; error: string | null; onCommit: () => void; commit: CommitJob | null; onCancelCommit: () => void }) {
   const count = preview.changed_files.length;
   return <div className="pr-notice">
     <div><strong>{count} uncommitted file{count === 1 ? "" : "s"}</strong> will not be in the PR. Commit them here if they belong there.</div>
@@ -32,11 +33,11 @@ function CommitSection({ preview, message, onMessage, busy, error, onCommit }: {
     <label>Commit message<textarea rows={4} value={message} onChange={(e) => onMessage(e.target.value)} disabled={busy} placeholder="Subject line, blank line, body" /></label>
     {preview.live_run && <div className="muted small">An agent run is live in this checkout. It may be editing files while you commit.</div>}
     {error && <div className="error">{error}</div>}
-    <div className="composer-actions"><span className="spacer" /><button className="btn primary" type="button" disabled={busy || !message.trim()} onClick={onCommit}>Commit all changes</button></div>
+    {commit ? <CommitProgress job={commit} label="Committing…" onCancel={onCancelCommit} /> : <div className="composer-actions"><span className="spacer" /><button className="btn primary" type="button" disabled={busy || !message.trim()} onClick={onCommit}>Commit all changes</button></div>}
   </div>;
 }
 
-export function PrDialog({ sessionKey, onClose, onDraftAgent, onSaved }: { sessionKey: string; onClose: () => void; onDraftAgent: () => void; onSaved: (session: Session) => void }) {
+export function PrDialog({ sessionKey, commit, onCancelCommit, onClose, onDraftAgent, onSaved }: { sessionKey: string; commit: CommitJob | null; onCancelCommit: () => void; onClose: () => void; onDraftAgent: () => void; onSaved: (session: Session) => void }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [preflightError, setPreflightError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -56,7 +57,7 @@ export function PrDialog({ sessionKey, onClose, onDraftAgent, onSaved }: { sessi
     void loadPreview();
   };
   useEffect(reload, [sessionKey]);
-  const commit = async () => {
+  const commitAll = async () => {
     setBusy(true);
     setCommitError(null);
     setCommitNote(null);
@@ -87,7 +88,7 @@ export function PrDialog({ sessionKey, onClose, onDraftAgent, onSaved }: { sessi
     <div className="composer-actions"><button className={`btn ${hasDraft ? "ghost" : "primary"}`} type="button" disabled={busy} onClick={onDraftAgent}>{hasDraft ? "Redraft with agent" : "Draft with agent"}</button></div>
     {preflightError && <div className="error">{preflightError}</div>}
     {preview && <Checks preview={preview} busy={busy} onRefresh={reload} />}
-    {preview?.dirty && <CommitSection preview={preview} message={commitMessage} onMessage={(message) => { commitEdited.current = true; setCommitMessage(message); }} busy={busy} error={commitError} onCommit={() => void commit()} />}
+    {preview?.dirty && <CommitSection preview={preview} message={commitMessage} onMessage={(message) => { commitEdited.current = true; setCommitMessage(message); }} busy={busy} error={commitError} onCommit={() => void commitAll()} commit={commit} onCancelCommit={onCancelCommit} />}
     {commitNote && <div className="muted small">{commitNote}</div>}
     {preview && !preview.dirty && !preview.existing && preview.commits_ahead === 0 && <div className="pr-notice">Nothing to open a PR with yet: no commits ahead of {preview.base}.</div>}
     <label>Title<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary of the change" /></label>

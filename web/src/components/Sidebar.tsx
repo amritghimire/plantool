@@ -5,6 +5,7 @@ import { relTime, shortPath, workspacePath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
 import { Thread, type ThreadActions } from "./Thread";
 import { DropSessionDialog } from "./DropSessionDialog";
+import { CommitProgress } from "./CommitProgress";
 
 export interface SidebarProps {
   view: SessionView;
@@ -21,6 +22,7 @@ export interface SidebarProps {
   onRefreshPr: () => void;
   onContinueMilestone: (run: Run) => void;
   onApproveMilestone: (run: Run, commit: boolean, message: string) => void;
+  onCancelCommit: () => void;
   onOpenChanges: () => void;
   onSelectRun: (id: string) => void;
   onRemoveRun: (id: string) => Promise<void>;
@@ -221,7 +223,9 @@ export function Sidebar(p: SidebarProps) {
             {stage === "implementing" && stepMode && latestImplementation?.milestone_pending && (
               <>
                 <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Approving commits the milestone on the session branch and the agent starts the next ticket.</div>
-                {latestImplementation.status === "idle" ? (
+                {p.view.commit?.scope.kind === "milestone" && p.view.commit.scope.run_id === latestImplementation.id ? (
+                  <CommitProgress job={p.view.commit} label="Committing milestone…" onCancel={p.onCancelCommit} />
+                ) : latestImplementation.status === "idle" ? (
                   <>
                     <label className="muted small check-row">
                       <input type="checkbox" checked={commitMilestone} onChange={(e) => setCommitMilestone(e.target.checked)} disabled={p.busy} />

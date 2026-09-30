@@ -223,6 +223,12 @@ export function SessionPage() {
             return { ...m, [e.run_id]: [...prev, { seq: e.seq, at: e.at, event: e.event }] };
           });
           break;
+        case "commit-progress": {
+          const commit = e.commit;
+          const running = commit.phase === "staging" || commit.phase === "hooks";
+          setView((v) => (v ? { ...v, commit: running ? commit : null } : v));
+          break;
+        }
         case "changes-opened":
           setView((v) => (v ? { ...v, state: { ...v.state, review: e.review } } : v));
           setChangesNonce((n) => n + 1);
@@ -327,6 +333,8 @@ export function SessionPage() {
       setBusy(false);
     }
   };
+
+  const onCancelCommit = () => void api.cancelCommit(key).catch((e: Error) => toast(e.message, "error"));
 
   const onApproveMilestone = async (milestoneRun: Run, commit: boolean, message: string) => {
     setBusy(true);
@@ -446,6 +454,7 @@ export function SessionPage() {
         onRefreshPr={() => void api.refreshPr(key).then((result) => setView((current) => current ? { ...current, session: result.session } : current)).catch((e: Error) => toast(e.message, "error"))}
         onContinueMilestone={(r) => void onContinueMilestone(r)}
         onApproveMilestone={(r, commit, message) => void onApproveMilestone(r, commit, message)}
+        onCancelCommit={onCancelCommit}
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
         onRemoveRun={onRemoveRun}
@@ -486,7 +495,7 @@ export function SessionPage() {
         />
       )}
       {dialog && <StartRunDialog stage={dialog.stage} sessionKey={key} runs={view.runs} resumeId={dialog.resumeId} initialMode={dialog.initialMode} initialPrompt={dialog.initialPrompt} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
-      {prOpen && <PrDialog sessionKey={key} onClose={() => setPrOpen(false)} onDraftAgent={() => { setPrOpen(false); setDialog({ stage: "draft-pr" }); }} onSaved={(session) => setView((current) => current ? { ...current, session } : current)} />}
+      {prOpen && <PrDialog sessionKey={key} commit={view.commit?.scope.kind === "pr" ? view.commit : null} onCancelCommit={onCancelCommit} onClose={() => setPrOpen(false)} onDraftAgent={() => { setPrOpen(false); setDialog({ stage: "draft-pr" }); }} onSaved={(session) => setView((current) => current ? { ...current, session } : current)} />}
       {askOpen && <div className="modal-backdrop" onClick={() => setAskOpen(false)}><div className="modal" role="dialog" aria-modal="true" aria-label="Ask agent" onClick={(e) => e.stopPropagation()}>
         <h3>Ask agent</h3>
         <textarea rows={5} value={askText} onChange={(e) => setAskText(e.target.value)} placeholder="What should the agent do?" aria-label="Your request" />

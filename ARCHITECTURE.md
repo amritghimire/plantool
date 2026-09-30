@@ -74,6 +74,14 @@ Writes are temp-file-plus-rename with fsync. A batch of comments is one persist 
 reconnect. The CLI's `watch` opens the same socket, folds in a `since` reconcile, prints one
 NDJSON event and exits, so an agent can block until the human acts.
 
+Commits started from the browser (milestone approval, the PR dialog) go through
+`commits::run_commit`. The session records the running commit (one at a time, a second request
+gets 409), streams git's and the hooks' output as throttled `commit-progress` events carrying the
+last 40 lines, and returns the record in the session view so a reloaded tab still sees it. The
+commit runs in its own task, so a dropped request still finishes and clears the record.
+`POST …/commit/cancel` kills the commit's process group; the files stay staged. These events are
+never persisted, and `watch` ignores them.
+
 ## Hosted runs
 
 `providers/mod.rs` defines a neutral `ProviderEvent` vocabulary (messages, text deltas, tool
@@ -121,7 +129,7 @@ Implementation runs also store `implementation_mode` (`all-at-once` by default, 
 stage at `implementing` between tickets. On turn completion, the daemon opens or refreshes a
 milestone review and watches difftool for human comments. It sends new comment ids to the same
 provider run. The sidebar approves a milestone only when the run is idle and difftool has no open
-human comments; approval sends the next turn. A stopped run can resume its provider session, or
+human comments; approval commits the milestone through `commits::run_commit` and sends the next turn. A stopped run can resume its provider session, or
 start a fresh step run with its pending review.
 
 ## Change review

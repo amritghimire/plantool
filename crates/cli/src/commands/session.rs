@@ -622,7 +622,7 @@ fn watch(c: &Client, reference: &str, since: Option<u64>, timeout: Option<u64>, 
                 Err(_) => continue,
             };
             let ty = v["type"].as_str().unwrap_or("");
-            if ty == "hello" || ty == "resync" {
+            if ty == "hello" || ty == "resync" || ty == "commit-progress" {
                 continue;
             }
             println!("{}", serde_json::to_string(&v)?);

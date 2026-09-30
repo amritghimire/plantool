@@ -365,3 +365,39 @@ pub struct Run {
     #[serde(default)]
     pub seq: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CommitScope {
+    Milestone { run_id: String },
+    Pr,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommitPhase {
+    Staging,
+    Hooks,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+impl CommitPhase {
+    pub fn is_final(self) -> bool {
+        matches!(self, CommitPhase::Done | CommitPhase::Failed | CommitPhase::Cancelled)
+    }
+}
+
+/// A commit started from the browser, while it runs. Never persisted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitJob {
+    pub id: String,
+    pub scope: CommitScope,
+    pub phase: CommitPhase,
+    pub started_at: String,
+    /// The most recent output lines from git and its hooks.
+    pub lines: Vec<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
