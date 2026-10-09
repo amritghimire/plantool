@@ -11,6 +11,7 @@ import { Sidebar, docKindOf } from "./Sidebar";
 import { StartRunDialog, type RunStage } from "./StartRunDialog";
 import { ThemeToggle } from "./ThemeToggle";
 import { PrDialog } from "./PrDialog";
+import { AskAgentDialog } from "./AskAgentDialog";
 import type { ThreadActions } from "./Thread";
 
 type Toast = { id: number; text: string; kind?: "info" | "error" | "warn" };
@@ -44,9 +45,6 @@ export function SessionPage() {
   const [dialog, setDialog] = useState<{ stage: RunStage; resumeId?: string; initialMode?: "step-by-step"; initialPrompt?: string } | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
-  const [askText, setAskText] = useState("");
-  const [askChoice, setAskChoice] = useState<"send" | "resume" | "fresh">("fresh");
-  const [askResumeId, setAskResumeId] = useState("");
   const [selectedRun, setSelectedRun] = useState<string | null>(params.get("run"));
   const [runLines, setRunLines] = useState<Record<string, RunLine[]>>({});
   const [changesNonce, setChangesNonce] = useState(0);
@@ -393,6 +391,7 @@ export function SessionPage() {
         </header>
         <main className="list">
           <p className="error">{error}</p>
+          <button className="btn" type="button" onClick={() => void loadAll()}>Try again</button>
         </main>
       </div>
     );
@@ -496,21 +495,7 @@ export function SessionPage() {
       )}
       {dialog && <StartRunDialog stage={dialog.stage} sessionKey={key} runs={view.runs} resumeId={dialog.resumeId} initialMode={dialog.initialMode} initialPrompt={dialog.initialPrompt} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
       {prOpen && <PrDialog sessionKey={key} commit={view.commit?.scope.kind === "pr" ? view.commit : null} onCancelCommit={onCancelCommit} onClose={() => setPrOpen(false)} onDraftAgent={() => { setPrOpen(false); setDialog({ stage: "draft-pr" }); }} onSaved={(session) => setView((current) => current ? { ...current, session } : current)} />}
-      {askOpen && <div className="modal-backdrop" onClick={() => setAskOpen(false)}><div className="modal" role="dialog" aria-modal="true" aria-label="Ask agent" onClick={(e) => e.stopPropagation()}>
-        <h3>Ask agent</h3>
-        <textarea rows={5} value={askText} onChange={(e) => setAskText(e.target.value)} placeholder="What should the agent do?" aria-label="Your request" />
-        {view.runs.some((r) => ["starting", "running", "waiting", "idle"].includes(r.status)) && <label><input type="radio" name="ask-choice" checked={askChoice === "send"} onChange={() => setAskChoice("send")} /> Send to live run</label>}
-        {view.runs.some((r) => !["starting", "running", "waiting", "idle"].includes(r.status) && r.provider_session_id) && <label><input type="radio" name="ask-choice" checked={askChoice === "resume"} onChange={() => setAskChoice("resume")} /> Resume a stopped run</label>}
-        {askChoice === "resume" && <select aria-label="Run to resume" value={askResumeId} onChange={(e) => setAskResumeId(e.target.value)}><option value="">Choose a run</option>{view.runs.filter((r) => !["starting", "running", "waiting", "idle"].includes(r.status) && r.provider_session_id).map((r) => <option key={r.id} value={r.id}>{r.provider} · {r.task ?? r.stage}</option>)}</select>}
-        <label><input type="radio" name="ask-choice" checked={askChoice === "fresh"} onChange={() => setAskChoice("fresh")} /> Start a fresh run</label>
-        <div className="composer-actions"><span className="spacer" /><button className="btn ghost" onClick={() => setAskOpen(false)} type="button">Cancel</button><button className="btn primary" disabled={!askText.trim() || (askChoice === "resume" && !askResumeId)} onClick={() => {
-          const request = askText.trim();
-          setAskOpen(false);
-          setAskText("");
-          if (askChoice === "send") void onSendToRun(request);
-          else setDialog({ stage: "assist", initialPrompt: request, resumeId: askChoice === "resume" ? askResumeId : undefined });
-        }} type="button">Continue</button></div>
-      </div></div>}
+      {askOpen && <AskAgentDialog sessionKey={key} runs={view.runs} onClose={() => setAskOpen(false)} onStarted={(id) => setSelectedRun(id)} />}
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.kind ?? "info"}`}>

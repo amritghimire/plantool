@@ -250,6 +250,8 @@ pub struct DocRevision {
 pub enum Provider {
     Claude,
     Codex,
+    Copilot,
+    Ollama,
     Opencode,
 }
 
@@ -258,6 +260,8 @@ impl Provider {
         match self {
             Provider::Claude => "claude",
             Provider::Codex => "codex",
+            Provider::Copilot => "copilot",
+            Provider::Ollama => "ollama",
             Provider::Opencode => "opencode",
         }
     }
@@ -266,6 +270,8 @@ impl Provider {
         match s {
             "claude" => Some(Provider::Claude),
             "codex" => Some(Provider::Codex),
+            "copilot" => Some(Provider::Copilot),
+            "ollama" => Some(Provider::Ollama),
             "opencode" => Some(Provider::Opencode),
             _ => None,
         }

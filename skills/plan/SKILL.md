@@ -37,9 +37,8 @@ should be split into several sessions and say so in the summary.
 Write the whole document to the path from step 3. Never write into `REVIEWS/`. The human reads it
 as a slide deck (one `##` section per slide) and comments on any block: one idea per section,
 about one screen each, bullets and tables over paragraphs, a bold one-line takeaway first. Draw
-the change: a ` ```mermaid ` `flowchart` of the new flow (before → after when it helps), a
-`sequenceDiagram` for anything crossing a process or service boundary, and a `gantt` or a
-phase table for the order of work. Diagrams render in the browser and take comments. Shape:
+the change when a diagram makes a flow or service boundary easier to understand. Diagrams render
+in the browser and take comments. Shape:
 
 ```markdown
 # Plan: <title>
@@ -63,7 +62,7 @@ Work that is in scope but cannot be pinned down until a blocking question is ans
 - [ ] … does not regress
 
 ## Approach
-**Takeaway in one line**, then a mermaid diagram of the change.
+**Takeaway in one line**, then the proposed flow when it needs explanation.
 ### Affected files
 A table: path | what changes | why.
 ### Steps
@@ -100,9 +99,9 @@ The daemon captures the file and moves the stage to `plan-review`. Then:
    item it unblocks into real steps and todo items, and resolve the thread.
 1. `plantool session comment list --session <ref> --kind human --unresolved --context --json`
    (note the `seq`).
-2. Revise the plan for each comment. Reply on the thread with what changed
-   (`plantool session comment add --session <ref> --parent <id> --body "…"`) and resolve it
-   (`plantool session comment resolve --session <ref> --id <id>`).
+2. Answer questions on their threads and leave them open for the human. For requests, revise
+   the plan, reply with what changed (`plantool session comment add --session <ref> --parent <id>
+   --body "…"`), then resolve them (`plantool session comment resolve --session <ref> --id <id>`).
 3. `plantool session watch --session <ref> --since <seq> --timeout 900` and go back to 1.
 
 Stop looping when the stage becomes `approved` (then the implement skill applies) or the human

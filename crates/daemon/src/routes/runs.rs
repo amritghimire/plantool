@@ -3,6 +3,7 @@ use super::{actor_from, bad_request, ApiError};
 use crate::providers::RunInput;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
+use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -17,6 +18,8 @@ pub struct StartBody {
     pub stage: String,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
     #[serde(default)]
@@ -37,6 +40,16 @@ fn parse_mode(s: &str) -> Result<PermissionMode, ApiError> {
 async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, Json(body): Json<StartBody>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let provider = Provider::parse(&body.provider).ok_or_else(|| bad_request(format!("unknown provider {}", body.provider)))?;
+    if provider == Provider::Ollama {
+        let model = body.model.as_deref().filter(|m| !m.is_empty()).ok_or_else(|| bad_request("choose an installed Ollama model"))?;
+        let installed = tokio::task::spawn_blocking(crate::providers::ollama_models).await.map_err(|e| bad_request(e.to_string()))?.map_err(bad_request)?;
+        if !installed.iter().any(|option| option.id == model) { return Err(bad_request(format!("Ollama model {model} is not installed"))); }
+    }
+    if let Some(effort) = body.effort.as_deref() {
+        if !matches!(effort, "low" | "medium" | "high" | "xhigh" | "max") {
+            return Err(bad_request("unknown reasoning effort"));
+        }
+    }
     let stage_name = body.stage.as_str();
     let current = s.stage();
     let target = match stage_name {
@@ -138,6 +151,9 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
         .map(parse_mode)
         .transpose()?
         .unwrap_or_default();
+    if provider == Provider::Ollama && stage_name != "assist" && !matches!(mode, PermissionMode::Auto | PermissionMode::AllowAll) {
+        return Err(bad_request("Ollama stage runs need Auto or Allow all permissions so OpenCode can use plantool commands"));
+    }
     let run = state.runs.start(
         s.clone(),
         provider,
@@ -145,6 +161,7 @@ async fn start(State(state): State<AppState>, Path((repo, slug)): Path<(String, 
         stage_name,
         prompt.clone(),
         body.model.clone(),
+        body.effort.clone(),
         resume,
         mode,
         implementation_mode,
@@ -349,9 +366,25 @@ async fn providers() -> Json<serde_json::Value> {
     Json(json!({ "providers": list }))
 }
 
+async fn upload_attachment(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, headers: HeaderMap, body: Bytes) -> Result<Json<serde_json::Value>, ApiError> {
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    if body.is_empty() || body.len() > 10 * 1024 * 1024 {
+        return Err(bad_request("Choose a file between 1 byte and 10 MB"));
+    }
+    let original = headers.get("x-plantool-filename").and_then(|v| v.to_str().ok()).unwrap_or("attachment");
+    let safe: String = original.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).take(100).collect();
+    let name = format!("{}-{}", uuid::Uuid::new_v4().simple(), if safe.is_empty() { "attachment" } else { &safe });
+    let dir = s.store.dir.join("attachments");
+    tokio::fs::create_dir_all(&dir).await.map_err(anyhow::Error::from)?;
+    let path = dir.join(name);
+    tokio::fs::write(&path, body).await.map_err(anyhow::Error::from)?;
+    Ok(Json(json!({ "name": original, "path": path })))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/providers", get(providers))
+        .route("/sessions/{repo}/{slug}/attachments", post(upload_attachment))
         .route("/sessions/{repo}/{slug}/runs", post(start))
         .route("/sessions/{repo}/{slug}/runs/{id}/input", post(input))
         .route("/sessions/{repo}/{slug}/runs/{id}/milestone", get(milestone))

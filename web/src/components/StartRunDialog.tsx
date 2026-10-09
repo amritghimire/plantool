@@ -2,8 +2,18 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { PERMISSION_MODES, type ImplementationMode, type PermissionMode, type Run } from "../types";
 import { relTime } from "../lib/format";
+import { providerLabel, savedAgentSetting, saveAgentSettings } from "../lib/agents";
+import { ProviderSetup } from "./ProviderSetup";
 
 export type RunStage = "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr";
+const STAGE_TEXT: Record<RunStage, { label: string; hint: string }> = {
+  research: { label: "Research", hint: "The agent reads the repository and writes research.md for review." },
+  plan: { label: "Plan", hint: "The agent turns the brief and research into plan.md for your approval." },
+  implement: { label: "Implement", hint: "The agent follows the approved plan and updates the code." },
+  critique: { label: "Review document", hint: "The agent reads the current document and leaves comments for you to review." },
+  assist: { label: "Ask for help", hint: "The agent answers your request without moving the session to another stage." },
+  "draft-pr": { label: "Draft PR", hint: "The agent prepares PR text from the implementation." },
+};
 import { CopyButton } from "./CopyButton";
 
 interface ProviderInfo {
@@ -28,7 +38,8 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   });
   const resumable = [...runs].filter((r) => r.provider === provider && r.provider_session_id && !(r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle")).sort((a, b) => b.started_at.localeCompare(a.started_at));
   const [resume, setResume] = useState<string>(resumeId ?? "");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState(() => resumeTarget?.model || savedAgentSetting(provider, "model"));
+  const [effort, setEffort] = useState(() => savedAgentSetting(provider, "effort"));
   const [prompt, setPrompt] = useState(initialPrompt);
   const [permission, setPermission] = useState<PermissionMode>(() => {
     try {
@@ -46,6 +57,11 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   const [handoff, setHandoff] = useState<"stop" | "keep" | null>(null);
   const [liveRuns, setLiveRuns] = useState<Run[]>(runs.filter(isLive));
   useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, onClose]);
+  useEffect(() => {
     api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message));
   }, []);
   useEffect(() => {
@@ -60,12 +76,14 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
   const current = providers?.find((p) => p.id === provider);
+  useEffect(() => { if (provider === "ollama" && current && !current.models.some((item) => item.id === model)) setModel(current.models[0]?.id ?? ""); }, [provider, current, model]);
   const start = async () => {
     setBusy(true);
     setErr(null);
     try {
       localStorage.setItem("plantool.provider", provider);
       localStorage.setItem("plantool.permission", permission);
+      saveAgentSettings(provider, model, effort);
     } catch {
       // ignore
     }
@@ -88,7 +106,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         const final = await api.session(sessionKey);
         if (!active.every((run) => final.runs.some((item) => item.id === run.id && ["stopped", "failed"].includes(item.status)))) throw new Error("The previous run has not ended. Nothing new was started.");
       }
-      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
+      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, effort: effort || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
       onStarted(r.run.id);
       onClose();
     } catch (e) {
@@ -98,33 +116,29 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     }
   };
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>{resume ? "Resume run" : `Start ${stage} run`}</h3>
-        <p className="muted small">The agent runs in the session's checkout and writes to the session folder. You can also run it in your own terminal: ask your agent to run <code>plantool skill</code>.</p>
+        <h3>{resume ? "Resume run" : STAGE_TEXT[stage].label}</h3>
+        <p className="muted small">{STAGE_TEXT[stage].hint}</p>
         <label>
           Stage
           <select value={stage} disabled={!!resumeTarget} onChange={(e) => setStage(e.target.value as RunStage)}>
-            <option value="research">research</option>
-            <option value="plan">plan</option>
-            <option value="implement">implement (needs an approved plan)</option>
-            <option value="critique">critique: review the document and post findings as comments</option>
-            <option value="assist">assist: ask for help without changing stage</option>
-            <option value="draft-pr">draft PR text</option>
+            {(Object.entries(STAGE_TEXT) as [RunStage, { label: string; hint: string }][]).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}
           </select>
         </label>
         <label>
           Provider
-          <select value={provider} disabled={!!resumeTarget} onChange={(e) => { setProvider(e.target.value); setModel(""); }}>
-            {(providers ?? [{ id: "claude", available: true, models: [] }, { id: "codex", available: true, models: [] }, { id: "opencode", available: true, models: [] }]).map((p) => (
+          <select value={provider} disabled={!!resumeTarget} onChange={(e) => { setProvider(e.target.value); setModel(savedAgentSetting(e.target.value, "model")); setEffort(savedAgentSetting(e.target.value, "effort")); }}>
+            {(providers ?? [{ id: "claude", available: true, models: [] }, { id: "codex", available: true, models: [] }, { id: "copilot", available: true, models: [] }, { id: "ollama", available: true, models: [] }, { id: "opencode", available: true, models: [] }]).map((p) => (
               <option key={p.id} value={p.id} disabled={!p.available}>
-                {p.id}
+                {providerLabel(p.id)}
                 {p.version ? ` ${p.version}` : ""}
                 {!p.available ? " (not found)" : ""}
               </option>
             ))}
           </select>
         </label>
+        {providers && <ProviderSetup providers={providers} />}
         {current?.error && <div className="error">{current.error}</div>}
         {resumable.length > 0 && (
           <label>
@@ -149,7 +163,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           Model
           {current && current.models.length > 0 ? (
             <select value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="">default</option>
+              {provider !== "ollama" && <option value="">default</option>}
               {current.models.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
@@ -157,9 +171,12 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
               ))}
             </select>
           ) : (
-            <input value={model} placeholder="default" onChange={(e) => setModel(e.target.value)} />
+            <input value={model} placeholder={provider === "ollama" ? "No installed model found" : "default"} disabled={provider === "ollama"} onChange={(e) => setModel(e.target.value)} />
           )}
         </label>
+        {(provider === "claude" || provider === "codex") && <fieldset className="effort-picker"><legend>Reasoning effort</legend><div className="seg effort-options">
+          {(provider === "claude" ? ["", "low", "medium", "high", "max"] : ["", "low", "medium", "high", "xhigh"]).map((value) => <button key={value} type="button" className={effort === value ? "active" : ""} onClick={() => setEffort(value)}>{value === "" ? "Auto" : value === "xhigh" ? "X-high" : value[0].toUpperCase() + value.slice(1)}</button>)}
+        </div></fieldset>}
         <label>
           Permissions
           <select value={permission} onChange={(e) => setPermission(e.target.value as PermissionMode)}>
@@ -169,8 +186,9 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
               </option>
             ))}
           </select>
-          <span className="muted small">{PERMISSION_MODES.find((m) => m.id === permission)?.hint}</span>
+          <span className="muted small">{["copilot", "ollama"].includes(provider) && permission === "ask" ? "This mode can read files. Choose Auto to let it edit files or run commands." : PERMISSION_MODES.find((m) => m.id === permission)?.hint}</span>
         </label>
+        {provider === "ollama" && stage !== "assist" && permission !== "auto" && permission !== "allow-all" && <div className="banner small">Choose Auto or Allow all to run this stage. OpenCode needs command access to update the session.</div>}
         {stage === "implement" && (
           <label>
             Implementation pace
@@ -211,8 +229,8 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           <button className="btn ghost" onClick={onClose} type="button">
             Cancel
           </button>
-          <button className="btn primary" disabled={busy || (stage === "assist" && !prompt.trim()) || (liveRuns.length > 0 && !handoff) || (current ? !current.available : false)} onClick={() => void start()} type="button">
-            Start
+          <button className="btn primary" disabled={busy || (stage === "assist" && !prompt.trim()) || (liveRuns.length > 0 && !handoff) || (current ? !current.available : false) || (provider === "ollama" && (!model || (stage !== "assist" && permission !== "auto" && permission !== "allow-all")))} onClick={() => void start()} type="button">
+            {busy ? "Starting…" : resume ? "Resume run" : `Start ${STAGE_TEXT[stage].label.toLowerCase()}`}
           </button>
         </div>
       </div>

@@ -111,7 +111,9 @@ fn codex_sandbox_policy(mode: PermissionMode, writable_roots: &[std::path::PathB
 pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: EventSink) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "codex".into());
     let mut cmd = Command::new(&exe);
-    cmd.arg("app-server").arg("--stdio").current_dir(&opts.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.arg("app-server").arg("--stdio");
+    if let Some(effort) = &opts.effort { cmd.arg("-c").arg(format!("model_reasoning_effort={effort}")); }
+    cmd.current_dir(&opts.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().with_context(|| format!("failed to start {}", exe.display()))?;
     let stdin = child.stdin.take().context("no stdin")?;
     let stdout = child.stdout.take().context("no stdout")?;

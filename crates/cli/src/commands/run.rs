@@ -4,7 +4,7 @@ use clap::Args as ClapArgs;
 #[derive(ClapArgs)]
 pub struct Args {
     pub reference: String,
-    /// Agent provider: claude, codex or opencode (default: claude, or PLANTOOL_PROVIDER).
+    /// Agent provider: claude, codex, copilot, ollama or opencode (default: claude, or PLANTOOL_PROVIDER).
     #[arg(long)]
     pub provider: Option<String>,
     #[arg(long)]

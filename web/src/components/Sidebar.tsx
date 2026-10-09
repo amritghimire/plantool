@@ -119,6 +119,9 @@ export function Sidebar(p: SidebarProps) {
       <div className="side-block">
         <div className="side-title">{s.title}</div>
         <div className="muted small">{p.view.key}</div>
+        {s.worktree && p.view.workspace_branch === null && <div className="error small">Workspace missing, detached, or no longer in this repository. Open workspace details to choose a valid worktree.</div>}
+        {s.pull_request && <div className="small">PR <a href={s.pull_request.url} target="_blank" rel="noreferrer">#{s.pull_request.number}</a> · {s.pull_request.state.toLowerCase()}{s.pull_request.draft ? " draft" : ""} <button className="link" type="button" onClick={p.onRefreshPr}>Refresh</button><span className="muted">checked {relTime(s.pull_request.updated_at)}</span></div>}
+        <details className="session-context"><summary>Workspace details</summary>
         <div className="workspace-detail" title={workspacePath(s)}>
           <span className="muted small">Workspace <button className="link" type="button" onClick={() => {
             setWorkspaceError(null);
@@ -129,7 +132,6 @@ export function Sidebar(p: SidebarProps) {
             <CopyButton text={workspacePath(s)} label="Copy" className="btn ghost small workspace-copy" />
           </span>
         </div>
-        {s.worktree && p.view.workspace_branch === null && <div className="error small">Workspace missing, detached, or no longer in this repository. Refresh to choose a valid worktree.</div>}
         {workspaceCheck?.missing && <div className="error small">Recorded workspace is missing or no longer belongs to this repository. New runs are blocked until you choose a valid workspace.</div>}
         {workspaceCheck?.candidates.filter((candidate) => candidate.root !== s.worktree).map((candidate) => (
           <button key={candidate.root} className="link small" type="button" onClick={() => {
@@ -146,21 +148,13 @@ export function Sidebar(p: SidebarProps) {
           created {relTime(s.created_at)}
           {s.created_in && s.created_in !== s.repo.root ? ` from ${shortPath(s.created_in)}` : ""}
         </div>
-        {s.pull_request && <div className="small">PR <a href={s.pull_request.url} target="_blank" rel="noreferrer">#{s.pull_request.number}</a> · {s.pull_request.state.toLowerCase()}{s.pull_request.draft ? " draft" : ""} <button className="link" type="button" onClick={p.onRefreshPr}>Refresh</button><span className="muted">checked {relTime(s.pull_request.updated_at)}</span></div>}
+        </details>
       </div>
 
-      <Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} />
-
-      <ol className="stepper">
-        {STAGES.map((st, i) => (
-          <li key={st} className={i < idx ? "done" : i === idx ? "current" : ""}>
-            <span className="dot" />
-            <span>{STAGE_LABEL[st]}</span>
-          </li>
-        ))}
-      </ol>
-
       <div className="side-block actions">
+        <div className="side-heading">Next step</div>
+        {stage === "new" && !s.brief && <div className="muted small">Add a brief below so the agent knows what success looks like.</div>}
+        {liveRun && <div className="run-handoff"><span className={`run-status ${liveRun.status}`} /><span>{liveRun.status === "waiting" ? "The agent needs your answer." : liveRun.status === "idle" ? "The agent finished its turn. Review its work or send a follow-up." : "The agent is working. Follow its progress here."}</span><button className="btn small" type="button" onClick={() => p.onSelectRun(liveRun.id)}>Open run</button></div>}
         <button className="btn ghost" onClick={p.onAskAgent} disabled={p.busy} type="button">Ask agent…</button>
         {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
         {stage === "new" && (
@@ -253,14 +247,14 @@ export function Sidebar(p: SidebarProps) {
                 ) : null}
               </>
             )}
-            <button
+            {stage === "implementation-review" && <button
               className="btn primary"
-              disabled={p.busy || (stepMode && stage !== "implementation-review")}
+              disabled={p.busy}
               onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}
               type="button"
             >
               Accept implementation
-            </button>
+            </button>}
           </>
         )}
         {activeDoc?.exists && (activeDoc.kind === "research" || activeDoc.kind === "plan") && (
@@ -284,6 +278,19 @@ export function Sidebar(p: SidebarProps) {
           </select>
         </label>
       </div>
+
+      <Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} />
+
+      <details className="workflow-details"><summary>Workflow · {STAGE_LABEL[stage]}</summary>
+        <ol className="stepper">
+          {STAGES.map((st, i) => (
+            <li key={st} className={i < idx ? "done" : i === idx ? "current" : ""}>
+              <span className="dot" />
+              <span>{STAGE_LABEL[st]}</span>
+            </li>
+          ))}
+        </ol>
+      </details>
 
       <nav className="side-block tabs">
         <DocTab label="Research" doc={research} active={p.activeTab === "research"} onClick={() => p.onTab("research")} />

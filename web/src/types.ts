@@ -125,7 +125,7 @@ export interface State {
   updated_at: string;
 }
 
-export type Provider = "claude" | "codex" | "opencode";
+export type Provider = "claude" | "codex" | "copilot" | "ollama" | "opencode";
 export type PermissionMode = "ask" | "accept-edits" | "auto" | "allow-all";
 export const PERMISSION_MODES: { id: PermissionMode; label: string; hint: string }[] = [
   { id: "ask", label: "Ask", hint: "Every edit and command is confirmed here." },

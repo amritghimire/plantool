@@ -137,7 +137,7 @@ it("offers milestone approval after a step-by-step turn with an editable commit 
   fireEvent.change(message, { target: { value: "Milestone 1: guest home route" } });
   fireEvent.click(screen.getByText("Approve milestone and continue"));
   expect(onApproveMilestone).toHaveBeenCalledWith(run, true, "Milestone 1: guest home route");
-  expect(screen.getByText("Accept implementation")).toBeDisabled();
+  expect(screen.queryByText("Accept implementation")).toBeNull();
 
   fireEvent.click(screen.getByLabelText("commit this milestone"));
   expect(screen.queryByLabelText("Commit message")).toBeNull();

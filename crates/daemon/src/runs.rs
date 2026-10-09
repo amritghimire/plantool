@@ -25,7 +25,7 @@ impl RunManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, resume: Option<String>, permission_mode: PermissionMode, implementation_mode: ImplementationMode, previous_run: Option<&Run>) -> anyhow::Result<Run> {
+    pub fn start(self: &Arc<Self>, session: Arc<LiveSession>, provider: Provider, stage: Stage, stage_name: &str, prompt: String, model: Option<String>, effort: Option<String>, resume: Option<String>, permission_mode: PermissionMode, implementation_mode: ImplementationMode, previous_run: Option<&Run>) -> anyhow::Result<Run> {
         let sess = session.session();
         let head = if implementation_mode == ImplementationMode::StepByStep { crate::git::head_sha(sess.cwd()).ok() } else { None };
         let run = Run {
@@ -54,7 +54,7 @@ impl RunManager {
         let (in_tx, in_rx) = mpsc::channel::<RunInput>(64);
         let (ev_tx, mut ev_rx) = mpsc::channel::<ProviderEvent>(1024);
         self.handles.lock().unwrap_or_else(|e| e.into_inner()).insert(run.id.clone(), Handle { input: in_tx });
-        let opts = RunOptions { cwd: run.cwd.clone(), prompt, model, resume, executable: providers::executable_for(provider), writable_roots: vec![session.store.dir.clone()], permission_mode };
+        let opts = RunOptions { cwd: run.cwd.clone(), prompt, model, effort, resume, executable: providers::executable_for(provider), writable_roots: vec![session.store.dir.clone()], permission_mode };
         let run_id = run.id.clone();
         let manager = self.clone();
         let stage_label = stage_name.to_string();

@@ -14,14 +14,14 @@ pub const STAGES: [&str; 8] = [
 
 pub const ASSIST: &str = r#"Help with plantool session `{key}` at stage `{stage}`.
 
-The checkout is `{checkout}` and the session files are in `{session_dir}`. Read `plantool skill` for the session commands. Answer or carry out the user's request below. Keep the stage unchanged. Before the plan is approved, do not implement it.
+The checkout is `{checkout}` and the session files are in `{session_dir}`. Read `plantool skill` for the session commands. Use the current documents, open comments, and diff when they matter to the request. Answer in plain terms and point to the relevant file or change. Keep the stage unchanged. Before the plan is approved, do not implement it.
 {brief}
 {extra}"#;
 
 pub const DRAFT_PR: &str = r#"Draft a pull request for plantool session `{key}`.
 
-Read the git-workflow skill and its PR voice files. Review the changes and commits in `{checkout}` against `{base}`. Write a title on the first line as `# Title` and the PR body below it to `{session_dir}/pr-draft.md`. Do not push, create a PR, or change the session stage. The human will edit the draft and confirm the final action in the browser.
-If `{checkout}` has uncommitted changes, also write a commit message for them to `{session_dir}/commit-draft.md`: subject line, blank line, body, in the git-workflow commit voice, referencing the session slug `{key}`. Do not commit.
+If the git-workflow skill is available, follow its PR voice. Otherwise, use the repository's recent PRs and commits for style. Review the changes and commits in `{checkout}` against `{base}`. Write a title on the first line as `# Title` and the PR body below it to `{session_dir}/pr-draft.md`. Do not push, create a PR, or change the session stage. The human will edit the draft and confirm the final action in the browser.
+If `{checkout}` has uncommitted changes, also write a commit message for them to `{session_dir}/commit-draft.md`: subject line, blank line, body, in the repository's commit style, referencing the session slug `{key}`. Do not commit.
 {brief}
 {extra}"#;
 
@@ -38,8 +38,7 @@ pub const PLAN: &str = r#"Plan for plantool session `{key}`: {title}
 Run `plantool skill` and then `plantool skill plan`, and follow both. The research, if any, is at `{research_path}`.
 Write the plan to `{plan_path}` (nothing goes into REVIEWS/). The repository checkout is `{checkout}`.
 {brief}
-After writing the plan, loop on the human's comments (`plantool session comment list --session {key} --kind human --unresolved --context`,
-revise, reply, resolve, then `plantool session watch --session {key} --since <seq> --timeout 900`) until the stage is `approved`.
+After writing the plan, post blocking questions as comments on their own lines. Read human comments, revise the plan, reply on each thread, and resolve requests you addressed. Leave question threads open for the human. Wait for new comments or approval as the plan skill describes.
 {extra}"#;
 
 pub const IMPLEMENT: &str = r#"Implement plantool session `{key}`: {title}
@@ -80,10 +79,7 @@ End with one comment on the title line: the verdict (ready, needs updates, or ne
 
 pub const RESUME: &str = r#"Continue plantool session `{key}` ({title}) where you left off; the run was restarted and you keep your context.
 
-Run `plantool skill` if it is no longer in your context. The stage is `{stage}`.
-Read new comments with `plantool session comment list --session {key} --kind human --unresolved --context --json` and act on them
-(revise `{review_doc_path}`, reply on each thread, resolve it), then `plantool session watch --session {key} --since <seq> --timeout 900`
-and carry on as the stage skill says.
+Run `plantool skill` if it is no longer in your context. Check the current stage with `plantool session get --session {key} --json`; it may have changed while this run was stopped. Read new human comments with `plantool session comment list --session {key} --kind human --unresolved --context --json`. Answer questions on their threads and leave them open; for requested changes, update the relevant document or code, reply with what changed, and resolve the thread. Continue the unfinished work for the current stage, following its stage skill. Do not edit the plan during implementation unless the plan needs correction, and do not start a new ticket before milestone approval.
 {brief}
 {extra}"#;
 
@@ -240,6 +236,14 @@ mod tests {
         assert!(p.contains("comment list --session repo/fix-it --kind human --unresolved"), "{p}");
         let p = render_at(Path::new("/nonexistent"), "review", &session(None), dir, None, Stage::PlanReview);
         assert!(p.contains("/d/plan.md"), "{p}");
+    }
+
+    #[test]
+    fn resumed_run_checks_the_current_stage_before_changing_files() {
+        let p = render_at(Path::new("/nonexistent"), "resume", &session(None), Path::new("/d"), None, Stage::ImplementationReview);
+        assert!(p.contains("session get --session repo/fix-it --json"));
+        assert!(p.contains("do not start a new ticket before milestone approval"));
+        assert!(!p.contains("revise `/d/plan.md`"));
     }
 
     #[test]

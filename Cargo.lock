@@ -1256,6 +1256,7 @@ dependencies = [
  "plantool-core",
  "rand 0.8.8",
  "regex",
+ "reqwest",
  "rust-embed",
  "serde",
  "serde_json",

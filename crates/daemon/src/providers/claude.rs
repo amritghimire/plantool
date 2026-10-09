@@ -39,6 +39,9 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
     if let Some(m) = &opts.model {
         cmd.arg("--model").arg(m);
     }
+    if let Some(effort) = &opts.effort {
+        cmd.arg("--effort").arg(effort);
+    }
     if let Some(r) = &opts.resume {
         cmd.arg("--resume").arg(r);
     }

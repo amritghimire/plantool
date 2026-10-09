@@ -23,8 +23,7 @@ changes in [difftool](https://github.com/skshetry/difftool) or your `git difftoo
 - **A brief per session.** `plantool new <slug> --brief "…"` (or edit it in the sidebar) says what
   to research or build. It is rendered into every stage prompt, and the browser shows the prompt to
   paste with a copy button while a document is still missing.
-- **Hosted runs.** Start Claude Code or Codex from the browser; the transcript, tool activity and
-  permission prompts stream into the page. Or run your agent in a terminal and let it use the CLI.
+- **Hosted runs.** Start Claude Code, Codex, GitHub Copilot CLI, or OpenCode with a local Ollama model from the browser. The transcript streams into the page; Claude Code and Codex also show permission prompts. Or run your agent in a terminal and let it use the CLI.
 - **Human-only approval.** `approved` and `done` can only be set from the browser. There is no CLI
   command for them.
 - One self-contained binary, no Node at runtime.
@@ -79,7 +78,7 @@ Or download the archive for your platform from the
 binary and put it on your `PATH`. Upgrade later with `plantool update`, which verifies the
 release checksum before swapping the binary.
 
-For hosted runs you need `claude` (Claude Code 2.1+) and/or `codex` on your `PATH`. difftool is
+For hosted runs you need `claude` (Claude Code 2.1+), `codex`, and/or `copilot` on your `PATH`. For Ollama runs, start Ollama, install `opencode`, and pull a model. The model picker reads the installed models from Ollama. Choose Auto or Allow all permissions for Ollama stage runs so OpenCode can run the session commands. Ask agent can attach files up to 10 MB each and lets you choose a live run, resume a stopped run, or start a new one with a model and reasoning effort. Copilot and OpenCode run in programmatic mode; tool approval prompts are unavailable in those modes. difftool is
 optional and used for the change review when present.
 
 ## How a session moves
@@ -105,7 +104,7 @@ approve straight away. In that case the agent first writes a ticket list (todo i
 | `plantool new <slug> [--brief <text> \| --brief-file <path>] [--repo <path>] [--worktree] [--base <branch>] [--mirror]` | Create or reopen a session for the git checkout containing the current directory, and print the prompt for the next stage |
 | `plantool list [--repo .] [--stage <s>]` | The inbox. The browser's list page has a **New session** button with your recent repositories to pick from |
 | `plantool open <ref>` | Open a session in the browser |
-| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>] [--step-by-step]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context |
+| `plantool research\|plan\|implement <ref> [--provider claude\|codex\|copilot\|ollama] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>] [--step-by-step]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context. Ollama requires `--model`. |
 | `plantool critique <ref>` | Have an agent critically review the research or plan and post findings as anchored comments (also the "Review with agent" button) |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
 | `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |

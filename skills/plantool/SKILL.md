@@ -90,6 +90,10 @@ call. `comment context --id <id>` does the same for one comment.
   changes the stage. `watch` prints one NDJSON event per line and exits; `--timeout <s>` exits 124
   on silence. Loop: watch → read → revise → reply → watch. Stop looping when the stage becomes
   `approved` (then implement) or the user tells you to stop.
+- **Resume**: read the current stage again before acting. A run may have stopped before the human
+  approved the plan or accepted the implementation. Continue the work for the stage that is
+  current now, and read the open comment board first. During step-by-step implementation, wait
+  for the human to approve a milestone before starting another ticket.
 
 ## Implementation
 

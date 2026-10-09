@@ -56,6 +56,25 @@ async fn call(app: &axum::Router, method: &str, path: &str, body: Option<Value>,
 }
 
 #[tokio::test]
+async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
+    let h = harness();
+    let (status, created) = call(&h.app, "POST", "/api/sessions", Some(json!({ "slug": "upload", "cwd": h.repo })), false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::CREATED);
+    let key = created["session"]["key"].as_str().unwrap();
+    let path = format!("/api/sessions/{key}/attachments");
+    let upload = |bytes: &'static [u8]| Request::builder().method("POST").uri(&path).header(header::HOST, "127.0.0.1")
+        .header("x-plantool-actor", "tok").header("x-plantool-filename", "notes / plan.txt")
+        .body(Body::from(bytes)).unwrap();
+    let response = h.app.clone().oneshot(upload(b"review context")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let saved = std::path::PathBuf::from(body["path"].as_str().unwrap());
+    assert_eq!(std::fs::read(&saved).unwrap(), b"review context");
+    assert!(saved.file_name().unwrap().to_string_lossy().ends_with("notes___plan.txt"));
+    assert_eq!(h.app.clone().oneshot(upload(b"")).await.unwrap().status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn full_session_flow() {
     let h = harness();
     let app = &h.app;

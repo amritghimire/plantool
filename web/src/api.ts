@@ -78,7 +78,7 @@ export const api = {
   changes: (key: string, scope?: ChangeScope) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes${scope ? `?scope=${scope}` : ""}`),
   openChanges: (key: string, scope?: ChangeScope) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, { scope: scope ?? null }),
   changesFile: (key: string, path: string, scope?: ChangeScope) => request<FileDiff>("GET", `/api/sessions/${key}/changes/file?path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ""}`),
-  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  startRun: (key: string, body: { provider: string; stage: string; model?: string; effort?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
   prompt: (key: string, stage: PromptStage, extra?: string, implementationMode?: string, resumeRun?: string) => {
     const query = new URLSearchParams();
     if (extra) query.set("extra", extra);
@@ -101,6 +101,16 @@ export const api = {
   },
   setWorktreeDir: (scope: "global" | "repo", value: string | null, repo?: string) => request<WorktreeDirSetting>("POST", "/api/settings/worktree-dir", { scope, repo, value }),
   providers: () => request<{ providers: { id: string; available: boolean; version?: string; error?: string; models: { id: string; label: string }[] }[] }>("GET", "/api/providers"),
+  uploadAttachment: async (key: string, file: File): Promise<{ name: string; path: string }> => {
+    const res = await fetch(`/api/sessions/${key}/attachments`, {
+      method: "POST",
+      headers: { "x-plantool-actor": token(), "x-plantool-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
+      body: file,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new ApiError(res.status, data.error ?? "Upload failed");
+    return data;
+  },
 };
 
 export function liveUrl(key: string): string {

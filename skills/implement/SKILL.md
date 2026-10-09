@@ -81,4 +81,8 @@ and tick each one as you finish it.
    `plantool changes <ref>` opens difftool (if installed) or `git difftool`. If a difftool review
    exists, the `difftool review` skill applies to comments there.
 4. Read any comments (`plantool session comment list --session <ref> --kind human --unresolved
-   --context`), act on them, reply, resolve, and `watch` until the human accepts.
+   --context`). Answer questions on their threads and leave them open for the human. Address
+   change requests, reply with what changed, and resolve them. In a hosted run, finish the turn
+   after handing off the implementation review; the app can send new feedback into the run.
+   When working in a terminal and asked to stay available, use `plantool session watch` for
+   further comments until the human accepts.

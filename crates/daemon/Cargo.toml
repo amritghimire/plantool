@@ -22,6 +22,7 @@ which.workspace = true
 futures.workspace = true
 rand.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 rust-embed.workspace = true
 
 [dev-dependencies]
