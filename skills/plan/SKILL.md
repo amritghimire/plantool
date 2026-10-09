@@ -75,14 +75,14 @@ Ordered, with short code snippets that match the codebase's patterns.
 ## Testing
 Unit, integration, manual.
 
-## Todo
+## Tasks
 ### Phase 1: <name>
 - [ ] task
 ### Phase 2: <name>
 - [ ] task
 ```
 
-The Todo checkboxes are the tickets the implementation works through, one at a time, and they
+The Todo checkboxes are the tasks the implementation works through, one at a time, and they
 drive the progress bars, so make each one a concrete, verifiable step. For small work the plan
 can be just Summary and Todo; drop the other sections rather than padding them.
 
@@ -96,13 +96,23 @@ The daemon captures the file and moves the stage to `plan-review`. Then:
 0. Post every blocking question as a comment on its own line, so the human answers it in the
    browser: `plantool session comment add --session <ref> --kind plan --match "<question line>" --body "<the options and your recommendation>"`.
    When the human answers, write the decision under "Decisions", turn any "Not yet specified"
-   item it unblocks into real steps and todo items, and resolve the thread.
+   item it unblocks into real steps and tasks, and ask the owner to resolve the thread.
 1. `plantool session comment list --session <ref> --kind human --unresolved --context --json`
    (note the `seq`).
 2. Answer questions on their threads and leave them open for the human. For requests, revise
    the plan, reply with what changed (`plantool session comment add --session <ref> --parent <id>
-   --body "…"`), then resolve them (`plantool session comment resolve --session <ref> --id <id>`).
+   --body "…"`), propose resolution with `--proposes-resolve` and leave resolution to the owner.
 3. `plantool session watch --session <ref> --since <seq> --timeout 900` and go back to 1.
 
 Stop looping when the stage becomes `approved` (then the implement skill applies) or the human
 tells you to stop.
+
+## Review sections
+
+Include `## Assumptions`, `## Risks`, and `## Decisions needed` before the task list.
+Write one decision per item with the recommended choice and the effect of each option.
+If no decisions remain, say so. The browser shows these sections as review cards.
+
+Include `### Affected files` with a Markdown table whose first column is `Path`.
+Use repository-relative paths in backticks and `dir/*` for a whole directory. The Changes
+view uses this table for a heuristic drift check; it does not prove that tasks are complete.

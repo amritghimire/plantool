@@ -166,6 +166,18 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => { setInput(draftKey ? getDraft(draftKey) : ""); }, [draftKey]);
   const { items, pending, turns } = useMemo(() => projectRun(lines), [lines]);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (pending.length) {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && (active.matches("textarea, input") || active.isContentEditable)) return;
+      previousFocus.current = active;
+      document.querySelector<HTMLElement>(".permission button, .permission input")?.focus();
+    } else if (previousFocus.current?.isConnected) {
+      previousFocus.current.focus();
+      previousFocus.current = null;
+    }
+  }, [pending[0]?.request_id]);
   const segments = useMemo(() => {
     if (!turns.length) return [{ id: "transcript", items, completed: !run || !["starting", "running", "waiting", "idle"].includes(run.status), duration: undefined }];
     const groups: { id: string; items: Item[]; completed: boolean; duration?: string }[] = [];
@@ -227,7 +239,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
             disabled={busy}
             onChange={(e) => void send({ permission_mode: e.target.value as PermissionMode })}
           >
-            {PERMISSION_MODES.map((m) => (
+            {PERMISSION_MODES.filter((m) => m.id !== "ask" || !["copilot", "ollama"].includes(run.provider)).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>

@@ -37,13 +37,21 @@ export type DocKind = "research" | "plan" | "investigation" | "quick-fix" | "des
 export type CommentKind = "human" | "agent";
 export type Actor = "human" | "agent";
 
+export type CommentType = "note" | "blocker" | "question" | "suggestion" | "change-approach";
+export type AnchorScope = "line" | "section" | "document";
+
+export interface CodeAnchor { path: string; side: string; line: number; context: string }
 export interface Anchor {
+  code?: CodeAnchor | null;
+  scope?: AnchorScope;
   line: number;
   text: string;
   outdated: boolean;
 }
 
 export interface Comment {
+  type?: CommentType;
+  proposes_resolve?: boolean;
   id: string;
   doc: DocKind;
   anchor: Anchor;
@@ -81,6 +89,8 @@ export interface Checkout {
 }
 
 export interface Session {
+  pause_rule?: { mode: "every-milestone" | "no-pauses" | "plain-language"; rule?: string };
+  difftool?: string | null;
   repo_slug: string;
   slug: string;
   title: string;
@@ -117,6 +127,14 @@ export type ChangeReview =
   | { tool: "git-difftool"; opened_at: string };
 
 export interface State {
+  pause_reason?: string | null;
+  milestones?: { key: string; status: string; completed_tasks: string[]; run_id: string | null }[];
+  proposals?: { id: string; kind: string; old: string; new: string; reason: string }[];
+  plan_revision_pending?: boolean;
+  plan_change?: string | null;
+  approved?: { sha: string; at: string; override_reason: string | null; open_blockers: string[] } | null;
+  viewed?: Record<string, string>;
+  activity?: { seq: number; at: string; type: string; summary: string }[];
   stage: Stage;
   comments: Comment[];
   docs: Record<string, { sha: string; captured_at: string; lines: number }>;
@@ -137,6 +155,9 @@ export type RunStatus = "starting" | "running" | "waiting" | "idle" | "stopped" 
 export type ImplementationMode = "all-at-once" | "step-by-step";
 
 export interface Run {
+  milestone_key?: string | null;
+  plan_sha?: string | null;
+  idle_stopped?: boolean;
   id: string;
   provider: Provider;
   provider_session_id: string | null;
@@ -160,6 +181,8 @@ export interface Run {
 }
 
 export interface SessionView {
+  handoff?: { label: string; action: string; step: string };
+  step?: string;
   key: string;
   url_path: string;
   dir: string;
@@ -168,6 +191,7 @@ export interface SessionView {
   docs: DocSummary[];
   runs: Run[];
   open_comments: number;
+  branch_now?: string | null;
   workspace_branch?: string | null;
   commit?: CommitJob | null;
 }
@@ -217,6 +241,9 @@ export interface FileStat {
 export type ChangeScope = "step" | "all";
 
 export interface ChangesResponse {
+  difftool_open_comments?: number | null;
+  milestones?: { key: string; status: string; completed_tasks: string[] }[];
+  drift?: { checked: boolean; planned_files: string[]; outside_files: string[]; ticks_without_diff: boolean; plan_changed: boolean };
   tool: "difftool" | "git-difftool" | "none";
   scope: ChangeScope;
   base: string;

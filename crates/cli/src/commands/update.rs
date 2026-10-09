@@ -43,7 +43,11 @@ struct Asset {
 }
 
 fn http() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder().user_agent(format!("plantool/{}", crate::VERSION)).timeout(std::time::Duration::from_secs(120)).build().expect("http client")
+    reqwest::blocking::Client::builder()
+        .user_agent(format!("plantool/{}", crate::VERSION))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("http client")
 }
 
 pub fn run(a: Args) -> anyhow::Result<()> {
@@ -54,17 +58,30 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         None => format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"),
     };
     let release: Release = match &a.tag {
-        Some(_) => client.get(&url).send()?.error_for_status().context("fetching the release from GitHub")?.json()?,
+        Some(_) => client
+            .get(&url)
+            .send()?
+            .error_for_status()
+            .context("fetching the release from GitHub")?
+            .json()?,
         None => {
             let resp = client.get(&url).send()?;
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                let mut list: Vec<Release> = client.get(format!("https://api.github.com/repos/{REPOSITORY}/releases?per_page=1")).send()?.error_for_status()?.json()?;
+                let mut list: Vec<Release> = client
+                    .get(format!(
+                        "https://api.github.com/repos/{REPOSITORY}/releases?per_page=1"
+                    ))
+                    .send()?
+                    .error_for_status()?
+                    .json()?;
                 if list.is_empty() {
                     bail!("{REPOSITORY} has no releases yet");
                 }
                 list.remove(0)
             } else {
-                resp.error_for_status().context("fetching the release from GitHub")?.json()?
+                resp.error_for_status()
+                    .context("fetching the release from GitHub")?
+                    .json()?
             }
         }
     };
@@ -82,11 +99,28 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         bail!("automatic update is not supported on Windows yet; download plantool-{plat}.zip from https://github.com/{REPOSITORY}/releases/tag/{}", release.tag_name);
     }
     let archive_name = format!("plantool-{plat}.tar.gz");
-    let asset = release.assets.iter().find(|x| x.name == archive_name).with_context(|| format!("release {} has no {archive_name}", release.tag_name))?;
-    let sums = release.assets.iter().find(|x| x.name == "SHA256SUMS.txt").context("release has no SHA256SUMS.txt")?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|x| x.name == archive_name)
+        .with_context(|| format!("release {} has no {archive_name}", release.tag_name))?;
+    let sums = release
+        .assets
+        .iter()
+        .find(|x| x.name == "SHA256SUMS.txt")
+        .context("release has no SHA256SUMS.txt")?;
     println!("downloading {archive_name} ({} bytes)", asset.size);
-    let bytes = client.get(&asset.browser_download_url).send()?.error_for_status()?.bytes()?.to_vec();
-    let sums_text = client.get(&sums.browser_download_url).send()?.error_for_status()?.text()?;
+    let bytes = client
+        .get(&asset.browser_download_url)
+        .send()?
+        .error_for_status()?
+        .bytes()?
+        .to_vec();
+    let sums_text = client
+        .get(&sums.browser_download_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
     let expected = sums_text
         .lines()
         .find_map(|l| {

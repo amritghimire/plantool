@@ -75,6 +75,10 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     if (resume && !resumable.some((r) => r.id === resume)) setResume("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
+  const [milestones, setMilestones] = useState<{ key: string; status: string }[]>([]);
+  const [milestone, setMilestone] = useState("");
+  const [customPause, setCustomPause] = useState<string | null>(null);
+  useEffect(() => { if (stage !== "implement") return; void api.session(sessionKey).then((v) => { setMilestones(v.state?.milestones ?? []); if (v.session.pause_rule?.mode === "plain-language") setCustomPause(v.session.pause_rule.rule ?? ""); }).catch(() => {}); }, [sessionKey, stage]);
   const current = providers?.find((p) => p.id === provider);
   useEffect(() => { if (provider === "ollama" && current && !current.models.some((item) => item.id === model)) setModel(current.models[0]?.id ?? ""); }, [provider, current, model]);
   const start = async () => {
@@ -106,7 +110,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         const final = await api.session(sessionKey);
         if (!active.every((run) => final.runs.some((item) => item.id === run.id && ["stopped", "failed"].includes(item.status)))) throw new Error("The previous run has not ended. Nothing new was started.");
       }
-      const r = await api.startRun(sessionKey, { provider, stage, model: model || undefined, effort: effort || undefined, prompt: prompt || undefined, permission_mode: permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
+      const r = await api.startRun(sessionKey, { milestone: milestone || undefined, pause_rule: stage === "implement" ? customPause !== null ? { mode: "plain-language", rule: customPause } : { mode: implementationMode === "step-by-step" ? "every-milestone" : "no-pauses" } : undefined, provider, stage, model: model || undefined, effort: effort || undefined, prompt: prompt || undefined, permission_mode: permission === "ask" && ["copilot", "ollama"].includes(provider) ? "accept-edits" : permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
       onStarted(r.run.id);
       onClose();
     } catch (e) {
@@ -138,7 +142,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
             ))}
           </select>
         </label>
-        {providers && <ProviderSetup providers={providers} />}
+        {providers && <ProviderSetup providers={providers} onRecheck={() => void api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message))} />}
         {current?.error && <div className="error">{current.error}</div>}
         {resumable.length > 0 && (
           <label>
@@ -179,8 +183,8 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         </div></fieldset>}
         <label>
           Permissions
-          <select value={permission} onChange={(e) => setPermission(e.target.value as PermissionMode)}>
-            {PERMISSION_MODES.map((m) => (
+          <select value={permission === "ask" && ["copilot", "ollama"].includes(provider) ? "accept-edits" : permission} onChange={(e) => setPermission(e.target.value as PermissionMode)}>
+            {PERMISSION_MODES.filter((m) => m.id !== "ask" || !["copilot", "ollama"].includes(provider)).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>
@@ -189,6 +193,8 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           <span className="muted small">{["copilot", "ollama"].includes(provider) && permission === "ask" ? "This mode can read files. Choose Auto to let it edit files or run commands." : PERMISSION_MODES.find((m) => m.id === permission)?.hint}</span>
         </label>
         {provider === "ollama" && stage !== "assist" && permission !== "auto" && permission !== "allow-all" && <div className="banner small">Choose Auto or Allow all to run this stage. OpenCode needs command access to update the session.</div>}
+        {stage === "implement" && customPause !== null && <label>Checkpoint rule<textarea value={customPause} onChange={(e) => setCustomPause(e.target.value)} /><button type="button" className="btn ghost" onClick={() => setCustomPause(null)}>Use implementation pace instead</button></label>}
+        {stage === "implement" && milestones.length > 0 && !resume && <label>Milestone <select value={milestone} onChange={(e) => setMilestone(e.target.value)}><option value="">Next pending phase</option>{milestones.filter((m) => m.status === "pending").map((m) => <option key={m.key} value={m.key}>{m.key}</option>)}</select></label>}
         {stage === "implement" && (
           <label>
             Implementation pace
@@ -196,7 +202,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
               <option value="all-at-once">All at once</option>
               <option value="step-by-step">Step by step</option>
             </select>
-            <span className="muted small">{implementationMode === "step-by-step" ? "One plan ticket per turn. Review and commit each milestone before continuing." : "Work through the full plan, then review the whole change."}</span>
+            <span className="muted small">{implementationMode === "step-by-step" ? "One plan phase per run. Review and optionally commit each milestone before continuing." : "Work through the full plan, then review the whole change."}</span>
           </label>
         )}
         {stage === "implement" && (
@@ -229,6 +235,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           <button className="btn ghost" onClick={onClose} type="button">
             Cancel
           </button>
+          {providers && !providers.some((p) => p.available) && preview && <CopyButton text={preview} label="Copy prompt for your terminal agent" className="btn primary" />}
           <button className="btn primary" disabled={busy || (stage === "assist" && !prompt.trim()) || (liveRuns.length > 0 && !handoff) || (current ? !current.available : false) || (provider === "ollama" && (!model || (stage !== "assist" && permission !== "auto" && permission !== "allow-all")))} onClick={() => void start()} type="button">
             {busy ? "Starting…" : resume ? "Resume run" : `Start ${STAGE_TEXT[stage].label.toLowerCase()}`}
           </button>

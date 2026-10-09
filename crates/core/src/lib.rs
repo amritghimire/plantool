@@ -1,12 +1,14 @@
 pub mod anchor;
+pub mod handoff;
 pub mod markdown;
 pub mod model;
+pub mod review;
 pub mod stage;
 
 pub use model::*;
 pub use stage::{transition, Actor, StageError};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DEFAULT_PORT: u16 = 41200;
 
 pub fn now() -> String {

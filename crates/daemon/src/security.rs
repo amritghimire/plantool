@@ -16,7 +16,9 @@ fn host_is_local(host: &str) -> bool {
 }
 
 fn origin_is_local(origin: &str) -> bool {
-    let rest = origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://"));
+    let rest = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
     match rest {
         Some(r) => host_is_local(r.split('/').next().unwrap_or("")),
         None => origin == "null",
@@ -62,8 +64,14 @@ mod tests {
     #[test]
     fn accepts_loopback() {
         assert_eq!(reject_reason(&headers(Some("127.0.0.1:41200"), None)), None);
-        assert_eq!(reject_reason(&headers(Some("localhost"), Some("http://localhost:5173"))), None);
-        assert_eq!(reject_reason(&headers(Some("[::1]:41200"), Some("http://[::1]:41200"))), None);
+        assert_eq!(
+            reject_reason(&headers(Some("localhost"), Some("http://localhost:5173"))),
+            None
+        );
+        assert_eq!(
+            reject_reason(&headers(Some("[::1]:41200"), Some("http://[::1]:41200"))),
+            None
+        );
     }
 
     #[test]

@@ -32,17 +32,30 @@ fn main_root(repo: &Path) -> Result<PathBuf, ApiError> {
     Ok(git::main_root(&checkout.common_dir))
 }
 
-fn describe(state: &AppState, repo: Option<&Path>, preview: Option<&str>) -> Result<serde_json::Value, ApiError> {
+fn describe(
+    state: &AppState,
+    repo: Option<&Path>,
+    preview: Option<&str>,
+) -> Result<serde_json::Value, ApiError> {
     let root = repo.map(main_root).transpose()?;
     let cwd = root.clone().unwrap_or_else(|| state.config.home.clone());
     let global = git::worktree_dir_setting(&cwd, true);
-    let local = root.as_deref().and_then(|r| git::worktree_dir_setting(r, false));
+    let local = root
+        .as_deref()
+        .and_then(|r| git::worktree_dir_setting(r, false));
     let effective = match &root {
         Some(r) => git::worktree_dir_template(r),
-        None => global.clone().unwrap_or_else(|| git::DEFAULT_WORKTREE_DIR.to_string()),
+        None => global
+            .clone()
+            .unwrap_or_else(|| git::DEFAULT_WORKTREE_DIR.to_string()),
     };
-    let template = preview.map(str::trim).filter(|p| !p.is_empty()).unwrap_or(&effective);
-    let example = root.as_deref().map(|r| git::resolve_worktree_dir(r, template, "<slug>"));
+    let template = preview
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(&effective);
+    let example = root
+        .as_deref()
+        .map(|r| git::resolve_worktree_dir(r, template, "<slug>"));
     Ok(json!({
         "key": git::WORKTREE_DIR_KEY,
         "default": git::DEFAULT_WORKTREE_DIR,
@@ -53,18 +66,36 @@ fn describe(state: &AppState, repo: Option<&Path>, preview: Option<&str>) -> Res
     }))
 }
 
-async fn get_worktree_dir(State(state): State<AppState>, Query(q): Query<WorktreeDirQuery>) -> Result<Json<serde_json::Value>, ApiError> {
-    tokio::task::spawn_blocking(move || describe(&state, q.repo.as_deref(), q.preview.as_deref()).map(Json)).await.map_err(|e| anyhow::anyhow!(e))?
+async fn get_worktree_dir(
+    State(state): State<AppState>,
+    Query(q): Query<WorktreeDirQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        describe(&state, q.repo.as_deref(), q.preview.as_deref()).map(Json)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?
 }
 
-async fn set_worktree_dir(State(state): State<AppState>, headers: HeaderMap, Json(body): Json<WorktreeDirBody>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn set_worktree_dir(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<WorktreeDirBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     if actor_from(&headers, &state) != Actor::Human {
-        return Err(ApiError(StatusCode::FORBIDDEN, "only a human can change settings; use the browser or git config".into()));
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only a human can change settings; use the browser or git config".into(),
+        ));
     }
     let global = match body.scope.as_str() {
         "global" => true,
         "repo" => false,
-        other => return Err(bad_request(format!("unknown scope {other}; use global or repo"))),
+        other => {
+            return Err(bad_request(format!(
+                "unknown scope {other}; use global or repo"
+            )))
+        }
     };
     tokio::task::spawn_blocking(move || {
         let root = body.repo.as_deref().map(main_root).transpose()?;
@@ -73,13 +104,62 @@ async fn set_worktree_dir(State(state): State<AppState>, headers: HeaderMap, Jso
             (None, true) => state.config.home.clone(),
             (None, false) => return Err(bad_request("repo is required for the repo scope")),
         };
-        git::set_worktree_dir_setting(&cwd, global, body.value.as_deref()).map_err(|e| bad_request(e.to_string()))?;
+        git::set_worktree_dir_setting(&cwd, global, body.value.as_deref())
+            .map_err(|e| bad_request(e.to_string()))?;
         describe(&state, root.as_deref(), None).map(Json)
     })
     .await
     .map_err(|e| anyhow::anyhow!(e))?
 }
 
+async fn get_difftool(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let value = git::git(
+        &state.config.home,
+        &["config", "--global", "--get", "plantool.difftool"],
+    )
+    .ok();
+    let difftool = match crate::changes::detect_change_tool() {
+        crate::changes::ChangeTool::Difftool { path } => Some(path),
+        _ => None,
+    };
+    Json(
+        json!({"value":value,"difftool":difftool,"tools":["auto","built-in","difftool","git-difftool"]}),
+    )
+}
+#[derive(Deserialize)]
+struct DifftoolBody {
+    value: String,
+    #[serde(default)]
+    confirm: bool,
+}
+async fn set_difftool(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DifftoolBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if actor_from(&headers, &state) != Actor::Human && !body.confirm {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "changing the default diff tool requires owner confirmation".into(),
+        ));
+    }
+    if !["auto", "built-in", "difftool", "git-difftool"].contains(&body.value.as_str()) {
+        return Err(bad_request("unknown diff tool"));
+    }
+    std::fs::create_dir_all(&state.config.home).map_err(anyhow::Error::from)?;
+    git::git(
+        &state.config.home,
+        &["config", "--global", "plantool.difftool", &body.value],
+    )
+    .map_err(|e| bad_request(e.to_string()))?;
+    Ok(get_difftool(State(state)).await)
+}
+
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/settings/worktree-dir", get(get_worktree_dir).post(set_worktree_dir))
+    Router::new()
+        .route(
+            "/settings/worktree-dir",
+            get(get_worktree_dir).post(set_worktree_dir),
+        )
+        .route("/settings/difftool", get(get_difftool).post(set_difftool))
 }

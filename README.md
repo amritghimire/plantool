@@ -4,7 +4,7 @@ Research, plan and implement with your coding agent, and review each step in you
 
 plantool gives the research → plan → implement loop a shared surface. You open a **session** for a
 piece of work on a repo; the agent writes the research and the plan; you read them in a local web
-UI, comment on any line, and watch the agent revise while you read. Only you can approve the plan.
+UI, comment on any line, and watch the agent revise while you read. Only you can approve the plan. This guards against honest mistakes, not a hostile agent.
 Once it is approved the agent implements, ticking the plan's checkboxes live, and you review the
 changes in [difftool](https://github.com/skshetry/difftool) or your `git difftool`.
 
@@ -41,7 +41,7 @@ plantool changes fix-login-timeout  # difftool if installed, else git difftool
 ```
 
 At implementation start, choose **All at once** or **Step by step**. Step by step pauses after each
-plan ticket and opens the current uncommitted changes for review. With difftool, new human comments
+plan phase and opens the current uncommitted changes for review. With difftool, new human comments
 go to the same agent run so it can fix the current milestone. Resolve the comments in difftool,
 commit the milestone in the session checkout if you want a separate commit, then choose
 **Approve milestone and continue** in the sidebar. The CLI offers the same mode with
@@ -94,8 +94,8 @@ A finished session can be dropped from the bottom of the sidebar (documents, com
 transcripts are deleted; the git worktree only if you say so). Only the browser can do this.
 
 Steps can be skipped from the sidebar: start planning without research, or skip planning and
-approve straight away. In that case the agent first writes a ticket list (todo items) to
-`plan.md` from the brief and works through it ticket by ticket, so progress still shows.
+approve straight away. In that case the agent first writes a task list to
+`plan.md` from the brief and works through it phase by phase, so progress still shows.
 
 ## Commands
 
@@ -171,3 +171,58 @@ scripts/smoke.sh                      # end-to-end against target/debug/plantool
 platform and attaches the archives plus `SHA256SUMS.txt` to GitHub Releases.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit.
+
+## Review and resume
+
+A **Session** holds the brief, documents and review history. Research, Plan, Build, Review,
+and Done are its five **Steps**. A **Phase** groups checkbox **Tasks** in a plan; when it is
+built and reviewed it becomes a **Milestone**. An **Agent run** is one provider process.
+Stored stage names and old CLI commands remain compatible.
+
+Comment on a line, section, or whole document. Choose note, blocker, question, suggestion,
+or change approach. An agent can propose a resolution; the owner resolves the thread.
+Open owner blockers stop ordinary plan approval. A recorded reason allows an override.
+Approval pins the plan revision. Task additions, removals, rewording, unticking, and phase
+renaming require acceptance of the revised plan before another build run. Checkbox progress
+and other edits show a revision banner. Compare with the approved or last-viewed revision.
+
+Each named plan phase has its own run and diff window. Choose the next phase in the run
+dialog or `plantool implement <session> --milestone "Phase 2: UI"`. All-at-once proceeds
+through phases without pauses. Checkpoints pause after each milestone or when an agent-judged
+plain-language rule applies. Change the rule between milestones in Where or with
+`plantool session set --session <ref> --pause-rule "Pause before an API change" --confirm`.
+The agent signals a checkpoint with `plantool session pause --session <ref> --reason "…"`.
+
+Where changes workspace, branch, base, and diff tool. Agents use `session propose`; owners
+apply proposals in the browser or use `session set --confirm`. A context switch checks dirty
+files, refs, pending milestone approval, and unanswered requests before stopping and resuming
+a live run. `plantool settings difftool built-in --confirm` sets the global default. A session
+can override it. Missing tools leave the built-in diff available, including code-line comments.
+The drift panel compares changed paths with the plan's affected-files table. It is a heuristic,
+not proof that checked tasks are complete. Difftool comment counts are read-only; resolve those
+comments in difftool.
+
+Idle hosted runs stop after `plantool.idleMinutes` (30 by default; 0 disables this) and keep
+provider context. Owner feedback resumes an idle-stopped run. Stopped runs have a Resume action.
+Reconnect reloads state; a disconnected tab says its view may be stale. Activity and review
+markers help you return after a break. Setup checks Claude and Codex sign-in; Copilot has no
+noninteractive status command, so its sign-in status is shown as unverified unless a token
+is available. Use the setup command and Re-check, or copy the prompt into a terminal agent.
+
+## Portable sessions
+
+`plantool export <ref> -o session.zip` includes documents, comments, decisions, a readable
+summary, and pinned approved and last-viewed revisions. Add `--transcripts` or `--revisions`
+to include more history, and `--note "…"` for a note in the summary.
+`plantool import session.zip --repo /local/repo [--workspace /local/worktree]` rewrites local
+paths and adds a suffix when the session name already exists. Imported plans need owner review;
+`--confirm` explicitly restores recorded approvals. The browser offers the same zip actions.
+
+Approval controls guard against honest mistakes, not a hostile agent with access to local
+files or the browser's local token. Plantool is a personal, local tool.
+
+If the daemon cannot bind its port, run `plantool daemon status` and check which process owns
+it, or start plantool with `PLANTOOL_PORT` set to a free local port. The browser reconnects
+and reloads state after a dropped connection. After a restart, stopped agent runs offer Resume.
+Copilot does not expose a sign-in status command: setup reports that sign-in is unverified
+and offers `copilot login`. Claude and Codex use their CLI status commands with bounded checks.

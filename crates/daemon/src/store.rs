@@ -88,7 +88,10 @@ impl SessionStore {
     }
 
     pub fn revision_path(&self, kind: DocKind, sha: &str) -> PathBuf {
-        self.dir.join("revisions").join(kind.as_str()).join(format!("{sha}.md"))
+        self.dir
+            .join("revisions")
+            .join(kind.as_str())
+            .join(format!("{sha}.md"))
     }
 
     pub fn runs_dir(&self) -> PathBuf {
@@ -151,7 +154,9 @@ impl SessionStore {
     pub fn load_runs(&self) -> anyhow::Result<Vec<Run>> {
         let mut runs = Vec::new();
         let dir = self.runs_dir();
-        let Ok(entries) = fs::read_dir(&dir) else { return Ok(runs) };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return Ok(runs);
+        };
         for entry in entries.flatten() {
             let p = entry.path();
             if p.extension().and_then(|e| e.to_str()) == Some("json") {
@@ -177,7 +182,10 @@ impl SessionStore {
 
     pub fn append_run_event(&self, id: &str, line: &str) -> anyhow::Result<()> {
         fs::create_dir_all(self.runs_dir())?;
-        let mut f = fs::OpenOptions::new().create(true).append(true).open(self.run_log_path(id))?;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.run_log_path(id))?;
         f.write_all(line.as_bytes())?;
         f.write_all(b"\n")?;
         Ok(())
@@ -209,16 +217,24 @@ impl SessionStore {
 
 pub fn list_session_dirs(home: &Path) -> Vec<(String, String, PathBuf)> {
     let mut out = Vec::new();
-    let Ok(repos) = fs::read_dir(sessions_dir(home)) else { return out };
+    let Ok(repos) = fs::read_dir(sessions_dir(home)) else {
+        return out;
+    };
     for repo in repos.flatten() {
         if !repo.path().is_dir() {
             continue;
         }
         let repo_slug = repo.file_name().to_string_lossy().to_string();
-        let Ok(slugs) = fs::read_dir(repo.path()) else { continue };
+        let Ok(slugs) = fs::read_dir(repo.path()) else {
+            continue;
+        };
         for s in slugs.flatten() {
             if s.path().join("meta.json").is_file() {
-                out.push((repo_slug.clone(), s.file_name().to_string_lossy().to_string(), s.path()));
+                out.push((
+                    repo_slug.clone(),
+                    s.file_name().to_string_lossy().to_string(),
+                    s.path(),
+                ));
             }
         }
     }

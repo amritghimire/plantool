@@ -21,6 +21,11 @@ export function Mermaid({ code }: { code: string }) {
       cancelled = true;
     };
   }, [code, id]);
-  if (err) return <pre className="mermaid-error">{code}</pre>;
-  return <div className="mermaid" ref={ref} />;
+  const labels = Array.from(code.matchAll(/\[([^\]]+)\]/g), (m) => m[1].replace(/<[^>]+>/g, " "));
+  const summary = labels.length ? `Diagram: ${labels.join("; ")}` : "Diagram source is available below.";
+  return <figure className="mermaid-figure">
+    <figcaption>{summary}</figcaption>
+    {err ? <p role="status">The diagram could not render. Read its source below.</p> : <div className="mermaid" ref={ref} role="img" aria-label={summary} />}
+    <details open={!!err}><summary>Diagram source</summary><pre>{code}</pre></details>
+  </figure>;
 }

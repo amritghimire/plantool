@@ -19,13 +19,21 @@ pub fn run(a: Args) -> anyhow::Result<()> {
     let mut q = Vec::new();
     if let Some(r) = &a.repo {
         let p = PathBuf::from(r);
-        let value = if p.exists() { absolute(&p).to_string_lossy().to_string() } else { r.clone() };
+        let value = if p.exists() {
+            absolute(&p).to_string_lossy().to_string()
+        } else {
+            r.clone()
+        };
         q.push(format!("repo={}", urlencode(&value)));
     }
     if let Some(s) = &a.stage {
         q.push(format!("stage={}", urlencode(s)));
     }
-    let path = if q.is_empty() { "/api/sessions".to_string() } else { format!("/api/sessions?{}", q.join("&")) };
+    let path = if q.is_empty() {
+        "/api/sessions".to_string()
+    } else {
+        format!("/api/sessions?{}", q.join("&"))
+    };
     let v: Vec<serde_json::Value> = c.get(&path)?;
     if a.json {
         return print_json(&v);
@@ -36,8 +44,14 @@ pub fn run(a: Args) -> anyhow::Result<()> {
     }
     for s in &v {
         let key = s.get("key").and_then(|k| k.as_str()).unwrap_or("?");
-        let stage = s.pointer("/state/stage").and_then(|k| k.as_str()).unwrap_or("?");
-        let title = s.pointer("/session/title").and_then(|k| k.as_str()).unwrap_or("");
+        let stage = s
+            .pointer("/state/stage")
+            .and_then(|k| k.as_str())
+            .unwrap_or("?");
+        let title = s
+            .pointer("/session/title")
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
         let open = s.get("open_comments").and_then(|k| k.as_u64()).unwrap_or(0);
         println!("{key:40} {stage:22} {open:>3} open  {title}");
     }

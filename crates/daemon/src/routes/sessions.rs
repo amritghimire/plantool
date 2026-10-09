@@ -4,8 +4,8 @@ use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
-use plantool_core::Actor;
 use axum::{Json, Router};
+use plantool_core::Actor;
 use plantool_core::{DocKind, Stage};
 use serde::Deserialize;
 use serde_json::json;
@@ -22,7 +22,10 @@ pub struct ListQuery {
     pub stage: Option<String>,
 }
 
-async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Result<Json<Vec<SessionView>>, ApiError> {
+async fn list(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Vec<SessionView>>, ApiError> {
     let stage = match q.stage.as_deref() {
         Some(s) => Some(Stage::parse(s).ok_or_else(|| bad_request(format!("unknown stage {s}")))?),
         None => None,
@@ -52,12 +55,26 @@ async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Resu
     Ok(Json(views))
 }
 
-async fn create(State(state): State<AppState>, Json(intent): Json<CreateSession>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+async fn create(
+    State(state): State<AppState>,
+    Json(intent): Json<CreateSession>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let reg = state.registry.clone();
-    let (live, created) = tokio::task::spawn_blocking(move || reg.create(intent)).await.map_err(|e| anyhow::anyhow!(e))??;
+    let (live, created) = tokio::task::spawn_blocking(move || reg.create(intent))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
     let view = live.view();
-    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, Json(json!({ "created": created, "session": view, "url": format!("http://127.0.0.1:{}{}", state.config.port, view.url_path) }))))
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(
+            json!({ "created": created, "session": view, "url": format!("http://127.0.0.1:{}{}", state.config.port, view.url_path) }),
+        ),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -66,11 +83,19 @@ pub struct RefQuery {
     pub cwd: Option<PathBuf>,
 }
 
-pub fn resolve(state: &AppState, reference: &str, cwd: Option<&std::path::Path>) -> Result<std::sync::Arc<crate::registry::LiveSession>, ApiError> {
+pub fn resolve(
+    state: &AppState,
+    reference: &str,
+    cwd: Option<&std::path::Path>,
+) -> Result<std::sync::Arc<crate::registry::LiveSession>, ApiError> {
     Ok(state.registry.resolve(reference, cwd)?)
 }
 
-async fn get_one(State(state): State<AppState>, Path(reference): Path<String>, Query(q): Query<RefQuery>) -> Result<Json<SessionView>, ApiError> {
+async fn get_one(
+    State(state): State<AppState>,
+    Path(reference): Path<String>,
+    Query(q): Query<RefQuery>,
+) -> Result<Json<SessionView>, ApiError> {
     let s = resolve(&state, &reference, q.cwd.as_deref())?;
     Ok(Json(s.view()))
 }
@@ -81,27 +106,52 @@ pub struct RemoveQuery {
     pub worktree: bool,
 }
 
-async fn remove(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug)): Path<(String, String)>, Query(q): Query<RemoveQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn remove(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug)): Path<(String, String)>,
+    Query(q): Query<RemoveQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     if actor_from(&headers, &state) != Actor::Human {
-        return Err(ApiError(StatusCode::FORBIDDEN, "only a human can drop a session; use the browser".into()));
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only a human can drop a session; use the browser".into(),
+        ));
     }
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     if s.runs().iter().any(|r| state.runs.is_live(&r.id)) {
-        return Err(ApiError(StatusCode::CONFLICT, "a run is still live; stop it first".into()));
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "a run is still live; stop it first".into(),
+        ));
     }
     let key = s.key.clone();
     let reg = state.registry.clone();
-    let session = tokio::task::spawn_blocking(move || reg.remove(&key, q.worktree)).await.map_err(|e| anyhow::anyhow!(e))??;
-    Ok(Json(json!({ "removed": session.key(), "worktree_removed": q.worktree && session.worktree.is_some() })))
+    let session = tokio::task::spawn_blocking(move || reg.remove(&key, q.worktree))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+    Ok(Json(
+        json!({ "removed": session.key(), "worktree_removed": q.worktree && session.worktree.is_some() }),
+    ))
 }
 
-async fn cancel_commit(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn cancel_commit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     if actor_from(&headers, &state) != Actor::Human {
-        return Err(ApiError(StatusCode::FORBIDDEN, "only a human can cancel a commit; use the browser".into()));
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only a human can cancel a commit; use the browser".into(),
+        ));
     }
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     if !s.cancel_commit() {
-        return Err(ApiError(StatusCode::CONFLICT, "no commit is running".into()));
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "no commit is running".into(),
+        ));
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -110,21 +160,34 @@ async fn repos(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "repos": state.registry.repos() }))
 }
 
-async fn get_by_key(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>) -> Result<Json<SessionView>, ApiError> {
+async fn get_by_key(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+) -> Result<Json<SessionView>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     Ok(Json(s.view()))
 }
 
 #[derive(Deserialize)]
 pub struct StageBody {
+    #[serde(default)]
+    pub plan_sha: Option<String>,
     pub to: String,
+    #[serde(default)]
+    pub override_reason: Option<String>,
 }
 
-async fn set_stage(State(state): State<AppState>, headers: HeaderMap, Path((repo, slug)): Path<(String, String)>, Json(body): Json<StageBody>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn set_stage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<StageBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
-    let to = Stage::parse(&body.to).ok_or_else(|| bad_request(format!("unknown stage {}", body.to)))?;
+    let to =
+        Stage::parse(&body.to).ok_or_else(|| bad_request(format!("unknown stage {}", body.to)))?;
     let actor = actor_from(&headers, &state);
-    let stage = s.set_stage(to, actor)?;
+    let stage = s.set_stage_reviewed(to, actor, body.override_reason, body.plan_sha.as_deref())?;
     Ok(Json(json!({ "stage": stage, "actor": actor })))
 }
 
@@ -138,7 +201,11 @@ pub struct DocQuery {
     pub sha: Option<String>,
 }
 
-async fn get_doc(State(state): State<AppState>, Path((repo, slug, kind)): Path<(String, String, String)>, Query(q): Query<DocQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn get_doc(
+    State(state): State<AppState>,
+    Path((repo, slug, kind)): Path<(String, String, String)>,
+    Query(q): Query<DocQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let kind = parse_kind(&kind)?;
     let rev = match &q.sha {
@@ -154,23 +221,36 @@ async fn get_doc(State(state): State<AppState>, Path((repo, slug, kind)): Path<(
             "checkboxes": plantool_core::markdown::checkboxes(&r.content),
             "progress": plantool_core::markdown::progress(&r.content),
         }))),
-        None => Err(ApiError(StatusCode::NOT_FOUND, format!("no {kind} document yet; write it to {}", path.display()))),
+        None => Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no {kind} document yet; write it to {}", path.display()),
+        )),
     }
 }
 
-async fn doc_path(State(state): State<AppState>, Path((repo, slug, kind)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn doc_path(
+    State(state): State<AppState>,
+    Path((repo, slug, kind)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let kind = parse_kind(&kind)?;
     let path = s.doc_path(kind);
-    Ok(Json(json!({ "kind": kind, "path": path, "exists": path.is_file() })))
+    Ok(Json(
+        json!({ "kind": kind, "path": path, "exists": path.is_file() }),
+    ))
 }
 
-async fn touch_doc(State(state): State<AppState>, Path((repo, slug, kind)): Path<(String, String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn touch_doc(
+    State(state): State<AppState>,
+    Path((repo, slug, kind)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let kind = parse_kind(&kind)?;
     let captured = s.capture_doc(kind)?;
     let current = s.doc(kind);
-    Ok(Json(json!({ "kind": kind, "changed": captured.is_some(), "sha": current.map(|d| d.sha), "path": s.doc_path(kind) })))
+    Ok(Json(
+        json!({ "kind": kind, "changed": captured.is_some(), "sha": current.map(|d| d.sha), "path": s.doc_path(kind) }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -179,7 +259,11 @@ pub struct BriefBody {
     pub brief: Option<String>,
 }
 
-async fn set_brief(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, Json(body): Json<BriefBody>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn set_brief(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<BriefBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let session = s.set_brief(body.brief)?;
     Ok(Json(json!({ "brief": session.brief, "session": session })))
@@ -191,11 +275,19 @@ pub struct WorktreeBody {
     pub dir: Option<PathBuf>,
 }
 
-async fn worktree(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, Json(body): Json<WorktreeBody>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn worktree(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<WorktreeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let created = s.session().worktree.is_none();
-    let session = tokio::task::spawn_blocking(move || s.ensure_worktree(body.dir)).await.map_err(|e| anyhow::anyhow!(e))??;
-    Ok(Json(json!({ "created": created, "worktree": session.worktree, "session": session })))
+    let session = tokio::task::spawn_blocking(move || s.ensure_worktree(body.dir))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+    Ok(Json(
+        json!({ "created": created, "worktree": session.worktree, "session": session }),
+    ))
 }
 
 async fn workspace_candidates(
@@ -250,31 +342,71 @@ pub struct PromptQuery {
     pub resume_run: Option<String>,
 }
 
-async fn prompt(State(state): State<AppState>, Path((repo, slug, stage)): Path<(String, String, String)>, Query(q): Query<PromptQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn prompt(
+    State(state): State<AppState>,
+    Path((repo, slug, stage)): Path<(String, String, String)>,
+    Query(q): Query<PromptQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let stage = match stage.as_str() {
         "next" => crate::prompts::next_stage(s.stage()).ok_or_else(|| bad_request(format!("nothing left to prompt for; the stage is {}", s.stage())))?,
         st if crate::prompts::STAGES.contains(&st) => st,
         other => return Err(bad_request(format!("stage must be research, plan, implement, review, resume, critique or next (got {other})"))),
     };
-    let reviewing = if stage == "implement" && q.implementation_mode == plantool_core::ImplementationMode::StepByStep {
-        q.resume_run.as_deref().and_then(|id| s.run(id)).or_else(|| s.runs().into_iter()
-            .filter(|r| r.task.as_deref() == Some("implement") && r.implementation_mode == plantool_core::ImplementationMode::StepByStep && r.milestone_pending)
-            .max_by(|a, b| a.started_at.cmp(&b.started_at)))
-    } else { None };
-    let text = if let Some(r) = reviewing.filter(|r| r.milestone_pending) {
-        crate::prompts::render_milestone_review(&s.session(), &s.store.dir, r.milestone_review.as_ref(), q.extra.as_deref())
+    let reviewing = if stage == "implement"
+        && q.implementation_mode == plantool_core::ImplementationMode::StepByStep
+    {
+        q.resume_run
+            .as_deref()
+            .and_then(|id| s.run(id))
+            .or_else(|| {
+                s.runs()
+                    .into_iter()
+                    .filter(|r| {
+                        r.task.as_deref() == Some("implement")
+                            && r.implementation_mode
+                                == plantool_core::ImplementationMode::StepByStep
+                            && r.milestone_pending
+                    })
+                    .max_by(|a, b| a.started_at.cmp(&b.started_at))
+            })
     } else {
-        crate::prompts::render_run(&state.config.home, stage, &s.session(), &s.store.dir, q.extra.as_deref(), s.stage(), q.implementation_mode)
+        None
     };
-    Ok(Json(json!({ "stage": stage, "prompt": text, "session_stage": s.stage() })))
+    let text = if let Some(r) = reviewing.filter(|r| r.milestone_pending) {
+        crate::prompts::render_milestone_review(
+            &s.session(),
+            &s.store.dir,
+            r.milestone_review.as_ref(),
+            q.extra.as_deref(),
+        )
+    } else {
+        crate::prompts::render_run(
+            &state.config.home,
+            stage,
+            &s.session(),
+            &s.store.dir,
+            q.extra.as_deref(),
+            s.stage(),
+            q.implementation_mode,
+        )
+    };
+    Ok(Json(
+        json!({ "stage": stage, "prompt": text, "session_stage": s.stage() }),
+    ))
 }
 
-async fn navigate(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, Json(target): Json<crate::events::NavTarget>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn navigate(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(target): Json<crate::events::NavTarget>,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let mut target = target;
     if let Some(cid) = &target.comment {
-        let c = s.comment(cid).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown comment {cid}")))?;
+        let c = s
+            .comment(cid)
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown comment {cid}")))?;
         target.doc = Some(c.doc);
         target.line = Some(c.anchor.line);
     }
@@ -282,9 +414,92 @@ async fn navigate(State(state): State<AppState>, Path((repo, slug)): Path<(Strin
     Ok(Json(json!({ "target": target, "viewers": viewers })))
 }
 
+#[derive(Deserialize)]
+struct ViewedBody {
+    sha: String,
+}
+async fn viewed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug, kind)): Path<(String, String, String)>,
+    Json(body): Json<ViewedBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if actor_from(&headers, &state) != Actor::Human {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only the owner can mark a revision viewed".into(),
+        ));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    s.mark_viewed(parse_kind(&kind)?, &body.sha)?;
+    Ok(Json(json!({"ok":true})))
+}
+async fn revisions(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    let saved = s.state();
+    let current = s.doc(DocKind::Plan);
+    let approved = saved
+        .approved
+        .as_ref()
+        .map(|a| s.doc_revision(DocKind::Plan, &a.sha))
+        .transpose()?
+        .flatten();
+    let viewed = saved
+        .viewed
+        .get(&DocKind::Plan)
+        .map(|sha| s.doc_revision(DocKind::Plan, sha))
+        .transpose()?
+        .flatten();
+    Ok(Json(
+        json!({"current":current,"approved":approved,"viewed":viewed,"change":saved.plan_change,"pending":saved.plan_revision_pending}),
+    ))
+}
+#[derive(Deserialize)]
+struct RevisionBody {
+    reason: String,
+}
+async fn propose_revision(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<RevisionBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.reason.trim().is_empty() {
+        return Err(bad_request("give a reason for revising the plan"));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    s.propose_revision(body.reason)?;
+    Ok(Json(json!({"ok":true})))
+}
+
+async fn pause(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<RevisionBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.reason.trim().is_empty() {
+        return Err(bad_request("give a checkpoint reason"));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    s.pause(Some(body.reason.clone()))?;
+    Ok(Json(json!({"paused":true,"reason":body.reason})))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/sessions", get(list).post(create))
+        .route("/sessions/{repo}/{slug}/pause", post(pause))
+        .route(
+            "/sessions/{repo}/{slug}/docs/plan/revisions",
+            get(revisions),
+        )
+        .route("/sessions/{repo}/{slug}/docs/{kind}/viewed", post(viewed))
+        .route(
+            "/sessions/{repo}/{slug}/plan/propose-revision",
+            post(propose_revision),
+        )
         .route("/sessions/{reference}", get(get_one))
         .route("/repos", get(repos))
         .route("/sessions/{repo}/{slug}", get(get_by_key).delete(remove))

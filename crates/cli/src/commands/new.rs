@@ -51,7 +51,10 @@ pub fn read_brief(brief: Option<String>, file: Option<PathBuf>) -> anyhow::Resul
             std::io::stdin().read_to_string(&mut s)?;
             Ok(Some(s))
         }
-        (None, Some(f)) => Ok(Some(std::fs::read_to_string(absolute(&f)).with_context(|| format!("reading {}", f.display()))?)),
+        (None, Some(f)) => Ok(Some(
+            std::fs::read_to_string(absolute(&f))
+                .with_context(|| format!("reading {}", f.display()))?,
+        )),
         (None, None) => Ok(None),
     }
 }
@@ -72,18 +75,31 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         "repo_slug": a.repo_slug,
     });
     let v: serde_json::Value = c.post("/api/sessions", &body)?;
-    let url = v.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string();
+    let url = v
+        .get("url")
+        .and_then(|u| u.as_str())
+        .unwrap_or_default()
+        .to_string();
     if a.json {
         return print_json(&v);
     }
     let created = v.get("created").and_then(|b| b.as_bool()).unwrap_or(false);
-    let key = v.pointer("/session/key").and_then(|k| k.as_str()).unwrap_or_default();
-    let dir = v.pointer("/session/dir").and_then(|k| k.as_str()).unwrap_or_default();
+    let key = v
+        .pointer("/session/key")
+        .and_then(|k| k.as_str())
+        .unwrap_or_default();
+    let dir = v
+        .pointer("/session/dir")
+        .and_then(|k| k.as_str())
+        .unwrap_or_default();
     println!("{} {key}", if created { "created" } else { "reopened" });
     println!("docs: {dir}");
     println!("{url}");
     if !created && brief.is_some() {
-        let _: serde_json::Value = c.post(&format!("/api/sessions/{key}/brief"), &json!({ "brief": brief }))?;
+        let _: serde_json::Value = c.post(
+            &format!("/api/sessions/{key}/brief"),
+            &json!({ "brief": brief }),
+        )?;
         println!("brief updated");
     }
     if let Ok(p) = c.get::<serde_json::Value>(&format!("/api/sessions/{key}/prompt/next")) {

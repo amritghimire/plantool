@@ -1,3 +1,9 @@
+import { Handoff } from "./Handoff";
+import { DecisionSummary } from "./DecisionSummary";
+import { ArchivePanel } from "./ArchivePanel";
+import { WherePanel } from "./WherePanel";
+import { AwaySummary } from "./AwaySummary";
+import { PlanRevisions } from "./PlanRevisions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, authorName, setAuthorName } from "../api";
@@ -38,7 +44,7 @@ export function SessionPage() {
     localStorage.setItem("plantool.mode", m);
   };
   const [showResolved, setShowResolved] = useState(false);
-  const [target, setTarget] = useState<{ line: number; nonce: number } | null>(null);
+  const [target, setTarget] = useState<{ line: number; nonce: number; compose?: boolean } | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -58,7 +64,7 @@ export function SessionPage() {
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastId.current;
     setToasts((t) => [...t, { id, text, kind }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+    if (kind === "info") window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
   }, []);
 
   const setTab = (t: string) => {
@@ -154,6 +160,7 @@ export function SessionPage() {
 
   const onEvent = useCallback(
     (e: LiveEvent) => {
+      if (["stage-changed", "run-started", "run-updated", "run-ended", "run-removed"].includes(e.type)) void api.session(key).then(setView).catch(() => {});
       switch (e.type) {
         case "comment-added":
           setComments((c) => (c.some((x) => x.id === e.comment.id) ? c : [...c, e.comment]));
@@ -187,6 +194,7 @@ export function SessionPage() {
           loadReviewPrompt();
           break;
         case "session-updated":
+          void api.session(key).then(setView).catch(() => {});
           setView((v) => (v ? { ...v, session: e.session } : v));
           reloadPrompts();
           break;
@@ -203,6 +211,7 @@ export function SessionPage() {
             if (e.run.status === "waiting") toast("The agent needs your answer", "warn");
             else if (e.run.status === "idle" && prev.status === "running") toast("The agent finished its turn; your move");
           }
+          if (e.type === "run-ended") { setChangesNonce((n) => n + 1); void api.comments(key).then((r) => setComments(r.comments)).catch(() => {}); }
           if (e.type === "run-ended") toast(`run ${e.run.status}${e.run.error ? `: ${e.run.error}` : ""}`, e.run.status === "failed" ? "error" : "info");
           break;
         }
@@ -246,10 +255,11 @@ export function SessionPage() {
     [key, loadDoc, reloadPrompts, loadReviewPrompt, toast],
   );
 
-  useLive(view ? key : null, onEvent, () => void loadAll());
+  const { connected } = useLive(view ? key : null, onEvent, loadAll);
 
   const actions: ThreadActions = useMemo(
     () => ({
+      promote: async (root) => { await api.promoteBlocker(key, root.id); },
       reply: async (parent, body) => {
         const r = await api.addComment(key, { doc: parent.doc, parent: parent.id, body });
         setComments((c) => [...c, ...r.comments.filter((n) => !c.some((x) => x.id === n.id))]);
@@ -268,21 +278,30 @@ export function SessionPage() {
     [key],
   );
 
-  const onAdd = async (kind: DocKind, line: number, body: string) => {
-    const r = await api.addComment(key, { doc: kind, line, body });
+  const onAdd = async (kind: DocKind, line: number, body: string, type?: import("../types").CommentType, scope?: import("../types").AnchorScope) => {
+    const r = await api.addComment(key, { doc: kind, line, body, type, scope });
     setComments((c) => [...c, ...r.comments.filter((n) => !c.some((x) => x.id === n.id))]);
   };
 
-  const onStage = async (s: Stage) => {
+  const onStage = async (s: Stage, overrideReason?: string) => {
     setBusy(true);
     try {
-      await api.setStage(key, s);
+      await api.setStage(key, s, overrideReason, s === "approved" ? docs.plan?.sha : undefined);
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
       setBusy(false);
     }
   };
+
+  const onHandoff = () => {
+          if (!view) return;
+          const active = [...view.runs].sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
+          if (view.handoff?.label === "Recovery needed" && active) setDialog({ stage: active.task === "research" ? "research" : active.task === "implement" ? "implement" : "plan", resumeId: active.id });
+          else if (active && ["Agent working", "Agent needs an answer"].includes(view.handoff?.label ?? "")) setSelectedRun(active.id);
+          else if (view.handoff?.label === "Owner choosing next step") setDialog({ stage: ["new", "researching"].includes(view.state.stage) ? "research" : ["approved", "implementing"].includes(view.state.stage) ? "implement" : "plan" });
+          else setTab(view.state.stage === "implementation-review" ? "changes" : view.state.stage === "research-review" ? "research" : "plan");
+        };
 
   const onBrief = async (brief: string | null) => {
     setBusy(true);
@@ -323,7 +342,7 @@ export function SessionPage() {
     }
     setBusy(true);
     try {
-      await api.runInput(key, milestoneRun.id, { text: "I reviewed the completed milestone. Continue with exactly the next unchecked plan ticket, then pause for review again. If no tickets remain, run the final checks and move to implementation-review." });
+      await api.runInput(key, milestoneRun.id, { text: "I reviewed the completed milestone. Continue with exactly the next unchecked plan task, then pause for review again. If no tasks remain, run the final checks and move to implementation-review." });
       setSelectedRun(milestoneRun.id);
     } catch (e) {
       toast((e as Error).message, "error");
@@ -372,7 +391,7 @@ export function SessionPage() {
   };
 
   const onJump = (c: Comment) => {
-    setTab(c.doc);
+    setTab(c.anchor.code ? "changes" : c.doc);
     if (c.resolved) setShowResolved(true);
     setHighlight(c.id);
     setTarget({ line: c.anchor.line, nonce: Date.now() });
@@ -439,6 +458,8 @@ export function SessionPage() {
         <ThemeToggle />
       </header>
       <Sidebar
+        onHandoff={onHandoff}
+        contextPanel={<><ArchivePanel sessionKey={key} repo={view.session.repo.root} /><WherePanel key={`${key}:${view.session.base}:${view.session.worktree}:${view.session.difftool}:${view.workspace_branch}:${JSON.stringify(view.session.pause_rule)}`} view={view} onUpdated={setView} /></>}
         view={view}
         comments={comments}
         activeTab={tab}
@@ -465,14 +486,24 @@ export function SessionPage() {
         busy={busy}
       />
       <main className="content">
+      <AwaySummary sessionKey={key} state={view.state} />
+      <div>
+        {!connected && <p className="banner">Disconnected. This view may be stale. Reconnecting to the local daemon…</p>}
+        {view.state.pause_reason && <p className="banner">Checkpoint: {view.state.pause_reason}</p>}
+        {view.handoff && <Handoff step={view.state.milestones?.length && view.handoff.step === "Build" ? `Build ${Math.min(view.state.milestones.filter((m) => m.status === "approved" || m.status === "completed").length + 1, view.state.milestones.length)} of ${view.state.milestones.length}` : view.handoff.step} label={view.handoff.label} action={view.handoff.action} onAction={onHandoff} />}
+      </div>
+
         {kind ? (
+          <>
+          {kind === "plan" && docs.plan && <DecisionSummary doc={docs.plan} onComment={(line) => { setTarget({ line, nonce: Date.now(), compose: true }); }} onCritique={(prompt) => setDialog({ stage: "critique", initialPrompt: prompt })} />}
+          {kind === "plan" && docs.plan && <PlanRevisions sessionKey={key} sha={docs.plan.sha} content={docs.plan.content} onAccept={() => void onStage("approved")} />}
           <DocView
             kind={kind}
             doc={docs[kind] ?? null}
             path={paths[kind] ?? view.docs.find((d) => d.kind === kind)?.path ?? null}
             prompt={prompts[kind] ?? null}
             onStartRun={kind === "research" || kind === "plan" ? () => setDialog({ stage: kind }) : undefined}
-            comments={comments.filter((c) => c.doc === kind)}
+            comments={comments.filter((c) => c.doc === kind && !c.anchor.code)}
             actions={actions}
             onAdd={onAdd}
             mode={mode}
@@ -480,8 +511,9 @@ export function SessionPage() {
             highlightComment={highlight}
             showResolved={showResolved}
           />
+          </>
         ) : (
-          <ChangesTab sessionKey={key} nonce={changesNonce} />
+          <ChangesTab highlightComment={highlight} sessionKey={key} nonce={changesNonce} comments={comments} actions={actions} onAdded={() => void api.comments(key).then((r) => setComments(r.comments))} />
         )}
       </main>
       {run && (
@@ -498,8 +530,9 @@ export function SessionPage() {
       {askOpen && <AskAgentDialog sessionKey={key} runs={view.runs} onClose={() => setAskOpen(false)} onStarted={(id) => setSelectedRun(id)} />}
       <div className="toasts">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind ?? "info"}`}>
+          <div key={t.id} role={t.kind === "error" ? "alert" : "status"} className={`toast ${t.kind ?? "info"}`}>
             {t.text}
+            {t.kind !== "info" && <button type="button" aria-label="Dismiss notification" onClick={() => setToasts((current) => current.filter((item) => item.id !== t.id))}>×</button>}
           </div>
         ))}
       </div>

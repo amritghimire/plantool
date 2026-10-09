@@ -39,7 +39,7 @@ it("saves a per-repository override", async () => {
   const set = vi.spyOn(api, "setWorktreeDir").mockResolvedValue({ ...setting, repo: { root: "/code/app", value: "trees" } });
   render(<SettingsDialog onClose={() => {}} />);
 
-  const select = await screen.findByRole("combobox");
+  const select = await screen.findByLabelText(/Worktree location/);
   await screen.findByRole("option", { name: "/code/app only" });
   fireEvent.change(select, { target: { value: "/code/app" } });
   const input = await screen.findByPlaceholderText("~/wt/{slug}");

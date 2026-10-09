@@ -14,22 +14,43 @@ pub struct LiveQuery {
     pub since: Option<u64>,
 }
 
-async fn live(State(state): State<AppState>, Path((repo, slug)): Path<(String, String)>, Query(q): Query<LiveQuery>, ws: WebSocketUpgrade) -> Result<Response, ApiError> {
+async fn live(
+    State(state): State<AppState>,
+    Path((repo, slug)): Path<(String, String)>,
+    Query(q): Query<LiveQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     Ok(ws.on_upgrade(move |socket| handle(socket, s, q.since)))
 }
 
-async fn handle(mut socket: WebSocket, s: std::sync::Arc<crate::registry::LiveSession>, since: Option<u64>) {
+async fn handle(
+    mut socket: WebSocket,
+    s: std::sync::Arc<crate::registry::LiveSession>,
+    since: Option<u64>,
+) {
     let mut rx = s.tx.subscribe();
     let hello = serde_json::json!({ "type": "hello", "seq": s.seq(), "key": s.key });
-    if socket.send(Message::Text(hello.to_string().into())).await.is_err() {
+    if socket
+        .send(Message::Text(hello.to_string().into()))
+        .await
+        .is_err()
+    {
         return;
     }
     if let Some(since) = since {
-        let newer = s.comments(&crate::registry::CommentFilter { since: Some(since), ..Default::default() });
+        let newer = s.comments(&crate::registry::CommentFilter {
+            since: Some(since),
+            ..Default::default()
+        });
         if !newer.is_empty() {
-            let msg = serde_json::json!({ "type": "comments-since", "seq": s.seq(), "comments": newer });
-            if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
+            let msg =
+                serde_json::json!({ "type": "comments-since", "seq": s.seq(), "comments": newer });
+            if socket
+                .send(Message::Text(msg.to_string().into()))
+                .await
+                .is_err()
+            {
                 return;
             }
         }

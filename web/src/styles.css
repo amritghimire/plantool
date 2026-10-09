@@ -415,3 +415,10 @@ li.blk > .gutter { left: -50px; }
 .commit-progress { display: grid; gap: 6px; font-size: 12.5px; }
 .commit-progress-head { display: flex; gap: 6px; align-items: center; }
 .commit-progress-log { margin: 0; max-height: 160px; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+.blk:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.handoff { grid-column: 1 / -1; padding: 0.25rem 1rem; }
+.revision-comparison pre { max-height: 32rem; overflow: auto; }

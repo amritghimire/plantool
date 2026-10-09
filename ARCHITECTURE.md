@@ -169,3 +169,31 @@ release. `plantool update` downloads the matching archive, verifies its checksum
 4. Never lose a comment or a revision; re-anchor or mark outdated.
 5. The CLI is thin, the web is a view, the daemon owns disk and processes.
 6. Integrate difftool instead of rebuilding a diff viewer.
+
+## Review state and compatibility
+
+New stored fields have serde defaults. Protocol version 2 adds typed and scoped comments,
+approval pins, viewed revisions, activity, proposals, pause rules and milestone history.
+Old stage strings remain readable. `core::review` derives thread states and owner blockers;
+`core::handoff` derives the step, handoff and primary action for daemon, browser and CLI.
+Plan task comparison distinguishes checkbox progress from scope changes. Completed task text
+is retained in milestone records even when the live plan changes.
+
+Context mutations use one Where route. Agents propose; browser requests or explicit CLI
+confirmation apply after prechecks. Provider context is saved before restart. Scoped milestone
+runs record a plan sha and a worktree snapshot made with a separate temporary git index, so
+uncommitted earlier phases do not enter the next phase's diff. The user's index is preserved.
+
+Built-in code comments share the session comment store, with a relative path, new-side line
+and exact context. Reanchoring follows unique context and marks ambiguous or missing lines
+outdated. Difftool counts are read-only. Drift uses the affected-files table and checkbox state;
+older plans say drift is not checked.
+
+Zip archives contain a versioned session bundle and readable documents and summary. Extra
+revisions and transcripts are opt-in. Import validates paths, checksums and sizes, changes local
+repository paths, stops archived runs and assigns collision-safe names. Recorded approval is
+restored only by an owner request or explicit CLI confirmation.
+
+The local approval token guards against honest mistakes, not a hostile agent. No multi-user
+trust boundary is claimed. Idle run shutdown releases provider processes while retaining their
+session identifiers for later feedback or resume.

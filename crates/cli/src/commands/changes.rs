@@ -19,12 +19,19 @@ pub struct Args {
 pub fn run(a: Args) -> anyhow::Result<()> {
     let c = Client::connect()?;
     let (key, _) = c.resolve_key(&a.reference)?;
-    let query = a.scope.as_deref().map(|s| format!("?scope={s}")).unwrap_or_default();
+    let query = a
+        .scope
+        .as_deref()
+        .map(|s| format!("?scope={s}"))
+        .unwrap_or_default();
     if a.stat {
         let v: serde_json::Value = c.get(&format!("/api/sessions/{key}/changes{query}"))?;
         return print_changes(&v, a.json);
     }
-    let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/changes/open"), &serde_json::json!({ "scope": a.scope }))?;
+    let v: serde_json::Value = c.post(
+        &format!("/api/sessions/{key}/changes/open"),
+        &serde_json::json!({ "scope": a.scope }),
+    )?;
     if a.json {
         return print_json(&v);
     }
@@ -34,7 +41,12 @@ pub fn run(a: Args) -> anyhow::Result<()> {
             open_browser(url);
         }
     } else {
-        println!("{}", v.get("message").and_then(|m| m.as_str()).unwrap_or("launched git difftool"));
+        println!(
+            "{}",
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("launched git difftool")
+        );
     }
     Ok(())
 }
@@ -43,7 +55,10 @@ pub fn print_changes(v: &serde_json::Value, json: bool) -> anyhow::Result<()> {
     if json {
         return print_json(v);
     }
-    println!("tool: {}", v.get("tool").and_then(|t| t.as_str()).unwrap_or("?"));
+    println!(
+        "tool: {}",
+        v.get("tool").and_then(|t| t.as_str()).unwrap_or("?")
+    );
     if let Some(label) = v.get("label").and_then(|l| l.as_str()) {
         println!("changes {label}");
     }
@@ -52,7 +67,12 @@ pub fn print_changes(v: &serde_json::Value, json: bool) -> anyhow::Result<()> {
     }
     if let Some(files) = v.get("stat").and_then(|s| s.as_array()) {
         for f in files {
-            println!("{:>5} {:>5}  {}", format!("+{}", f["added"]), format!("-{}", f["deleted"]), f["path"].as_str().unwrap_or(""));
+            println!(
+                "{:>5} {:>5}  {}",
+                format!("+{}", f["added"]),
+                format!("-{}", f["deleted"]),
+                f["path"].as_str().unwrap_or("")
+            );
         }
         if files.is_empty() {
             println!("no changes against the base");

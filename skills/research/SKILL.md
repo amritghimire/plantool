@@ -91,6 +91,14 @@ A question with no line in the document is a question the human will not see.
 Then read any comments the human leaves with
 `plantool session comment list --session <ref> --kind human --unresolved --context --json`.
 Answer questions on their threads and leave those threads open for the human. For requests,
-revise the document, reply with what changed, and resolve the thread. Use the returned `seq`
+revise the document, reply with what changed, and propose resolution with `--proposes-resolve`; only the owner resolves threads. Use the returned `seq`
 with `plantool session watch --session <ref> --since <seq> --timeout 900` to wait for new input.
 Stop when the human moves on or asks you to stop.
+
+## Review context
+
+State assumptions, risks and decisions needed in named sections so they are easy to review.
+Use document or section comments when feedback is broader than a source line.
+To propose changing workspace, branch, base or diff tool, use `plantool session propose`
+with a reason. The owner applies it through the browser or an explicit confirmed CLI command.
+Approval guards against honest mistakes, not a hostile agent with local filesystem access.

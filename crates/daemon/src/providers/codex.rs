@@ -1,4 +1,6 @@
-use super::{emit, EventSink, InputQuestion, PermissionOption, ProviderEvent, RunInput, RunOptions};
+use super::{
+    emit, EventSink, InputQuestion, PermissionOption, ProviderEvent, RunInput, RunOptions,
+};
 use anyhow::Context;
 use plantool_core::PermissionMode;
 use serde_json::{json, Value};
@@ -26,25 +28,35 @@ impl Rpc {
         Ok(())
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> anyhow::Result<oneshot::Receiver<Result<Value, String>>> {
+    async fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> anyhow::Result<oneshot::Receiver<Result<Value, String>>> {
         self.next_id += 1;
         let id = self.next_id;
         let (tx, rx) = oneshot::channel();
         self.waiting.insert(id, tx);
-        self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).await?;
+        self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await?;
         Ok(rx)
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> anyhow::Result<()> {
-        self.write(json!({ "jsonrpc": "2.0", "method": method, "params": params })).await
+        self.write(json!({ "jsonrpc": "2.0", "method": method, "params": params }))
+            .await
     }
 
     async fn respond(&mut self, id: Value, result: Value) -> anyhow::Result<()> {
-        self.write(json!({ "jsonrpc": "2.0", "id": id, "result": result })).await
+        self.write(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+            .await
     }
 
     async fn respond_error(&mut self, id: Value, message: &str) -> anyhow::Result<()> {
-        self.write(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": message } })).await
+        self.write(
+            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": message } }),
+        )
+        .await
     }
 
     fn settle(&mut self, id: u64, result: Result<Value, String>) {
@@ -59,10 +71,18 @@ struct PendingApproval {
     decisions: HashMap<String, Value>,
 }
 
-fn decision_options(available: Option<&Vec<Value>>, kind: &str) -> (Vec<PermissionOption>, HashMap<String, Value>) {
+fn decision_options(
+    available: Option<&Vec<Value>>,
+    kind: &str,
+) -> (Vec<PermissionOption>, HashMap<String, Value>) {
     let native: Vec<Value> = match available {
         Some(a) if !a.is_empty() => a.clone(),
-        _ if kind == "file-change" => vec![json!("accept"), json!("acceptForSession"), json!("decline"), json!("cancel")],
+        _ if kind == "file-change" => vec![
+            json!("accept"),
+            json!("acceptForSession"),
+            json!("decline"),
+            json!("cancel"),
+        ],
         _ => vec![json!("accept"), json!("decline")],
     };
     let mut options = Vec::new();
@@ -70,15 +90,21 @@ fn decision_options(available: Option<&Vec<Value>>, kind: &str) -> (Vec<Permissi
     for d in native {
         let (id, label) = match &d {
             Value::String(s) => match s.as_str() {
-                "accept" => ("allow".to_string(), "Allow".to_string()),
-                "acceptForSession" => ("allow-session".to_string(), "Allow for this run".to_string()),
+                "accept" => ("allow".to_string(), "Allow once".to_string()),
+                "acceptForSession" => (
+                    "allow-session".to_string(),
+                    "Allow for this run".to_string(),
+                ),
                 "decline" => ("deny".to_string(), "Deny".to_string()),
                 "cancel" => ("cancel".to_string(), "Deny and stop".to_string()),
                 other => (other.to_string(), other.to_string()),
             },
             other => {
                 let s = other.to_string();
-                (format!("native:{}", super::shorten(&s, 40)), format!("Allow ({})", super::shorten(&s, 60)))
+                (
+                    format!("native:{}", super::shorten(&s, 40)),
+                    format!("Allow ({})", super::shorten(&s, 60)),
+                )
             }
         };
         map.insert(id.clone(), json!({ "decision": d }));
@@ -104,24 +130,43 @@ fn codex_sandbox(mode: PermissionMode) -> &'static str {
 fn codex_sandbox_policy(mode: PermissionMode, writable_roots: &[std::path::PathBuf]) -> Value {
     match mode {
         PermissionMode::AllowAll => json!({ "type": "dangerFullAccess" }),
-        _ => json!({ "type": "workspaceWrite", "writableRoots": writable_roots, "networkAccess": true }),
+        _ => {
+            json!({ "type": "workspaceWrite", "writableRoots": writable_roots, "networkAccess": true })
+        }
     }
 }
 
-pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: EventSink) -> anyhow::Result<()> {
+pub async fn run(
+    opts: RunOptions,
+    mut input: mpsc::Receiver<RunInput>,
+    sink: EventSink,
+) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "codex".into());
     let mut cmd = Command::new(&exe);
     cmd.arg("app-server").arg("--stdio");
-    if let Some(effort) = &opts.effort { cmd.arg("-c").arg(format!("model_reasoning_effort={effort}")); }
-    cmd.current_dir(&opts.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-    let mut child = cmd.spawn().with_context(|| format!("failed to start {}", exe.display()))?;
+    if let Some(effort) = &opts.effort {
+        cmd.arg("-c")
+            .arg(format!("model_reasoning_effort={effort}"));
+    }
+    cmd.current_dir(&opts.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to start {}", exe.display()))?;
     let stdin = child.stdin.take().context("no stdin")?;
     let stdout = child.stdout.take().context("no stdout")?;
     let stderr = child.stderr.take().context("no stderr")?;
     let mut lines = BufReader::new(stdout).lines();
     let mut err_lines = BufReader::new(stderr).lines();
     let mut stderr_tail: Vec<String> = Vec::new();
-    let mut rpc = Rpc { stdin, next_id: 0, waiting: HashMap::new() };
+    let mut rpc = Rpc {
+        stdin,
+        next_id: 0,
+        waiting: HashMap::new(),
+    };
 
     let init_rx = rpc.request("initialize", json!({ "clientInfo": { "name": "plantool", "title": "plantool", "version": env!("CARGO_PKG_VERSION") }, "capabilities": { "experimentalApi": true } })).await?;
     let mut thread_id: Option<String> = None;
@@ -135,7 +180,15 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
     let mut init_rx = Some(init_rx);
     let mut stopped = false;
     let mut mode = opts.permission_mode;
-    emit(&sink, ProviderEvent::Message { id: "prompt".into(), role: "user".into(), content: opts.prompt.clone() }).await;
+    emit(
+        &sink,
+        ProviderEvent::Message {
+            id: "prompt".into(),
+            role: "user".into(),
+            content: opts.prompt.clone(),
+        },
+    )
+    .await;
 
     loop {
         if phase == 0 {
@@ -144,7 +197,9 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                     res.map_err(|e| anyhow::anyhow!("codex initialize failed: {e}"))?;
                     rpc.notify("initialized", json!({})).await?;
                     let mut cfg = json!({ "cwd": opts.cwd, "sandbox": codex_sandbox(mode), "approvalPolicy": codex_approval(mode), "approvalsReviewer": "user" });
-                    if let Some(m) = &opts.model { cfg["model"] = json!(m); }
+                    if let Some(m) = &opts.model {
+                        cfg["model"] = json!(m);
+                    }
                     let rx = if let Some(t) = &opts.resume {
                         cfg["threadId"] = json!(t);
                         rpc.request("thread/resume", cfg).await?
@@ -161,9 +216,26 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
             if let Some(rx) = thread_rx.as_mut() {
                 if let Ok(res) = rx.try_recv() {
                     let v = res.map_err(|e| anyhow::anyhow!("codex thread/start failed: {e}"))?;
-                    let id = v.pointer("/thread/id").and_then(|s| s.as_str()).context("codex returned no thread id")?.to_string();
-                    emit(&sink, ProviderEvent::ProviderSession { session_id: id.clone() }).await;
-                    emit(&sink, ProviderEvent::Status { label: "codex thread ready".into(), detail: None }).await;
+                    let id = v
+                        .pointer("/thread/id")
+                        .and_then(|s| s.as_str())
+                        .context("codex returned no thread id")?
+                        .to_string();
+                    emit(
+                        &sink,
+                        ProviderEvent::ProviderSession {
+                            session_id: id.clone(),
+                        },
+                    )
+                    .await;
+                    emit(
+                        &sink,
+                        ProviderEvent::Status {
+                            label: "codex thread ready".into(),
+                            detail: None,
+                        },
+                    )
+                    .await;
                     thread_id = Some(id);
                     phase = 2;
                     thread_rx = None;
@@ -183,11 +255,27 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                         if let Some(id) = v.pointer("/turn/id").and_then(|s| s.as_str()) {
                             if active_turn.is_none() {
                                 active_turn = Some(id.to_string());
-                                emit(&sink, ProviderEvent::TurnStarted { turn_id: id.to_string() }).await;
+                                emit(
+                                    &sink,
+                                    ProviderEvent::TurnStarted {
+                                        turn_id: id.to_string(),
+                                    },
+                                )
+                                .await;
                             }
                         }
                     }
-                    Err(e) => emit(&sink, ProviderEvent::TurnCompleted { turn_id: "?".into(), status: "failed".into(), error: Some(e) }).await,
+                    Err(e) => {
+                        emit(
+                            &sink,
+                            ProviderEvent::TurnCompleted {
+                                turn_id: "?".into(),
+                                status: "failed".into(),
+                                error: Some(e),
+                            },
+                        )
+                        .await
+                    }
                 }
                 turn_rx = None;
             }
@@ -381,18 +469,34 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
     }
     if stopped {
         if let (Some(tid), Some(turn)) = (&thread_id, &active_turn) {
-            let _rx = rpc.request("turn/interrupt", json!({ "threadId": tid, "turnId": turn })).await;
+            let _rx = rpc
+                .request("turn/interrupt", json!({ "threadId": tid, "turnId": turn }))
+                .await;
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
         let _ = child.start_kill();
         let _ = child.wait().await;
-        emit(&sink, ProviderEvent::Status { label: "stopped".into(), detail: None }).await;
+        emit(
+            &sink,
+            ProviderEvent::Status {
+                label: "stopped".into(),
+                detail: None,
+            },
+        )
+        .await;
         return Ok(());
     }
     let status = child.wait().await?;
     if !status.success() {
         let tail = stderr_tail.join("\n");
-        anyhow::bail!("codex exited with {status}{}", if tail.is_empty() { String::new() } else { format!(": {}", super::shorten(&tail, 800)) });
+        anyhow::bail!(
+            "codex exited with {status}{}",
+            if tail.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", super::shorten(&tail, 800))
+            }
+        );
     }
     Ok(())
 }

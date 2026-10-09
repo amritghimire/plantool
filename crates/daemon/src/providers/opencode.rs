@@ -9,15 +9,28 @@ use tokio::sync::mpsc;
 
 fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
     let mut external = Map::new();
-    external.insert("*".into(), json!(if mode == PermissionMode::AllowAll { "allow" } else { "deny" }));
+    external.insert(
+        "*".into(),
+        json!(if mode == PermissionMode::AllowAll {
+            "allow"
+        } else {
+            "deny"
+        }),
+    );
     for root in &opts.writable_roots {
         external.insert(root.display().to_string(), json!("allow"));
         external.insert(format!("{}/**", root.display()), json!("allow"));
     }
     let permission = match mode {
-        PermissionMode::Ask => json!({ "*": "allow", "bash": "deny", "edit": "deny", "task": "deny", "external_directory": external }),
-        PermissionMode::AcceptEdits => json!({ "*": "allow", "bash": "deny", "external_directory": external }),
-        PermissionMode::Auto | PermissionMode::AllowAll => json!({ "*": "allow", "external_directory": external }),
+        PermissionMode::Ask => {
+            json!({ "*": "allow", "bash": "deny", "edit": "deny", "task": "deny", "external_directory": external })
+        }
+        PermissionMode::AcceptEdits => {
+            json!({ "*": "allow", "bash": "deny", "external_directory": external })
+        }
+        PermissionMode::Auto | PermissionMode::AllowAll => {
+            json!({ "*": "allow", "external_directory": external })
+        }
     };
     let mut models = Map::new();
     models.insert(model.into(), json!({ "name": model }));
@@ -33,8 +46,15 @@ fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
     })
 }
 
-pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: EventSink) -> anyhow::Result<()> {
-    let model = opts.model.clone().context("choose an installed Ollama model")?;
+pub async fn run(
+    opts: RunOptions,
+    mut input: mpsc::Receiver<RunInput>,
+    sink: EventSink,
+) -> anyhow::Result<()> {
+    let model = opts
+        .model
+        .clone()
+        .context("choose an installed Ollama model")?;
     let mut session_id = opts.resume.clone();
     let mut queued = vec![opts.prompt.clone()];
     let mut turn = 0usize;
@@ -52,28 +72,73 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
         let prompt = queued.remove(0);
         turn += 1;
         let turn_id = format!("t{turn}");
-        emit(&sink, ProviderEvent::Message { id: format!("opencode-user-{turn}"), role: "user".into(), content: prompt.clone() }).await;
-        emit(&sink, ProviderEvent::TurnStarted { turn_id: turn_id.clone() }).await;
+        emit(
+            &sink,
+            ProviderEvent::Message {
+                id: format!("opencode-user-{turn}"),
+                role: "user".into(),
+                content: prompt.clone(),
+            },
+        )
+        .await;
+        emit(
+            &sink,
+            ProviderEvent::TurnStarted {
+                turn_id: turn_id.clone(),
+            },
+        )
+        .await;
         let exe = opts.executable.clone().unwrap_or_else(|| "opencode".into());
         let mut cmd = Command::new(&exe);
-        cmd.arg("run").arg("--format").arg("json").arg("--auto")
-            .arg("--model").arg(format!("ollama/{model}"));
-        if let Some(id) = &session_id { cmd.arg("--session").arg(id); }
-        if let Some(variant) = &opts.effort { cmd.arg("--variant").arg(variant); }
-        for path in prompt.lines().filter_map(|line| line.strip_prefix("Attached file: ")) {
-            let Ok(file) = std::path::Path::new(path).canonicalize() else { continue };
-            if opts.writable_roots.iter().any(|root| root.join("attachments").canonicalize().is_ok_and(|dir| file.starts_with(dir))) && file.is_file() {
+        cmd.arg("run")
+            .arg("--format")
+            .arg("json")
+            .arg("--auto")
+            .arg("--model")
+            .arg(format!("ollama/{model}"));
+        if let Some(id) = &session_id {
+            cmd.arg("--session").arg(id);
+        }
+        if let Some(variant) = &opts.effort {
+            cmd.arg("--variant").arg(variant);
+        }
+        for path in prompt
+            .lines()
+            .filter_map(|line| line.strip_prefix("Attached file: "))
+        {
+            let Ok(file) = std::path::Path::new(path).canonicalize() else {
+                continue;
+            };
+            if opts.writable_roots.iter().any(|root| {
+                root.join("attachments")
+                    .canonicalize()
+                    .is_ok_and(|dir| file.starts_with(dir))
+            }) && file.is_file()
+            {
                 cmd.arg("--file").arg(file);
             }
         }
-        cmd.arg(&prompt).current_dir(&opts.cwd).env("OPENCODE_CONFIG_CONTENT", config(&opts, &model, mode).to_string())
-            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-        let mut child = cmd.spawn().with_context(|| format!("failed to start {}", exe.display()))?;
+        cmd.arg(&prompt)
+            .current_dir(&opts.cwd)
+            .env(
+                "OPENCODE_CONFIG_CONTENT",
+                config(&opts, &model, mode).to_string(),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("failed to start {}", exe.display()))?;
         let stdout = child.stdout.take().context("OpenCode has no stdout")?;
         let stderr = child.stderr.take().context("OpenCode has no stderr")?;
         let errors = tokio::spawn(async move {
             let mut output = String::new();
-            let _ = BufReader::new(stderr).take(64 * 1024).read_to_string(&mut output).await;
+            let _ = BufReader::new(stderr)
+                .take(64 * 1024)
+                .read_to_string(&mut output)
+                .await;
             output
         });
         let mut lines = BufReader::new(stdout).lines();
@@ -127,10 +192,33 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
         let status = child.wait().await?;
         let stderr = errors.await.unwrap_or_default();
         if !status.success() || error.is_some() {
-            anyhow::bail!("OpenCode run failed: {}", error.unwrap_or_else(|| if stderr.trim().is_empty() { status.to_string() } else { stderr.trim().to_string() }));
+            anyhow::bail!(
+                "OpenCode run failed: {}",
+                error.unwrap_or_else(|| if stderr.trim().is_empty() {
+                    status.to_string()
+                } else {
+                    stderr.trim().to_string()
+                })
+            );
         }
-        emit(&sink, ProviderEvent::Message { id: format!("opencode-{turn}"), role: "assistant".into(), content: answer }).await;
-        emit(&sink, ProviderEvent::TurnCompleted { turn_id, status: "completed".into(), error: None }).await;
+        emit(
+            &sink,
+            ProviderEvent::Message {
+                id: format!("opencode-{turn}"),
+                role: "assistant".into(),
+                content: answer,
+            },
+        )
+        .await;
+        emit(
+            &sink,
+            ProviderEvent::TurnCompleted {
+                turn_id,
+                status: "completed".into(),
+                error: None,
+            },
+        )
+        .await;
     }
 }
 
@@ -146,18 +234,34 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"step_start\",\"sessionID\":\"ses_test\"}' '{\"type\":\"text\",\"sessionID\":\"ses_test\",\"part\":{\"text\":\"Done\"}}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let opts = RunOptions {
-            cwd: dir.path().into(), prompt: "hello".into(), model: Some("qwen3:8b".into()), effort: None,
-            resume: None, executable: Some(script), writable_roots: vec![dir.path().into()], permission_mode: PermissionMode::Ask,
+            cwd: dir.path().into(),
+            prompt: "hello".into(),
+            model: Some("qwen3:8b".into()),
+            effort: None,
+            resume: None,
+            executable: Some(script),
+            writable_roots: vec![dir.path().into()],
+            permission_mode: PermissionMode::Ask,
         };
         let (tx, rx) = mpsc::channel(8);
         let (events_tx, mut events_rx) = mpsc::channel(32);
         let task = tokio::spawn(run(opts, rx, events_tx));
         let mut session = false;
         let mut answer = false;
-        while let Some(event) = tokio::time::timeout(std::time::Duration::from_secs(5), events_rx.recv()).await.unwrap() {
+        while let Some(event) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), events_rx.recv())
+                .await
+                .unwrap()
+        {
             match event {
-                ProviderEvent::ProviderSession { session_id } => { assert_eq!(session_id, "ses_test"); session = true; }
-                ProviderEvent::Message { role, content, .. } if role == "assistant" => { assert_eq!(content, "Done"); answer = true; }
+                ProviderEvent::ProviderSession { session_id } => {
+                    assert_eq!(session_id, "ses_test");
+                    session = true;
+                }
+                ProviderEvent::Message { role, content, .. } if role == "assistant" => {
+                    assert_eq!(content, "Done");
+                    answer = true;
+                }
                 ProviderEvent::TurnCompleted { .. } => break,
                 _ => {}
             }

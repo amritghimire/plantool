@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
 import { relTime, shortPath, workspacePath } from "../lib/format";
@@ -8,11 +8,13 @@ import { DropSessionDialog } from "./DropSessionDialog";
 import { CommitProgress } from "./CommitProgress";
 
 export interface SidebarProps {
+  contextPanel?: ReactNode;
+  onHandoff?: () => void;
   view: SessionView;
   comments: Comment[];
   activeTab: string;
   onTab: (t: string) => void;
-  onStage: (s: Stage) => Promise<void>;
+  onStage: (s: Stage, overrideReason?: string) => Promise<void>;
   onBrief: (brief: string | null) => Promise<void>;
   onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
@@ -36,7 +38,11 @@ export interface SidebarProps {
 
 export function Sidebar(p: SidebarProps) {
   const stage = p.view.state.stage;
-  const idx = STAGES.indexOf(stage);
+  const step = p.view.step ?? (stage === "done" ? "Done" : stage === "implementation-review" ? "Review" : stage === "approved" || stage === "implementing" ? "Build" : stage === "planning" || stage === "plan-review" ? "Plan" : "Research");
+  const steps = ["Research", "Plan", "Build", "Review", "Done"];
+  const idx = steps.indexOf(step);
+  const blockers = p.comments.filter((c) => !c.parent && !c.resolved && c.kind === "human" && c.type === "blocker");
+  const [overrideReason, setOverrideReason] = useState("");
   const openThreads = p.comments.filter((c) => !c.parent && !c.resolved).sort((a, b) => a.doc.localeCompare(b.doc) || a.anchor.line - b.anchor.line);
   const resolvedThreads = p.comments.filter((c) => !c.parent && c.resolved).sort((a, b) => b.seq - a.seq);
   const repliesOf = (root: Comment) => p.comments.filter((c) => c.parent === root.id).sort((a, b) => a.seq - b.seq);
@@ -80,8 +86,9 @@ export function Sidebar(p: SidebarProps) {
   </li>;
   const liveRun = p.view.runs.find(isLive) ?? null;
   const latestImplementation = p.view.runs.filter((r) => r.task === "implement").sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
-  const stepMode = latestImplementation?.implementation_mode === "step-by-step";
-  const awaitingApproval = stage === "implementing" && stepMode && latestImplementation?.milestone_pending && latestImplementation.status === "idle";
+  const stepMode = latestImplementation?.implementation_mode === "step-by-step" || !!latestImplementation?.milestone_key;
+  const reviewable = latestImplementation?.status === "idle" || (!!latestImplementation?.milestone_key && latestImplementation.status === "stopped");
+  const awaitingApproval = stage === "implementing" && stepMode && latestImplementation?.milestone_pending && reviewable;
   const approvalRun = awaitingApproval ? latestImplementation.id : null;
   const approvalCount = awaitingApproval ? (latestImplementation.milestones_approved ?? 0) : 0;
   const planSha = plan?.sha ?? null;
@@ -102,19 +109,21 @@ export function Sidebar(p: SidebarProps) {
     };
   }, [p.view.key, approvalRun, approvalCount, planSha]);
   const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
-  const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short ticket list (todo items) to plan.md from the brief, then implement ticket by ticket.");
+  const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short task list to plan.md from the brief, then implement phase by phase.");
 
   return (
     <aside className="sidebar">
+      {p.view.handoff && <div><p className="muted small">{p.view.handoff.step} · {p.view.handoff.label}</p>{p.onHandoff && <button type="button" className="btn primary small" onClick={p.onHandoff}>{p.view.handoff.action}</button>}</div>}
+      {p.contextPanel}
       <div className="mobile-next">
         <span className={`stage-pill stage-${stage}`}>{STAGE_LABEL[stage]}</span>
         <span className="spacer" />
-        {stage === "new" && <button className="btn primary small" disabled={p.busy} onClick={() => p.onStartRun("research")}>Start research</button>}
-        {(stage === "researching" || stage === "research-review") && <button className="btn primary small" disabled={p.busy} onClick={() => p.onStartRun("plan")}>Plan it</button>}
-        {(stage === "planning" || stage === "plan-review") && <button className="btn primary small" disabled={p.busy || !plan?.exists} onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}>Approve plan</button>}
-        {stage === "approved" && <button className="btn primary small" disabled={p.busy} onClick={() => p.onStartRun("implement")}>Start implementation</button>}
-        {stage === "implementing" && <button className="btn primary small" disabled={p.busy} onClick={p.onOpenChanges}>Review changes</button>}
-        {stage === "implementation-review" && <button className="btn primary small" disabled={p.busy} onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}>Accept implementation</button>}
+        {stage === "new" && <button className="btn small" disabled={p.busy} onClick={() => p.onStartRun("research")}>Start research</button>}
+        {(stage === "researching" || stage === "research-review") && <button className="btn small" disabled={p.busy} onClick={() => p.onStartRun("plan")}>Plan it</button>}
+        {(stage === "planning" || stage === "plan-review") && <button className="btn small" disabled={p.busy || !plan?.exists || blockers.length > 0} onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}>Approve plan</button>}
+        {stage === "approved" && <button className="btn small" disabled={p.busy} onClick={() => p.onStartRun("implement")}>Start implementation</button>}
+        {stage === "implementing" && <button className="btn small" disabled={p.busy} onClick={p.onOpenChanges}>Review changes</button>}
+        {stage === "implementation-review" && <button className="btn small" disabled={p.busy} onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}>Accept implementation</button>}
       </div>
       <div className="side-block">
         <div className="side-title">{s.title}</div>
@@ -151,15 +160,15 @@ export function Sidebar(p: SidebarProps) {
         </details>
       </div>
 
-      <div className="side-block actions">
-        <div className="side-heading">Next step</div>
+      <details className="side-block actions">
+        <summary>More actions</summary>
         {stage === "new" && !s.brief && <div className="muted small">Add a brief below so the agent knows what success looks like.</div>}
         {liveRun && <div className="run-handoff"><span className={`run-status ${liveRun.status}`} /><span>{liveRun.status === "waiting" ? "The agent needs your answer." : liveRun.status === "idle" ? "The agent finished its turn. Review its work or send a follow-up." : "The agent is working. Follow its progress here."}</span><button className="btn small" type="button" onClick={() => p.onSelectRun(liveRun.id)}>Open run</button></div>}
         <button className="btn ghost" onClick={p.onAskAgent} disabled={p.busy} type="button">Ask agent…</button>
         {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
         {stage === "new" && (
           <>
-            <button className="btn primary" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
+            <button className="btn" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
               Start research
             </button>
             <div className="skip-row muted small">
@@ -175,7 +184,7 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "researching" || stage === "research-review") && (
           <>
-            <button className="btn primary" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+            <button className="btn" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
               Plan it
             </button>
             <div className="skip-row muted small">
@@ -186,11 +195,16 @@ export function Sidebar(p: SidebarProps) {
             </div>
           </>
         )}
+        {(stage === "planning" || stage === "plan-review") && blockers.length > 0 && <div className="banner">
+          <p>{blockers.length} open blockers. Resolve them or record why you are overriding them.</p>
+          <label>Override reason <input value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label>
+          <button className="btn ghost" type="button" disabled={p.busy || !plan?.exists || !overrideReason.trim()} onClick={() => void p.onStage("approved", overrideReason)}>Approve with recorded override</button>
+        </div>}
         {(stage === "planning" || stage === "plan-review") && (
           <>
             <button
-              className="btn primary"
-              disabled={p.busy || !plan?.exists}
+              className="btn"
+              disabled={p.busy || !plan?.exists || blockers.length > 0}
               onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}
               type="button"
             >
@@ -203,10 +217,10 @@ export function Sidebar(p: SidebarProps) {
         )}
         {stage === "approved" && (
           <>
-            <button className="btn primary" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
+            <button className="btn" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
               Start implementation
             </button>
-            {!plan?.exists && <div className="muted small">No plan: the agent writes the tickets (todo items) to plan.md first, then works through them.</div>}
+            {!plan?.exists && <div className="muted small">No plan: the agent writes the tasks to plan.md first, then works through them.</div>}
           </>
         )}
         {(stage === "implementing" || stage === "implementation-review") && (
@@ -216,10 +230,10 @@ export function Sidebar(p: SidebarProps) {
             </button>
             {stage === "implementing" && stepMode && latestImplementation?.milestone_pending && (
               <>
-                <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Approving commits the milestone on the session branch and the agent starts the next ticket.</div>
+                <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Approving commits the milestone on the session branch and the agent starts the next phase.</div>
                 {p.view.commit?.scope.kind === "milestone" && p.view.commit.scope.run_id === latestImplementation.id ? (
                   <CommitProgress job={p.view.commit} label="Committing milestone…" onCancel={p.onCancelCommit} />
-                ) : latestImplementation.status === "idle" ? (
+                ) : reviewable ? (
                   <>
                     <label className="muted small check-row">
                       <input type="checkbox" checked={commitMilestone} onChange={(e) => setCommitMilestone(e.target.checked)} disabled={p.busy} />
@@ -236,19 +250,19 @@ export function Sidebar(p: SidebarProps) {
                         placeholder="Commit message"
                       />
                     )}
-                    <button className="btn primary" onClick={() => p.onApproveMilestone(latestImplementation, commitMilestone, commitMessage)} disabled={p.busy || (commitMilestone && commitMessage.trim() === "")} type="button">
+                    <button className="btn" onClick={() => p.onApproveMilestone(latestImplementation, commitMilestone, commitMessage)} disabled={p.busy || p.view.state.plan_revision_pending || (commitMilestone && commitMessage.trim() === "")} type="button">
                       Approve milestone and continue
                     </button>
                   </>
                 ) : !isLive(latestImplementation) ? (
-                  <button className="btn primary" onClick={() => p.onContinueMilestone(latestImplementation)} disabled={p.busy} type="button">
+                  <button className="btn" onClick={() => p.onContinueMilestone(latestImplementation)} disabled={p.busy} type="button">
                     Resume milestone review
                   </button>
                 ) : null}
               </>
             )}
             {stage === "implementation-review" && <button
-              className="btn primary"
+              className="btn"
               disabled={p.busy}
               onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}
               type="button"
@@ -277,16 +291,16 @@ export function Sidebar(p: SidebarProps) {
             ))}
           </select>
         </label>
-      </div>
+      </details>
 
-      <Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} />
+      <details><summary>Session brief</summary><Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} /></details>
 
       <details className="workflow-details"><summary>Workflow · {STAGE_LABEL[stage]}</summary>
         <ol className="stepper">
-          {STAGES.map((st, i) => (
+          {steps.map((st, i) => (
             <li key={st} className={i < idx ? "done" : i === idx ? "current" : ""}>
               <span className="dot" />
-              <span>{STAGE_LABEL[st]}</span>
+              <span>{st}</span>
             </li>
           ))}
         </ol>
@@ -327,7 +341,7 @@ export function Sidebar(p: SidebarProps) {
         {openThreads.length > 0 && p.reviewPrompt && (
           <div className="comment-tools">
             {liveRun ? (
-              <button className="btn primary small" disabled={p.busy} onClick={() => void p.onSendToRun(p.reviewPrompt ?? "")} title="Tells the running agent to read the open comments, act on them, reply and resolve" type="button">
+              <button className="btn small" disabled={p.busy} onClick={() => void p.onSendToRun(p.reviewPrompt ?? "")} title="Tells the running agent to read the open comments, act on them, reply and resolve" type="button">
                 Send comments to the running agent
               </button>
             ) : (
@@ -431,7 +445,7 @@ function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: stri
             <button className="btn ghost small" onClick={() => setEditing(false)} type="button">
               Cancel
             </button>
-            <button className="btn primary small" disabled={busy} onClick={() => void save()} type="button">
+            <button className="btn small" disabled={busy} onClick={() => void save()} type="button">
               Save
             </button>
           </div>
@@ -532,7 +546,7 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
             <button className="btn ghost small" onClick={() => setReplying(false)} type="button">
               Cancel
             </button>
-            <button className="btn primary small" disabled={busy || !text.trim()} onClick={() => void send(text)} type="button">
+            <button className="btn small" disabled={busy || !text.trim()} onClick={() => void send(text)} type="button">
               Reply
             </button>
           </div>
