@@ -17,6 +17,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Read or change global settings.
+    Settings(commands::settings::Args),
+    /// Export a session as a portable zip.
+    Export(commands::archive::ExportArgs),
+    /// Import a session zip into a local repository.
+    Import(commands::archive::ImportArgs),
     /// Create (or reopen) a session for a piece of work and open it in the browser.
     New(commands::new::Args),
     /// List sessions (the inbox).
@@ -50,6 +56,9 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Settings(a) => commands::settings::run(a),
+        Command::Export(a) => commands::archive::export(a),
+        Command::Import(a) => commands::archive::import(a),
         Command::New(a) => commands::new::run(a),
         Command::List(a) => commands::list::run(a),
         Command::Open(a) => commands::open::run(a),

@@ -18,7 +18,9 @@ pub fn start(registry: Arc<Registry>, home: PathBuf) -> WatchHandle {
     let pending_for_watcher = pending.clone();
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = res {
-            let mut p = pending_for_watcher.lock().unwrap_or_else(|e| e.into_inner());
+            let mut p = pending_for_watcher
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             for path in ev.paths {
                 if path.extension().and_then(|e| e.to_str()) == Some("md") {
                     p.insert(path);
@@ -27,7 +29,11 @@ pub fn start(registry: Arc<Registry>, home: PathBuf) -> WatchHandle {
         }
     })
     .ok()
-    .and_then(|mut w| w.watch(&sessions_dir, RecursiveMode::Recursive).ok().map(|_| w));
+    .and_then(|mut w| {
+        w.watch(&sessions_dir, RecursiveMode::Recursive)
+            .ok()
+            .map(|_| w)
+    });
     if watcher.is_none() {
         tracing::warn!("file watcher unavailable; relying on polling");
     }

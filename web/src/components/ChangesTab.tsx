@@ -1,10 +1,13 @@
+import { CodeReview } from "./CodeReview";
+import { Thread, type ThreadActions } from "./Thread";
+import type { Comment } from "../types";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { ChangeScope, ChangesResponse, FileDiff } from "../types";
 
 type DiffState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; diff: FileDiff };
 
-export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: number }) {
+export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded, highlightComment }: { sessionKey: string; nonce: number; comments?: Comment[]; actions?: ThreadActions; onAdded?: () => void; highlightComment?: string | null }) {
   const [data, setData] = useState<ChangesResponse | null>(null);
   const [scope, setScope] = useState<ChangeScope | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -18,9 +21,19 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
       .then((r) => {
         setData(r);
         setDiffs({});
+        setOpen(new Set());
       })
       .catch((e: Error) => setErr(e.message));
   }, [sessionKey, nonce, scope]);
+  useEffect(() => {
+    if (data?.review?.tool !== "difftool") return;
+    const timer = window.setInterval(() => { void api.changes(sessionKey, scope ?? undefined).then(setData).catch(() => {}); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [sessionKey, scope, data?.review?.tool]);
+  useEffect(() => {
+    if (!highlightComment || !data) return;
+    document.getElementById(`c-${highlightComment}`)?.scrollIntoView?.({ block: "center", behavior: "auto" });
+  }, [highlightComment, data]);
   const openReview = async () => {
     setBusy(true);
     setErr(null);
@@ -71,9 +84,10 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
           {data.tool === "difftool" ? "difftool found" : data.tool === "git-difftool" ? "using git difftool" : "no diff tool found"}
         </span>
         <button className="btn primary" onClick={() => void openReview()} disabled={busy} type="button">
-          {data.tool === "difftool" ? "Review in difftool" : "Open in git difftool"}
+          {data.tool === "difftool" ? "Review in difftool" : data.tool === "none" ? "Use built-in diff" : "Open in git difftool"}
         </button>
       </div>
+      {data.difftool_open_comments !== undefined && <p className="muted">Difftool comments (read only): {data.difftool_open_comments === null ? "not available" : `${data.difftool_open_comments} open`}. Resolve them in difftool.</p>}
       {data.step_available && (
         <div className="changes-scope">
           <span className="muted small">show</span>
@@ -96,6 +110,17 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
       {data.review?.tool === "git-difftool" && <p className="banner">git difftool was launched on this machine.</p>}
       {err && <p className="error">{err}</p>}
       {data.message && <p className="muted">{data.message}</p>}
+      {actions && comments.some((c) => !c.parent && c.anchor.code) && <section aria-label="Code review comments"><h3>Code review comments</h3>{comments.filter((c) => !c.parent && c.anchor.code).map((root) => <Thread key={root.id} root={root} replies={comments.filter((c) => c.parent === root.id)} actions={actions} highlighted={root.id === highlightComment} />)}</section>}
+      {data.drift && <details className="banner" open={!data.drift.checked || data.drift.outside_files.length > 0 || data.drift.ticks_without_diff || data.drift.plan_changed}>
+        <summary>Plan and code · {data.drift.checked ? "heuristic drift check" : "drift not checked"}</summary>
+        {!data.drift.checked && <p>The plan has no parseable affected-files table. Add one to check changed files against the plan.</p>}
+        {data.drift.checked && data.drift.outside_files.length > 0 && <p>Outside planned files: {data.drift.outside_files.join(", ")}</p>}
+        {data.drift.ticks_without_diff && <p>Tasks are checked but this diff is empty. Verify the work or its base.</p>}
+        {data.drift.plan_changed && <p>The plan changed after approval. Review its revision comparison.</p>}
+        <p>Planned files: {data.drift.planned_files.join(", ") || "Not listed"}</p>
+        <p className="muted">These signals help find drift. They do not prove a task is complete.</p>
+      </details>}
+      {data.milestones && <details><summary>Planned milestones and completed tasks</summary>{data.milestones.map((m) => <section key={m.key}><strong>{m.key} · {m.status}</strong><ul>{m.completed_tasks.map((task) => <li key={task}>{task}</li>)}</ul></section>)}</details>}
       <table className="stat">
         <tbody>
           {data.stat.map((f) => {
@@ -120,7 +145,7 @@ export function ChangesTab({ sessionKey, nonce }: { sessionKey: string; nonce: n
                     ) : state.kind === "error" ? (
                       <div className="error small file-diff">{state.message}</div>
                     ) : (
-                      <DiffBlock diff={state.diff} />
+                      <DiffBlock diff={state.diff} review={actions && onAdded ? { sessionKey, comments, actions, onAdded } : undefined} />
                     )}
                   </td>
                 </tr>
@@ -148,17 +173,22 @@ function lineClass(l: string): string {
   return "dl";
 }
 
-export function DiffBlock({ diff }: { diff: FileDiff }) {
+export function DiffBlock({ diff, review }: { diff: FileDiff; review?: { sessionKey: string; comments: Comment[]; actions: ThreadActions; onAdded: () => void } }) {
   const lines = diff.diff.replace(/\n$/, "").split("\n");
   if (diff.diff.trim() === "") return <div className="muted small file-diff">No textual diff (binary or unchanged).</div>;
+  let newLine = 0;
   return (
-    <pre className="file-diff">
-      {lines.map((l, i) => (
-        <span key={i} className={lineClass(l)}>
-          {l || " "}
-        </span>
-      ))}
+    <div className="file-diff">
+      {lines.map((l, i) => {
+        const hunk = l.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+        if (hunk) newLine = Number(hunk[1]);
+        const commentable = !hunk && (l.startsWith(" ") || (l.startsWith("+") && !l.startsWith("+++")));
+        const line = commentable ? newLine++ : null;
+        return <div key={i}><span className={lineClass(l)} style={{ whiteSpace: "pre" }}>{l || " "}</span>
+          {review && line !== null && line > 0 && <CodeReview {...review} path={diff.path} line={line} context={l.slice(1)} />}
+        </div>;
+      })}
       {diff.truncated && <span className="dl meta">… diff truncated</span>}
-    </pre>
+    </div>
   );
 }

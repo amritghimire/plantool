@@ -137,7 +137,7 @@ it("offers milestone approval after a step-by-step turn with an editable commit 
   fireEvent.change(message, { target: { value: "Milestone 1: guest home route" } });
   fireEvent.click(screen.getByText("Approve milestone and continue"));
   expect(onApproveMilestone).toHaveBeenCalledWith(run, true, "Milestone 1: guest home route");
-  expect(screen.getByText("Accept implementation")).toBeDisabled();
+  expect(screen.queryByText("Accept implementation")).toBeNull();
 
   fireEvent.click(screen.getByLabelText("commit this milestone"));
   expect(screen.queryByLabelText("Commit message")).toBeNull();
@@ -156,4 +156,12 @@ it("shows the milestone commit's progress instead of the approve form while it r
   expect(screen.queryByText("Approve milestone and continue")).toBeNull();
   fireEvent.click(screen.getByText("Cancel commit"));
   expect(onCancelCommit).toHaveBeenCalled();
+});
+
+it("offers approval for a stopped scoped milestone with an adaptive checkpoint", async () => {
+  vi.spyOn(api, "milestone").mockResolvedValue({ subject: "Milestone 1: phase", dirty: true, milestone: 1, pending: true, live: false });
+  const run = { ...view.runs[0], stage: "implementing" as const, task: "implement", status: "stopped" as const, implementation_mode: "all-at-once" as const, milestone_key: "Phase 1", milestone_pending: true };
+  setup({ ...view, state: { ...view.state, stage: "implementing" }, runs: [run] });
+  await screen.findByDisplayValue("Milestone 1: phase");
+  expect(screen.getByText("Approve milestone and continue")).toBeEnabled();
 });

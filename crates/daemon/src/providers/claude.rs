@@ -1,4 +1,6 @@
-use super::{emit, EventSink, InputQuestion, PermissionOption, ProviderEvent, RunInput, RunOptions};
+use super::{
+    emit, EventSink, InputQuestion, PermissionOption, ProviderEvent, RunInput, RunOptions,
+};
 use anyhow::Context;
 use plantool_core::PermissionMode;
 use serde_json::{json, Value};
@@ -8,7 +10,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-const READ_ONLY_TOOLS: &[&str] = &["Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "TodoWrite", "TodoRead", "NotebookRead", "Task", "Agent", "ToolSearch", "Skill", "BashOutput", "KillShell", "LSP"];
+const READ_ONLY_TOOLS: &[&str] = &[
+    "Read",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "TodoRead",
+    "NotebookRead",
+    "Task",
+    "Agent",
+    "ToolSearch",
+    "Skill",
+    "BashOutput",
+    "KillShell",
+    "LSP",
+];
 
 struct Pending {
     tool: String,
@@ -24,26 +43,43 @@ fn claude_mode(mode: PermissionMode) -> &'static str {
     }
 }
 
-pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: EventSink) -> anyhow::Result<()> {
+pub async fn run(
+    opts: RunOptions,
+    mut input: mpsc::Receiver<RunInput>,
+    sink: EventSink,
+) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "claude".into());
     let mut mode = opts.permission_mode;
     let mut cmd = Command::new(&exe);
     cmd.arg("-p")
-        .arg("--input-format").arg("stream-json")
-        .arg("--output-format").arg("stream-json")
+        .arg("--input-format")
+        .arg("stream-json")
+        .arg("--output-format")
+        .arg("stream-json")
         .arg("--verbose")
         .arg("--include-partial-messages")
-        .arg("--permission-mode").arg(claude_mode(mode))
+        .arg("--permission-mode")
+        .arg(claude_mode(mode))
         .arg("--allow-dangerously-skip-permissions")
-        .arg("--permission-prompt-tool").arg("stdio");
+        .arg("--permission-prompt-tool")
+        .arg("stdio");
     if let Some(m) = &opts.model {
         cmd.arg("--model").arg(m);
+    }
+    if let Some(effort) = &opts.effort {
+        cmd.arg("--effort").arg(effort);
     }
     if let Some(r) = &opts.resume {
         cmd.arg("--resume").arg(r);
     }
-    cmd.current_dir(&opts.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-    let mut child = cmd.spawn().with_context(|| format!("failed to start {}", exe.display()))?;
+    cmd.current_dir(&opts.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to start {}", exe.display()))?;
     let mut stdin = child.stdin.take().context("no stdin")?;
     let stdout = child.stdout.take().context("no stdout")?;
     let stderr = child.stderr.take().context("no stderr")?;
@@ -54,7 +90,15 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
     let init = json!({ "type": "control_request", "request_id": "plantool-init", "request": { "subtype": "initialize", "hooks": {} } });
     stdin.write_all(format!("{init}\n").as_bytes()).await?;
     send_user(&mut stdin, &opts.prompt).await?;
-    emit(&sink, ProviderEvent::Message { id: "prompt".into(), role: "user".into(), content: opts.prompt.clone() }).await;
+    emit(
+        &sink,
+        ProviderEvent::Message {
+            id: "prompt".into(),
+            role: "user".into(),
+            content: opts.prompt.clone(),
+        },
+    )
+    .await;
 
     let mut pending: HashMap<String, Pending> = HashMap::new();
     let mut tool_names: HashMap<String, String> = HashMap::new();
@@ -175,7 +219,7 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
                         };
                         pending.insert(request_id.clone(), Pending { tool, input: input_v });
                         emit(&sink, ProviderEvent::Permission { request_id, kind: kind.into(), title, detail, options: vec![
-                            PermissionOption { id: "allow".into(), label: "Allow".into() },
+                            PermissionOption { id: "allow".into(), label: "Allow once".into() },
                             PermissionOption { id: "deny".into(), label: "Deny".into() },
                         ] }).await;
                     }
@@ -250,13 +294,27 @@ pub async fn run(opts: RunOptions, mut input: mpsc::Receiver<RunInput>, sink: Ev
     if stopped {
         let _ = child.start_kill();
         let _ = child.wait().await;
-        emit(&sink, ProviderEvent::Status { label: "stopped".into(), detail: None }).await;
+        emit(
+            &sink,
+            ProviderEvent::Status {
+                label: "stopped".into(),
+                detail: None,
+            },
+        )
+        .await;
         return Ok(());
     }
     let status = child.wait().await?;
     if !status.success() {
         let tail = stderr_tail.join("\n");
-        anyhow::bail!("claude exited with {status}{}", if tail.is_empty() { String::new() } else { format!(": {}", super::shorten(&tail, 800)) });
+        anyhow::bail!(
+            "claude exited with {status}{}",
+            if tail.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", super::shorten(&tail, 800))
+            }
+        );
     }
     Ok(())
 }
@@ -268,7 +326,11 @@ async fn send_user(stdin: &mut tokio::process::ChildStdin, text: &str) -> anyhow
     Ok(())
 }
 
-async fn respond(stdin: &mut tokio::process::ChildStdin, request_id: &str, response: Value) -> anyhow::Result<()> {
+async fn respond(
+    stdin: &mut tokio::process::ChildStdin,
+    request_id: &str,
+    response: Value,
+) -> anyhow::Result<()> {
     let msg = json!({ "type": "control_response", "response": { "subtype": "success", "request_id": request_id, "response": response } });
     stdin.write_all(format!("{msg}\n").as_bytes()).await?;
     stdin.flush().await?;

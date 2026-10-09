@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod changes;
 pub mod daemon;
 pub mod list;
@@ -5,6 +6,7 @@ pub mod new;
 pub mod open;
 pub mod run;
 pub mod session;
+pub mod settings;
 pub mod skill;
 pub mod status;
 pub mod update;

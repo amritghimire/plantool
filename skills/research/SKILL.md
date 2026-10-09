@@ -38,12 +38,9 @@ as a **slide deck** (one `##` section per slide) as well as a page, and comments
 - One idea per `##` section, and keep a section to what fits on one screen (roughly 15 lines).
   Lead each section with a one-line takeaway in bold, then the evidence.
 - Prefer bullets and tables to paragraphs. A table for "what lives where" (path, role).
-- Draw the flow. Use a ` ```mermaid ` block for anything with more than two steps: `flowchart`
-  for code paths and data flow, `sequenceDiagram` for request/response or process interaction,
-  `stateDiagram-v2` for lifecycles, `erDiagram` for models. Keep labels short; the diagram is
-  rendered in the browser and can be commented on like any other block.
-- Numbers get a chart: `pie` or `xychart-beta` in mermaid, or a small table when a chart would
-  not add anything.
+- Draw the flow when a diagram makes a code path or interaction easier to understand. Mermaid
+  diagrams render in the browser and can take comments. Use a small table for numbers unless a
+  chart makes the comparison clearer.
 - Refer to code by path and symbol name; the reader can search for it.
 
 Use this shape and drop any section that has nothing to say:
@@ -86,13 +83,22 @@ Run `plantool session doc touch --session <ref> --kind research` if you want tha
 
 ## After writing
 
-Stop. Do not plan or implement. Post each open question as a comment on its own line in the
+Do not plan or implement. Post each open question as a comment on its own line in the
 document so the human can answer it inline in the browser:
 `plantool session comment add --session <ref> --kind research --match "<the question line>" --body "<why it matters and the options you see>"`.
 A question with no line in the document is a question the human will not see.
 
-Then read any comments the human leaves:
-`plantool session comment list --session <ref> --kind human --unresolved --context`. Revise
-the document, reply on each thread with what changed, resolve it, and wait again with
-`plantool session watch --session <ref> --since <seq> --timeout 900` until the human moves on
-or tells you to plan.
+Then read any comments the human leaves with
+`plantool session comment list --session <ref> --kind human --unresolved --context --json`.
+Answer questions on their threads and leave those threads open for the human. For requests,
+revise the document, reply with what changed, and propose resolution with `--proposes-resolve`; only the owner resolves threads. Use the returned `seq`
+with `plantool session watch --session <ref> --since <seq> --timeout 900` to wait for new input.
+Stop when the human moves on or asks you to stop.
+
+## Review context
+
+State assumptions, risks and decisions needed in named sections so they are easy to review.
+Use document or section comments when feedback is broader than a source line.
+To propose changing workspace, branch, base or diff tool, use `plantool session propose`
+with a reason. The owner applies it through the browser or an explicit confirmed CLI command.
+Approval guards against honest mistakes, not a hostile agent with local filesystem access.

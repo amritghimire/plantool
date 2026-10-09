@@ -52,7 +52,7 @@ describe("DocView", () => {
     const box = screen.getByPlaceholderText("Comment on line 3…");
     fireEvent.change(box, { target: { value: "hello" } });
     fireEvent.click(screen.getByText("Comment"));
-    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 3, "hello"));
+    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 3, "hello", "note", "line"));
   });
 
   it("renders an existing thread under its list item", () => {
@@ -110,7 +110,7 @@ describe("DocView", () => {
     fireEvent.click(screen.getByTitle("Comment on line 11"));
     fireEvent.change(screen.getByPlaceholderText("Comment on line 11…"), { target: { value: "note" } });
     fireEvent.click(screen.getByText("Comment"));
-    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("research", 11, "note"));
+    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("research", 11, "note", "note", "line"));
     fireEvent.click(screen.getByText("Flow"));
     expect(screen.getByText("Flow text.")).toBeInTheDocument();
   });
@@ -122,6 +122,46 @@ describe("DocView", () => {
     fireEvent.click(buttons[5]);
     fireEvent.change(screen.getByPlaceholderText("Comment on line 6…"), { target: { value: "x" } });
     fireEvent.click(screen.getByText("Comment"));
-    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 6, "x"));
+    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 6, "x", "note", "line"));
   });
+});
+
+it("creates a document blocker without a line selection", async () => {
+  const onAdd = vi.fn(async () => {});
+  render(<DocView kind="plan" doc={doc} path={null} comments={[]} actions={actions} onAdd={onAdd} mode="rendered" target={null} highlightComment={null} showResolved={false} />);
+  fireEvent.click(screen.getByText("Comment on document"));
+  fireEvent.change(screen.getByLabelText("Feedback type"), { target: { value: "blocker" } });
+  fireEvent.change(screen.getByPlaceholderText("Comment on the whole document…"), { target: { value: "Missing risks" } });
+  fireEvent.click(screen.getByText("Comment"));
+  await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 1, "Missing risks", "blocker", "document"));
+});
+
+it("anchors section feedback to its heading", async () => {
+  const onAdd = vi.fn(async () => {});
+  render(<DocView kind="research" doc={deck} path={null} comments={[]} actions={actions} onAdd={onAdd} mode="rendered" target={null} highlightComment={null} showResolved={false} />);
+  fireEvent.click(screen.getAllByText("Comment on section")[2]);
+  fireEvent.change(screen.getByPlaceholderText("Comment on line 9…"), { target: { value: "Explain risk" } });
+  fireEvent.click(screen.getByText("Comment"));
+  await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("research", 9, "Explain risk", "note", "section"));
+});
+
+it("opens and cancels a comment with the keyboard and returns focus", async () => {
+  render(<DocView kind="plan" doc={doc} path={null} comments={[]} actions={actions} onAdd={async () => {}} mode="rendered" target={null} highlightComment={null} showResolved={false} />);
+  const block = document.querySelector<HTMLElement>('[data-line="3"]')!;
+  block.focus();
+  fireEvent.keyDown(block, { key: "c" });
+  const box = screen.getByPlaceholderText("Comment on line 3…");
+  expect(box).toHaveFocus();
+  fireEvent.keyDown(box, { key: "Escape" });
+  await vi.waitFor(() => expect(document.querySelector('[data-line="3"]')).toHaveFocus());
+});
+
+it("allows typed general comments in source view", async () => {
+  const onAdd = vi.fn(async () => {});
+  render(<DocView kind="plan" doc={doc} path={null} comments={[]} actions={actions} onAdd={onAdd} mode="source" target={null} highlightComment={null} showResolved={false} />);
+  fireEvent.click(screen.getByText("Comment on document"));
+  fireEvent.change(screen.getByLabelText("Feedback type"), { target: { value: "question" } });
+  fireEvent.change(screen.getByPlaceholderText("Comment on the whole document…"), { target: { value: "What is the assumption?" } });
+  fireEvent.click(screen.getByText("Comment"));
+  await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 1, "What is the assumption?", "question", "document"));
 });

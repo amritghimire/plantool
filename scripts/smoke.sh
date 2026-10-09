@@ -5,6 +5,7 @@ ARG="${1:-$(dirname "$0")/../target/debug/plantool}"
 BIN="$(cd "$(dirname "$ARG")" && pwd)/$(basename "$ARG")"
 TMP="$(mktemp -d)"
 PORT=$((41300 + RANDOM % 200))
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
 export PLANTOOL_HOME="$TMP/home" PLANTOOL_PORT="$PORT"
 trap '"$BIN" daemon stop >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/repo" && cd "$TMP/repo"
@@ -39,4 +40,11 @@ WT="$("$BIN" session worktree --session smoke-test)"
 [ -f "$WT/a.txt" ] || { echo "FAIL: worktree missing at $WT"; exit 1; }
 expect "$WT" "$BIN" session get --session smoke-test
 expect smoke-test "$BIN" status
+expect '"session"' "$BIN" session set --session smoke-test --difftool built-in --confirm
+"$BIN" export smoke-test -o "$TMP/session.zip"
+[ -s "$TMP/session.zip" ] || { echo "FAIL: export missing"; exit 1; }
+expect smoke-test-import-1 "$BIN" import "$TMP/session.zip" --repo "$TMP/repo"
+expect '"proposed": true' "$BIN" session propose --session smoke-test --base HEAD --reason "Smoke proposal"
+expect '"paused": true' "$BIN" session pause --session smoke-test --reason "Smoke checkpoint"
+expect built-in "$BIN" settings difftool built-in --confirm
 echo "smoke ok on port $PORT"

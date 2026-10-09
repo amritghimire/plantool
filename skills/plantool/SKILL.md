@@ -18,7 +18,7 @@ print the instructions for each phase, adapted to plantool. The stage prompts po
 wants researched or built. Treat it as the assignment; `plantool session prompt --session <ref>`
 prints the prompt for the next stage with the brief rendered in.
 
-**Only the human can approve.** The stages are `new → researching → research-review → planning →
+**Only the human can approve.** This guards against honest mistakes, not a hostile agent. The stages are `new → researching → research-review → planning →
 plan-review → approved → implementing → implementation-review → done`. You may move the stage
 forward with `session stage --set <stage>` up to `plan-review`, and from `approved` to
 `implementing` and `implementation-review`. `approved` and `done` are set from the browser only;
@@ -77,7 +77,7 @@ call. `comment context --id <id>` does the same for one comment.
   thread (`comment add --parent <id> --body "…"`), grounded in the code, and stays open for the
   human to resolve; the thread is a conversation, so read the earlier replies first
   (`comment context --id <id>`). A **request** gets the change in the document, a reply saying
-  what changed, and a resolve. Do not add unrelated findings of your own while acting.
+  what changed, and a proposed resolution (`--proposes-resolve`). Do not add unrelated findings of your own while acting.
 - **Critique** (`plantool skill` + the critique prompt, or `plantool critique <ref>`): review the
   research or plan as a reviewer, not the author. Check its claims against the code, post one
   finding per comment anchored on the line it is about (batched with `comment apply`), and end
@@ -90,6 +90,10 @@ call. `comment context --id <id>` does the same for one comment.
   changes the stage. `watch` prints one NDJSON event per line and exits; `--timeout <s>` exits 124
   on silence. Loop: watch → read → revise → reply → watch. Stop looping when the stage becomes
   `approved` (then implement) or the user tells you to stop.
+- **Resume**: read the current stage again before acting. A run may have stopped before the human
+  approved the plan or accepted the implementation. Continue the work for the stage that is
+  current now, and read the open comment board first. During step-by-step implementation, wait
+  for the human to approve a milestone before starting another task.
 
 ## Implementation
 
@@ -104,3 +108,24 @@ in difftool (if installed) or `git difftool`; if a difftool review exists, `sess
 
 `PLANTOOL_AUTHOR` names you on your comments (default `agent`). `PLANTOOL_PORT` and
 `PLANTOOL_HOME` match the daemon's. All commands accept `--json` for machine-readable output.
+
+## Review and portability
+
+Use `comment add --scope document` for whole-document feedback, or
+`--scope section --match "## Heading"` for section feedback. Feedback types are
+`note`, `blocker`, `question`, `suggestion`, and `change-approach`. Only owner blockers
+gate ordinary plan approval; the browser records explicit override reasons.
+
+The owner resolves threads. An agent replies with `--proposes-resolve` and leaves
+questions open for review. Code comments use `--code-path`, `--line`, and
+`--context-text` (exact line text without the diff prefix).
+
+Use `session plan propose-revision --reason` before changing scope during build, and
+`session pause --reason` for a checkpoint. `session get --json` includes the handoff,
+revision state, milestones, completed-task history, and pending context proposals.
+
+`plantool export <ref> -o session.zip` includes documents, review state, a summary,
+and pinned revisions. `--transcripts` and `--revisions` opt in to extra history.
+`plantool import session.zip --repo <path> [--workspace <path>]` rewrites local paths
+and chooses a collision-safe session name. Imported plans need review unless the
+owner explicitly confirms restoring their recorded approvals.

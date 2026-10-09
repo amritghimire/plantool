@@ -46,6 +46,7 @@ export function SessionList() {
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
   const [dropping, setDropping] = useState<SessionView | null>(null);
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(() => api.sessions().then((items) => { setSessions(items); setError(null); }).catch((e: Error) => setError(e.message)), []);
@@ -63,7 +64,11 @@ export function SessionList() {
     document.addEventListener("visibilitychange", poll);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", poll); document.removeEventListener("visibilitychange", poll); };
   }, [creating]);
-  const visible = (sessions ?? []).filter((s) => matchesFilter(s, filter));
+  const search = query.trim().toLowerCase();
+  const visible = (sessions ?? []).filter((s) => matchesFilter(s, filter) && (!search || [s.session.title, s.session.slug, s.session.repo_slug, s.session.repo.root, s.session.brief ?? "", s.workspace_branch ?? ""].some((value) => value.toLowerCase().includes(search)))).sort((a, b) => {
+    const priority = (view: SessionView) => { const attention = sessionAttention(view)?.filter; return attention === "needs-you" ? 0 : attention === "working" ? 1 : attention === "done" ? 3 : 2; };
+    return priority(a) - priority(b) || (b.state.updated_at || b.session.created_at).localeCompare(a.state.updated_at || a.session.created_at);
+  });
   const groups = new Map<string, SessionView[]>();
   for (const s of visible) groups.set(s.session.repo_slug, [...(groups.get(s.session.repo_slug) ?? []), s]);
   const drop = async (removeWorktree: boolean) => {
@@ -85,8 +90,9 @@ export function SessionList() {
       {sessions && sessions.length > 0 && <div className="list-filters" role="group" aria-label="Filter sessions">
         {FILTERS.map(({ id, label }) => <button key={id} className={filter === id ? "active" : ""} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label} <span className="badge">{sessions.filter((s) => matchesFilter(s, id)).length}</span></button>)}
       </div>}
-      {sessions?.length === 0 && <div className="empty"><p>No sessions yet.</p><pre>cd your-repo{"\n"}plantool new fix-something</pre></div>}
-      {sessions && sessions.length > 0 && visible.length === 0 && <div className="empty">No sessions in {FILTERS.find((f) => f.id === filter)?.label}.</div>}
+      {sessions && sessions.length > 0 && <input className="session-search" type="search" aria-label="Search sessions" placeholder="Search sessions, repositories, or briefs…" value={query} onChange={(event) => setQuery(event.target.value)} />}
+      {sessions?.length === 0 && <div className="empty"><p>Start with a piece of work in a repository.</p><button className="btn primary" type="button" onClick={() => setCreating(true)}>Create your first session</button></div>}
+      {sessions && sessions.length > 0 && visible.length === 0 && <div className="empty"><p>No matching sessions.</p><button className="btn" type="button" onClick={() => { setQuery(""); setFilter("all"); }}>Clear search and filters</button></div>}
       {[...groups.entries()].map(([repo, items]) => <section key={repo} className="repo-group"><h2>{repo} <span className="muted repo-path" title={items[0].session.repo.root}>{shortPath(items[0].session.repo.root, 4)}</span></h2><ul>
         {items.map((s) => {
           const attention = sessionAttention(s);

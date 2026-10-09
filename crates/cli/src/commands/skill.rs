@@ -7,10 +7,22 @@ pub struct Shipped {
 }
 
 pub const SKILLS: [Shipped; 4] = [
-    Shipped { name: "plantool", content: include_str!("../../../../skills/plantool/SKILL.md") },
-    Shipped { name: "research", content: include_str!("../../../../skills/research/SKILL.md") },
-    Shipped { name: "plan", content: include_str!("../../../../skills/plan/SKILL.md") },
-    Shipped { name: "implement", content: include_str!("../../../../skills/implement/SKILL.md") },
+    Shipped {
+        name: "plantool",
+        content: include_str!("../../../../skills/plantool/SKILL.md"),
+    },
+    Shipped {
+        name: "research",
+        content: include_str!("../../../../skills/research/SKILL.md"),
+    },
+    Shipped {
+        name: "plan",
+        content: include_str!("../../../../skills/plan/SKILL.md"),
+    },
+    Shipped {
+        name: "implement",
+        content: include_str!("../../../../skills/implement/SKILL.md"),
+    },
 ];
 
 #[derive(ClapArgs)]
@@ -43,7 +55,10 @@ fn installed_name(s: &Shipped) -> String {
 }
 
 fn printable(s: &Shipped) -> String {
-    s.content.replace("$ARGUMENTS", "<session ref> (see the prompt you were given, or `plantool list --repo . --json`)")
+    s.content.replace(
+        "$ARGUMENTS",
+        "<session ref> (see the prompt you were given, or `plantool list --repo . --json`)",
+    )
 }
 
 pub fn run(a: Args) -> anyhow::Result<()> {
@@ -88,7 +103,10 @@ fn install(dir: Option<PathBuf>, agent: &str, force: bool) -> anyhow::Result<()>
                 continue;
             }
             if !force {
-                println!("kept        {}  (differs; pass --force to overwrite)", target.display());
+                println!(
+                    "kept        {}  (differs; pass --force to overwrite)",
+                    target.display()
+                );
                 kept += 1;
                 continue;
             }

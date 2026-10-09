@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { liveUrl } from "../api";
 import type { LiveEvent } from "../types";
 
-export function useLive(key: string | null, onEvent: (e: LiveEvent) => void, onReconnect: () => void) {
+export function useLive(key: string | null, onEvent: (e: LiveEvent) => void, onReconnect: () => void | Promise<void>) {
+  const [connected, setConnected] = useState(false);
   const handler = useRef(onEvent);
   const reconnect = useRef(onReconnect);
   handler.current = onEvent;
@@ -16,13 +17,16 @@ export function useLive(key: string | null, onEvent: (e: LiveEvent) => void, onR
     const connect = () => {
       ws = new WebSocket(liveUrl(key));
       ws.onopen = () => {
-        if (attempts > 0) reconnect.current();
+        if (attempts > 0) {
+          setConnected(false);
+          void Promise.resolve(reconnect.current()).then(() => { if (!closed) setConnected(true); }).catch(() => { if (!closed) setConnected(false); });
+        } else setConnected(true);
         attempts = 0;
       };
       ws.onmessage = (m) => {
         try {
           const ev = JSON.parse(m.data as string) as LiveEvent;
-          if (ev.type === "resync") reconnect.current();
+          if (ev.type === "resync") { setConnected(false); void Promise.resolve(reconnect.current()).then(() => { if (!closed) setConnected(true); }).catch(() => {}); }
           else handler.current(ev);
         } catch {
           // ignore malformed frames
@@ -30,6 +34,7 @@ export function useLive(key: string | null, onEvent: (e: LiveEvent) => void, onR
       };
       ws.onclose = () => {
         if (closed) return;
+        setConnected(false);
         attempts += 1;
         const delay = Math.min(10_000, 300 * 2 ** Math.min(attempts, 5));
         timer = window.setTimeout(connect, delay);
@@ -43,4 +48,5 @@ export function useLive(key: string | null, onEvent: (e: LiveEvent) => void, onR
       ws?.close();
     };
   }, [key]);
+  return { connected };
 }

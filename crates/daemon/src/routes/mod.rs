@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod changes;
 pub mod comments;
 pub mod live;
@@ -5,6 +6,7 @@ pub mod pr;
 pub mod runs;
 pub mod sessions;
 pub mod settings;
+pub mod where_context;
 
 use crate::registry::RegistryError;
 use crate::AppState;
@@ -27,8 +29,13 @@ impl IntoResponse for ApiError {
 impl From<RegistryError> for ApiError {
     fn from(e: RegistryError) -> Self {
         let status = match &e {
-            RegistryError::NotFound(_) | RegistryError::NoDoc(..) | RegistryError::UnknownComment(_) => StatusCode::NOT_FOUND,
-            RegistryError::Ambiguous { .. } | RegistryError::RepoMismatch { .. } => StatusCode::CONFLICT,
+            RegistryError::NotFound(_)
+            | RegistryError::NoDoc(..)
+            | RegistryError::UnknownComment(_) => StatusCode::NOT_FOUND,
+            RegistryError::ReviewBlocked(_) => StatusCode::CONFLICT,
+            RegistryError::Ambiguous { .. } | RegistryError::RepoMismatch { .. } => {
+                StatusCode::CONFLICT
+            }
             RegistryError::BadSlug(_) | RegistryError::Anchor(_) => StatusCode::BAD_REQUEST,
             RegistryError::Stage(_) => StatusCode::FORBIDDEN,
             RegistryError::Git(_) => StatusCode::BAD_REQUEST,
@@ -49,7 +56,10 @@ pub fn bad_request(msg: impl Into<String>) -> ApiError {
 }
 
 pub fn actor_from(headers: &HeaderMap, state: &AppState) -> Actor {
-    match headers.get("x-plantool-actor").and_then(|v| v.to_str().ok()) {
+    match headers
+        .get("x-plantool-actor")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(t) if t == state.config.token => Actor::Human,
         _ => Actor::Agent,
     }
@@ -98,9 +108,11 @@ pub fn router(state: AppState) -> Router {
         .merge(sessions::routes())
         .merge(comments::routes())
         .merge(changes::routes())
+        .merge(archive::routes())
         .merge(live::routes())
         .merge(runs::routes())
         .merge(settings::routes())
+        .merge(where_context::routes())
         .merge(pr::routes());
     Router::new()
         .nest("/api", api)

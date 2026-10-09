@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
+import { clearDraft, getDraft, setDraft } from "../lib/drafts";
+import { providerLabel } from "../lib/agents";
 import { PERMISSION_MODES, type PermissionMode, type Run, type RunEvent } from "../types";
 
 export interface RunLine {
@@ -157,11 +159,25 @@ export function projectRun(lines: RunLine[]) {
 }
 
 export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessionKey: string; run: Run | null; lines: RunLine[]; onClose: () => void; onResume?: (run: Run) => void }) {
-  const [input, setInput] = useState("");
+  const draftKey = run ? `run:${run.id}` : "";
+  const [input, setInput] = useState(() => draftKey ? getDraft(draftKey) : "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => { setInput(draftKey ? getDraft(draftKey) : ""); }, [draftKey]);
   const { items, pending, turns } = useMemo(() => projectRun(lines), [lines]);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (pending.length) {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && (active.matches("textarea, input") || active.isContentEditable)) return;
+      previousFocus.current = active;
+      document.querySelector<HTMLElement>(".permission button, .permission input")?.focus();
+    } else if (previousFocus.current?.isConnected) {
+      previousFocus.current.focus();
+      previousFocus.current = null;
+    }
+  }, [pending[0]?.request_id]);
   const segments = useMemo(() => {
     if (!turns.length) return [{ id: "transcript", items, completed: !run || !["starting", "running", "waiting", "idle"].includes(run.status), duration: undefined }];
     const groups: { id: string; items: Item[]; completed: boolean; duration?: string }[] = [];
@@ -183,15 +199,25 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [lines.length]);
   if (!run) return null;
-  const send = async (body: unknown) => {
+  const send = async (body: unknown): Promise<boolean> => {
     setBusy(true);
     setErr(null);
     try {
       await api.runInput(sessionKey, run.id, body);
+      return true;
     } catch (e) {
       setErr((e as Error).message);
+      return false;
     } finally {
       setBusy(false);
+    }
+  };
+  const sendText = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    if (await send({ text })) {
+      setInput("");
+      clearDraft(draftKey);
     }
   };
   const live = run.status === "running" || run.status === "starting" || run.status === "waiting" || run.status === "idle";
@@ -200,7 +226,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
       <header className="run-head">
         <span className={`run-status ${run.status}`} />
         <strong>
-          {run.provider} · {run.task ?? run.stage}
+          {providerLabel(run.provider)} · {run.task ?? run.stage}
         </strong>
         <span className="muted small">{run.model ?? ""}</span>
         <span className="spacer" />
@@ -213,7 +239,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
             disabled={busy}
             onChange={(e) => void send({ permission_mode: e.target.value as PermissionMode })}
           >
-            {PERMISSION_MODES.map((m) => (
+            {PERMISSION_MODES.filter((m) => m.id !== "ask" || !["copilot", "ollama"].includes(run.provider)).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>
@@ -223,7 +249,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
           run.permission_mode && run.permission_mode !== "ask" && <span className="muted small">{PERMISSION_MODES.find((m) => m.id === run.permission_mode)?.label}</span>
         )}
         {live && (
-          <button className="btn ghost" onClick={() => void api.stopRun(sessionKey, run.id)} type="button">
+          <button className="btn ghost" onClick={() => void api.stopRun(sessionKey, run.id).catch((e: Error) => setErr(e.message))} type="button">
             Stop
           </button>
         )}
@@ -277,21 +303,17 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
             rows={2}
             value={input}
             placeholder="Tell the agent something… (⌘↩)"
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setDraft(draftKey, e.target.value); }}
             onKeyDown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && input.trim()) {
-                void send({ text: input });
-                setInput("");
+                void sendText();
               }
             }}
           />
           <button
             className="btn primary"
             disabled={busy || !input.trim()}
-            onClick={() => {
-              void send({ text: input });
-              setInput("");
-            }}
+            onClick={() => void sendText()}
             type="button"
           >
             Send

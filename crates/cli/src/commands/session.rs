@@ -20,6 +20,22 @@ pub struct Target {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Request an owner checkpoint and finish the current agent turn.
+    Pause {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Change session context; without --confirm this proposes the change.
+    Set(ContextArgs),
+    /// Propose a context change to the owner.
+    Propose(ContextArgs),
+    /// Propose a plan revision for owner review.
+    Plan {
+        #[command(subcommand)]
+        cmd: PlanCmd,
+    },
     /// Stage, documents, open comments and runs.
     Get {
         #[command(flatten)]
@@ -122,6 +138,36 @@ pub enum Cmd {
     },
 }
 
+#[derive(ClapArgs)]
+pub struct ContextArgs {
+    #[command(flatten)]
+    target: Target,
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long)]
+    branch: Option<String>,
+    #[arg(long)]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    difftool: Option<String>,
+    #[arg(long)]
+    pause_rule: Option<String>,
+    #[arg(long)]
+    confirm: bool,
+    #[arg(long, default_value = "")]
+    reason: String,
+}
+
+#[derive(Subcommand)]
+pub enum PlanCmd {
+    ProposeRevision {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long)]
+        reason: String,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum DocCmd {
     /// Print the file an agent should write for this document kind.
@@ -199,6 +245,18 @@ pub enum CommentCmd {
         /// Reply in an existing thread.
         #[arg(long)]
         parent: Option<String>,
+        /// Code file path relative to the workspace; --line is the new-side line.
+        #[arg(long)]
+        code_path: Option<String>,
+        /// Exact text of the code line, without a diff prefix.
+        #[arg(long, requires = "code_path")]
+        context_text: Option<String>,
+        #[arg(long = "type", default_value = "note", value_parser = ["note", "blocker", "question", "suggestion", "change-approach"])]
+        comment_type: String,
+        #[arg(long, default_value = "line", value_parser = ["line", "section", "document"])]
+        scope: String,
+        #[arg(long)]
+        proposes_resolve: bool,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -266,7 +324,8 @@ fn read_body(body: Option<String>, file: Option<PathBuf>) -> anyhow::Result<Stri
             std::io::stdin().read_to_string(&mut s)?;
             Ok(s)
         }
-        (None, Some(f)) => std::fs::read_to_string(absolute(&f)).with_context(|| format!("reading {}", f.display())),
+        (None, Some(f)) => std::fs::read_to_string(absolute(&f))
+            .with_context(|| format!("reading {}", f.display())),
         (None, None) => bail!("give --body or --body-file"),
     }
 }
@@ -291,7 +350,15 @@ fn print_comment(c: &Value, context: bool) {
         Some(p) => format!("{id}  reply to {p}  {kind}/{author}"),
         None => format!("{id}  {doc}.md:{line}  {kind}/{author}"),
     };
-    println!("{head}{}{}", if flags.is_empty() { "" } else { "  [" }, if flags.is_empty() { String::new() } else { format!("{}]", flags.join(", ")) });
+    println!(
+        "{head}{}{}",
+        if flags.is_empty() { "" } else { "  [" },
+        if flags.is_empty() {
+            String::new()
+        } else {
+            format!("{}]", flags.join(", "))
+        }
+    );
     if context {
         if let Some(ctx) = c["context"].as_array() {
             for l in ctx {
@@ -310,29 +377,89 @@ fn print_comment(c: &Value, context: bool) {
 pub fn run(a: Args) -> anyhow::Result<()> {
     let c = Client::connect()?;
     match a.cmd {
+        Cmd::Pause { target, reason } => {
+            let (key, _) = c.resolve_key(&target.session)?;
+            let result: Value = c.post(
+                &format!("/api/sessions/{key}/pause"),
+                &json!({"reason":reason}),
+            )?;
+            print_json(&result)
+        }
+        Cmd::Set(args) => set_context(&c, args, false),
+        Cmd::Propose(args) => set_context(&c, args, true),
+        Cmd::Plan {
+            cmd: PlanCmd::ProposeRevision { target, reason },
+        } => {
+            let (key, _) = c.resolve_key(&target.session)?;
+            let _: Value = c.post(
+                &format!("/api/sessions/{key}/plan/propose-revision"),
+                &json!({"reason":reason}),
+            )?;
+            println!("Plan revision proposed; wait for owner review before continuing the build");
+            Ok(())
+        }
         Cmd::Get { target, json } => {
             let (_, v) = c.resolve_key(&target.session)?;
             if json {
                 return print_json(&v);
             }
-            println!("{}  [{}]", v["key"].as_str().unwrap_or(""), v["state"]["stage"].as_str().unwrap_or(""));
+            println!(
+                "{}  [{}]",
+                v["key"].as_str().unwrap_or(""),
+                v["state"]["stage"].as_str().unwrap_or("")
+            );
             println!("title:    {}", v["session"]["title"].as_str().unwrap_or(""));
-            if let Some(b) = v["session"]["brief"].as_str().filter(|b| !b.trim().is_empty()) {
+            if let Some(b) = v["session"]["brief"]
+                .as_str()
+                .filter(|b| !b.trim().is_empty())
+            {
                 let mut lines = b.lines();
                 println!("brief:    {}", lines.next().unwrap_or(""));
                 for l in lines {
                     println!("          {l}");
                 }
             }
-            println!("checkout: {}", v["session"]["worktree"].as_str().or_else(|| v["session"]["repo"]["root"].as_str()).unwrap_or(""));
+            println!(
+                "checkout: {}",
+                v["session"]["worktree"]
+                    .as_str()
+                    .or_else(|| v["session"]["repo"]["root"].as_str())
+                    .unwrap_or("")
+            );
             println!("base:     {}", v["session"]["base"].as_str().unwrap_or(""));
             println!("docs:     {}", v["dir"].as_str().unwrap_or(""));
             for d in v["docs"].as_array().cloned().unwrap_or_default() {
                 let exists = d["exists"].as_bool().unwrap_or(false);
-                let prog: Vec<String> = d["progress"].as_array().cloned().unwrap_or_default().iter().map(|p| format!("{} {}/{}", p["name"].as_str().unwrap_or(""), p["done"], p["total"])).collect();
-                println!("  {:<14} {} {}{}", d["kind"].as_str().unwrap_or(""), if exists { "written" } else { "missing" }, d["path"].as_str().unwrap_or(""), if prog.is_empty() { String::new() } else { format!("  ({})", prog.join("; ")) });
+                let prog: Vec<String> = d["progress"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "{} {}/{}",
+                            p["name"].as_str().unwrap_or(""),
+                            p["done"],
+                            p["total"]
+                        )
+                    })
+                    .collect();
+                println!(
+                    "  {:<14} {} {}{}",
+                    d["kind"].as_str().unwrap_or(""),
+                    if exists { "written" } else { "missing" },
+                    d["path"].as_str().unwrap_or(""),
+                    if prog.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  ({})", prog.join("; "))
+                    }
+                );
             }
-            println!("open comments: {}   seq: {}", v["open_comments"], v["state"]["seq"]);
+            println!(
+                "open comments: {}   seq: {}",
+                v["open_comments"], v["state"]["seq"]
+            );
             println!("{}", c.session_url(v["key"].as_str().unwrap_or("")));
             Ok(())
         }
@@ -348,14 +475,30 @@ pub fn run(a: Args) -> anyhow::Result<()> {
             }
             DocCmd::Touch { target, kind, json } => {
                 let (key, _) = c.resolve_key(&target.session)?;
-                let v: Value = c.post(&format!("/api/sessions/{key}/docs/{kind}/touch"), &json!({}))?;
+                let v: Value = c.post(
+                    &format!("/api/sessions/{key}/docs/{kind}/touch"),
+                    &json!({}),
+                )?;
                 if json {
                     return print_json(&v);
                 }
-                println!("{} {}", if v["changed"].as_bool().unwrap_or(false) { "captured" } else { "unchanged" }, v["sha"].as_str().unwrap_or("(missing)"));
+                println!(
+                    "{} {}",
+                    if v["changed"].as_bool().unwrap_or(false) {
+                        "captured"
+                    } else {
+                        "unchanged"
+                    },
+                    v["sha"].as_str().unwrap_or("(missing)")
+                );
                 Ok(())
             }
-            DocCmd::Get { target, kind, json, sha } => {
+            DocCmd::Get {
+                target,
+                kind,
+                json,
+                sha,
+            } => {
                 let (key, _) = c.resolve_key(&target.session)?;
                 let q = sha.map(|s| format!("?sha={s}")).unwrap_or_default();
                 let v: Value = c.get(&format!("/api/sessions/{key}/docs/{kind}{q}"))?;
@@ -378,12 +521,27 @@ pub fn run(a: Args) -> anyhow::Result<()> {
             Ok(())
         }
         Cmd::Comment { cmd } => comment(&c, cmd),
-        Cmd::Watch { target, since, timeout, follow } => watch(&c, &target.session, since, timeout, follow),
-        Cmd::Goto { target, kind, line, match_text, comment, json } => {
+        Cmd::Watch {
+            target,
+            since,
+            timeout,
+            follow,
+        } => watch(&c, &target.session, since, timeout, follow),
+        Cmd::Goto {
+            target,
+            kind,
+            line,
+            match_text,
+            comment,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
             let mut body = json!({ "doc": kind, "line": line, "comment": comment });
             if let Some(m) = match_text {
-                let kind = body["doc"].as_str().map(|s| s.to_string()).unwrap_or_else(|| "plan".to_string());
+                let kind = body["doc"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "plan".to_string());
                 let doc: Value = c.get(&format!("/api/sessions/{key}/docs/{kind}"))?;
                 let content = doc["content"].as_str().unwrap_or("");
                 let anchor = plantool_core::anchor::resolve_match(content, &m)?;
@@ -397,12 +555,25 @@ pub fn run(a: Args) -> anyhow::Result<()> {
             println!("navigated; {} viewer(s)", v["viewers"]);
             Ok(())
         }
-        Cmd::Brief { target, set, file, clear, json } => {
+        Cmd::Brief {
+            target,
+            set,
+            file,
+            clear,
+            json,
+        } => {
             let (key, v) = c.resolve_key(&target.session)?;
-            let brief = if clear { Some(None) } else { crate::commands::new::read_brief(set, file)?.map(Some) };
+            let brief = if clear {
+                Some(None)
+            } else {
+                crate::commands::new::read_brief(set, file)?.map(Some)
+            };
             let current = match brief {
                 Some(b) => {
-                    let r: Value = c.post(&format!("/api/sessions/{key}/brief"), &json!({ "brief": b }))?;
+                    let r: Value = c.post(
+                        &format!("/api/sessions/{key}/brief"),
+                        &json!({ "brief": b }),
+                    )?;
                     if json {
                         return print_json(&r);
                     }
@@ -423,16 +594,26 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         }
         Cmd::Worktree { target, dir, json } => {
             let (key, _) = c.resolve_key(&target.session)?;
-            let v: Value = c.post(&format!("/api/sessions/{key}/worktree"), &json!({ "dir": dir.as_deref().map(absolute) }))?;
+            let v: Value = c.post(
+                &format!("/api/sessions/{key}/worktree"),
+                &json!({ "dir": dir.as_deref().map(absolute) }),
+            )?;
             if json {
                 return print_json(&v);
             }
             println!("{}", v["worktree"].as_str().unwrap_or(""));
             Ok(())
         }
-        Cmd::Prompt { target, stage, extra, json } => {
+        Cmd::Prompt {
+            target,
+            stage,
+            extra,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
-            let q = extra.map(|e| format!("?extra={}", urlencode(&e))).unwrap_or_default();
+            let q = extra
+                .map(|e| format!("?extra={}", urlencode(&e)))
+                .unwrap_or_default();
             let v: Value = c.get(&format!("/api/sessions/{key}/prompt/{stage}{q}"))?;
             if json {
                 return print_json(&v);
@@ -450,7 +631,19 @@ pub fn run(a: Args) -> anyhow::Result<()> {
 
 fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
     match cmd {
-        CommentCmd::List { target, kind, doc, author, unresolved, resolved, since, outdated, context, json, quiet } => {
+        CommentCmd::List {
+            target,
+            kind,
+            doc,
+            author,
+            unresolved,
+            resolved,
+            since,
+            outdated,
+            context,
+            json,
+            quiet,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
             let mut q = Vec::new();
             if let Some(k) = kind {
@@ -476,7 +669,11 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
             if let Some(r) = context {
                 q.push(format!("context={r}"));
             }
-            let path = format!("/api/sessions/{key}/comments{}{}", if q.is_empty() { "" } else { "?" }, q.join("&"));
+            let path = format!(
+                "/api/sessions/{key}/comments{}{}",
+                if q.is_empty() { "" } else { "?" },
+                q.join("&")
+            );
             let v: Value = c.get(&path)?;
             if json {
                 return print_json(&v);
@@ -498,14 +695,31 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
             println!("seq: {}", v["seq"]);
             Ok(())
         }
-        CommentCmd::Add { target, kind, line, match_text, body, body_file, parent, dry_run, json } => {
+        CommentCmd::Add {
+            target,
+            kind,
+            line,
+            match_text,
+            body,
+            body_file,
+            parent,
+            code_path,
+            context_text,
+            comment_type,
+            scope,
+            proposes_resolve,
+            dry_run,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
             let body_text = read_body(body, body_file)?;
-            if parent.is_none() && line.is_none() && match_text.is_none() {
+            if scope != "document" && parent.is_none() && line.is_none() && match_text.is_none() {
                 bail!("give --match \"<line text>\", --line <n>, or --parent <id>");
             }
             let doc = kind.unwrap_or_else(|| "plan".to_string());
-            let item = json!({ "doc": doc, "line": line, "match": match_text, "body": body_text, "parent": parent });
+            let code = code_path
+                .map(|path| json!({"path":path,"side":"new","line":line,"context":context_text}));
+            let item = json!({ "code": code, "doc": doc, "line": line, "match": match_text, "body": body_text, "parent": parent, "type": comment_type, "scope": scope, "proposes_resolve": proposes_resolve });
             let payload = json!({ "comments": [item], "dry_run": dry_run });
             let v: Value = c.post(&format!("/api/sessions/{key}/comments/batch"), &payload)?;
             if json {
@@ -513,14 +727,28 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
             }
             if dry_run {
                 let a = &v["anchors"][0];
-                println!("would anchor at {doc}.md:{}  {:?}", a["line"], a["text"].as_str().unwrap_or(""));
+                println!(
+                    "would anchor at {doc}.md:{}  {:?}",
+                    a["line"],
+                    a["text"].as_str().unwrap_or("")
+                );
                 return Ok(());
             }
             let cm = &v["comments"][0];
-            println!("{}  {}.md:{}", cm["id"].as_str().unwrap_or(""), cm["doc"].as_str().unwrap_or(""), cm["anchor"]["line"]);
+            println!(
+                "{}  {}.md:{}",
+                cm["id"].as_str().unwrap_or(""),
+                cm["doc"].as_str().unwrap_or(""),
+                cm["anchor"]["line"]
+            );
             Ok(())
         }
-        CommentCmd::Apply { target, input, dry_run, json } => {
+        CommentCmd::Apply {
+            target,
+            input,
+            dry_run,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
             let text = match input {
                 Some(p) if p.to_string_lossy() != "-" => std::fs::read_to_string(absolute(&p))?,
@@ -530,7 +758,8 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
                     s
                 }
             };
-            let mut payload: Value = serde_json::from_str(&text).context("input must be JSON {\"comments\":[...]}")?;
+            let mut payload: Value =
+                serde_json::from_str(&text).context("input must be JSON {\"comments\":[...]}")?;
             if payload.is_array() {
                 payload = json!({ "comments": payload });
             }
@@ -546,41 +775,77 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
                 return Ok(());
             }
             for cm in v["comments"].as_array().cloned().unwrap_or_default() {
-                println!("{}  {}.md:{}", cm["id"].as_str().unwrap_or(""), cm["doc"].as_str().unwrap_or(""), cm["anchor"]["line"]);
+                println!(
+                    "{}  {}.md:{}",
+                    cm["id"].as_str().unwrap_or(""),
+                    cm["doc"].as_str().unwrap_or(""),
+                    cm["anchor"]["line"]
+                );
             }
             Ok(())
         }
-        CommentCmd::Edit { target, id, body, body_file, json } => {
+        CommentCmd::Edit {
+            target,
+            id,
+            body,
+            body_file,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
             let text = read_body(body, body_file)?;
-            let v: Value = c.post(&format!("/api/sessions/{key}/comments/edit"), &json!({ "edits": [{ "id": id, "body": text }] }))?;
+            let v: Value = c.post(
+                &format!("/api/sessions/{key}/comments/edit"),
+                &json!({ "edits": [{ "id": id, "body": text }] }),
+            )?;
             if json {
                 return print_json(&v);
             }
             println!("edited {id}");
             Ok(())
         }
-        CommentCmd::Resolve { target, id, reopen, json } => {
+        CommentCmd::Resolve {
+            target,
+            id,
+            reopen,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
-            let v: Value = c.post(&format!("/api/sessions/{key}/comments/resolve"), &json!({ "ids": id, "resolved": !reopen }))?;
+            let v: Value = c.post(
+                &format!("/api/sessions/{key}/comments/resolve"),
+                &json!({ "ids": id, "resolved": !reopen }),
+            )?;
             if json {
                 return print_json(&v);
             }
-            println!("{} {} comment(s)", if reopen { "reopened" } else { "resolved" }, v["comments"].as_array().map(|a| a.len()).unwrap_or(0));
+            println!(
+                "{} {} comment(s)",
+                if reopen { "reopened" } else { "resolved" },
+                v["comments"].as_array().map(|a| a.len()).unwrap_or(0)
+            );
             Ok(())
         }
         CommentCmd::Rm { target, id, json } => {
             let (key, _) = c.resolve_key(&target.session)?;
-            let v: Value = c.delete(&format!("/api/sessions/{key}/comments"), &json!({ "ids": id }))?;
+            let v: Value = c.delete(
+                &format!("/api/sessions/{key}/comments"),
+                &json!({ "ids": id }),
+            )?;
             if json {
                 return print_json(&v);
             }
             println!("removed {}", v["removed"]);
             Ok(())
         }
-        CommentCmd::Context { target, id, radius, json } => {
+        CommentCmd::Context {
+            target,
+            id,
+            radius,
+            json,
+        } => {
             let (key, _) = c.resolve_key(&target.session)?;
-            let v: Value = c.get(&format!("/api/sessions/{key}/comments/{id}/context?radius={radius}"))?;
+            let v: Value = c.get(&format!(
+                "/api/sessions/{key}/comments/{id}/context?radius={radius}"
+            ))?;
             if json {
                 return print_json(&v);
             }
@@ -592,16 +857,31 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
     }
 }
 
-fn watch(c: &Client, reference: &str, since: Option<u64>, timeout: Option<u64>, follow: bool) -> anyhow::Result<()> {
+fn watch(
+    c: &Client,
+    reference: &str,
+    since: Option<u64>,
+    timeout: Option<u64>,
+    follow: bool,
+) -> anyhow::Result<()> {
     use futures::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
     let (key, _) = c.resolve_key(reference)?;
-    let url = format!("ws://127.0.0.1:{}/api/sessions/{key}/live{}", c.port, since.map(|s| format!("?since={s}")).unwrap_or_default());
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let url = format!(
+        "ws://127.0.0.1:{}/api/sessions/{key}/live{}",
+        c.port,
+        since.map(|s| format!("?since={s}")).unwrap_or_default()
+    );
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     let code = rt.block_on(async move {
-        let (ws, _) = tokio_tungstenite::connect_async(&url).await.context("connecting to the live socket")?;
+        let (ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .context("connecting to the live socket")?;
         let (_, mut read) = ws.split();
-        let deadline = timeout.map(|t| tokio::time::Instant::now() + std::time::Duration::from_secs(t));
+        let deadline =
+            timeout.map(|t| tokio::time::Instant::now() + std::time::Duration::from_secs(t));
         loop {
             let next = async { read.next().await };
             let msg = match deadline {
@@ -640,4 +920,18 @@ fn watch(c: &Client, reference: &str, since: Option<u64>, timeout: Option<u64>, 
 #[allow(dead_code)]
 pub fn open_session(c: &Client, key: &str) {
     open_browser(&c.session_url(key));
+}
+
+fn set_context(c: &Client, args: ContextArgs, propose: bool) -> anyhow::Result<()> {
+    let (key, _) = c.resolve_key(&args.target.session)?;
+    let pause_rule = args.pause_rule.map(|s| match s.as_str() {
+        "every-milestone" => json!({"mode":"every-milestone"}),
+        "no-pauses" => json!({"mode":"no-pauses"}),
+        _ => json!({"mode":"plain-language","rule":s}),
+    });
+    if pause_rule.is_some() && (!args.confirm || propose) {
+        bail!("changing the pause rule requires --confirm");
+    }
+    let v: Value = c.post(&format!("/api/sessions/{key}/where"), &json!({"base":args.base,"branch":args.branch,"workspace":args.workspace.map(|p| absolute(&p)),"difftool":args.difftool,"pause_rule":pause_rule,"confirm":args.confirm && !propose,"reason":args.reason}))?;
+    print_json(&v)
 }

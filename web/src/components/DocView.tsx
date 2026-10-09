@@ -5,7 +5,7 @@ import type { Element } from "hast";
 import { collectBlocks, blockForLine, type Block } from "../lib/blocks";
 import { splitSlides, slideForLine } from "../lib/slides";
 import { getDraft, moveDraft } from "../lib/drafts";
-import type { Comment, DocKind, DocResponse } from "../types";
+import type { AnchorScope, CommentType, Comment, DocKind, DocResponse } from "../types";
 import { Composer } from "./Composer";
 import { CopyButton } from "./CopyButton";
 import { Mermaid } from "./Markdown";
@@ -19,9 +19,9 @@ interface Props {
   path: string | null;
   comments: Comment[];
   actions: ThreadActions;
-  onAdd: (kind: DocKind, line: number, body: string) => Promise<void>;
+  onAdd: (kind: DocKind, line: number, body: string, type?: CommentType, scope?: AnchorScope) => Promise<void>;
   mode: ViewMode;
-  target: { line: number; nonce: number } | null;
+  target: { line: number; nonce: number; compose?: boolean } | null;
   highlightComment: string | null;
   showResolved: boolean;
   prompt?: string | null;
@@ -39,10 +39,12 @@ export function DocView(p: Props) {
   const [composingText, setComposingText] = useState<string | null>(null);
   const [movedNote, setMovedNote] = useState<string | null>(null);
   const setComposing = (line: number | null) => {
+    if (line === null && composing !== null) requestAnimationFrame(() => findLineElement(composing)?.focus());
     setComposingState(line);
     setComposingText(line !== null && p.doc ? (p.doc.content.split("\n")[line - 1] ?? null) : null);
     setMovedNote(null);
   };
+  const [scope, setScope] = useState<AnchorScope>("line");
   const [slide, setSlide] = useState(0);
   const blocks = useMemo(() => (p.doc ? collectBlocks(p.doc.content) : []), [p.doc]);
   const slides = useMemo(() => (p.doc ? splitSlides(p.doc.content, p.doc.headings) : []), [p.doc]);
@@ -93,6 +95,10 @@ export function DocView(p: Props) {
   }, [p.doc?.sha]);
 
   useEffect(() => {
+    if (p.target?.compose) { setScope("section"); setComposing(p.target.line); }
+  }, [p.target]);
+
+  useEffect(() => {
     if (!p.target || !slidesOn) return;
     setSlide(slideForLine(slides, p.target.line));
   }, [p.target, slidesOn, slides]);
@@ -140,7 +146,7 @@ export function DocView(p: Props) {
     const line = p.target.line;
     const el = findLineElement(line);
     if (el) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.scrollIntoView({ block: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       el.classList.add("flash");
       const t = window.setTimeout(() => el.classList.remove("flash"), 1600);
       return () => window.clearTimeout(t);
@@ -150,7 +156,7 @@ export function DocView(p: Props) {
   useEffect(() => {
     if (!p.highlightComment) return;
     const el = document.getElementById(`c-${p.highlightComment}`);
-    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    el?.scrollIntoView({ block: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [p.highlightComment, current]);
 
   if (!p.doc) {
@@ -181,22 +187,29 @@ export function DocView(p: Props) {
     );
   }
 
-  const submit = async (line: number, body: string) => {
-    await p.onAdd(p.kind, line, body);
+  const submit = async (line: number, body: string, type?: CommentType) => {
+    await p.onAdd(p.kind, line, body, type, scope);
     setComposing(null);
+    setScope("line");
   };
+
+  const documentComments = <div className="document-comments">
+    <button className="btn ghost" type="button" onClick={() => { setScope("document"); setComposing(1); }}>Comment on document</button>
+    {composing === 1 && scope === "document" && <Composer showType draftKey={`new:${p.kind}:document`} placeholder="Comment on the whole document…" onCancel={() => setComposing(null)} onSubmit={(b, t) => submit(1, b, t)} />}
+  </div>;
 
   if (p.mode === "source") {
     return (
-      <SourceView
+      <>{documentComments}<SourceView
         content={p.doc.content}
         threads={threads}
         actions={p.actions}
-        composing={composing}
-        setComposing={setComposing}
+        composing={scope === "document" ? null : composing}
+        setComposing={(line) => { setScope("line"); setComposing(line); }}
         submit={submit}
+        onSection={(line) => { setScope("section"); setComposing(line); }}
         highlightComment={p.highlightComment}
-      />
+      /></>
     );
   }
 
@@ -211,7 +224,7 @@ export function DocView(p: Props) {
     const attach = attachments.map.get(`${type}:${start}`);
     const hasDraft = composing !== start && getDraft(`new:${p.kind}:${start}`) !== "";
     const gutter = (
-      <button className={`gutter ${hasDraft ? "has-draft" : ""}`} title={hasDraft ? `Unsent comment on line ${start}` : `Comment on line ${start}`} onClick={() => setComposing(composing === start ? null : start)} type="button">
+      <button className={`gutter ${hasDraft ? "has-draft" : ""}`} title={hasDraft ? `Unsent comment on line ${start}` : `Comment on line ${start}`} onClick={() => { setScope("line"); setComposing(composing === start ? null : start); }} type="button">
         {hasDraft ? "…" : "+"}
       </button>
     );
@@ -220,17 +233,26 @@ export function DocView(p: Props) {
         {attach?.threads.map((t) => (
           <Thread key={t.root.id} root={t.root} replies={t.replies} actions={p.actions} highlighted={p.highlightComment === t.root.id} />
         ))}
-        {composing === start && (
+        {composing === start && scope !== "document" && (
           <>
             {movedNote && <div className="banner small">{movedNote}</div>}
-            <Composer draftKey={`new:${p.kind}:${start}`} placeholder={`Comment on line ${start}…`} onCancel={() => setComposing(null)} onSubmit={(b) => submit(start, b)} />
+            <Composer showType draftKey={`new:${p.kind}:${start}`} placeholder={`Comment on line ${start}…`} onCancel={() => setComposing(null)} onSubmit={(b, t) => submit(start, b, t)} />
           </>
         )}
       </>
     );
     if (tag === "li") {
       return (
-        <li className={`blk ${extraClass}`} data-line={start} data-end={block.end}>
+        <li className={`blk ${extraClass}`} tabIndex={0} onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "c" || e.key === "Enter") { e.preventDefault(); setScope("line"); setComposing(start); }
+          if (["ArrowDown", "ArrowUp", "j", "k"].includes(e.key)) {
+            e.preventDefault();
+            const items = Array.from(document.querySelectorAll<HTMLElement>(".blk[tabindex]"));
+            const index = items.indexOf(e.currentTarget);
+            items[index + (["ArrowDown", "j"].includes(e.key) ? 1 : -1)]?.focus();
+          }
+        }} data-line={start} data-end={block.end}>
           {gutter}
           {inner}
           {extras}
@@ -238,8 +260,18 @@ export function DocView(p: Props) {
       );
     }
     return (
-      <div className={`blk ${extraClass}`} data-line={start} data-end={block.end}>
+      <div className={`blk ${extraClass}`} tabIndex={0} onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "c" || e.key === "Enter") { e.preventDefault(); setScope("line"); setComposing(start); }
+          if (["ArrowDown", "ArrowUp", "j", "k"].includes(e.key)) {
+            e.preventDefault();
+            const items = Array.from(document.querySelectorAll<HTMLElement>(".blk[tabindex]"));
+            const index = items.indexOf(e.currentTarget);
+            items[index + (["ArrowDown", "j"].includes(e.key) ? 1 : -1)]?.focus();
+          }
+        }} data-line={start} data-end={block.end}>
         {gutter}
+        {type === "heading" && <button className="link" onClick={() => { setScope("section"); setComposing(start); }} type="button">Comment on section</button>}
         {inner}
         {extras}
       </div>
@@ -295,6 +327,7 @@ export function DocView(p: Props) {
     const openOn = (sl: { start: number; end: number }) => threads.filter((t) => !t.root.resolved && t.root.anchor.line >= sl.start && t.root.anchor.line <= sl.end).length;
     return (
       <div className="slides">
+        {documentComments}
         <nav className="outline" aria-label="Slides">
           {slides.map((sl) => {
             const n = openOn(sl);
@@ -337,6 +370,7 @@ export function DocView(p: Props) {
 
   return (
     <div className="doc">
+      {documentComments}
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {p.doc.content}
       </ReactMarkdown>
@@ -375,13 +409,14 @@ function findLineElement(line: number): HTMLElement | null {
   return best;
 }
 
-function SourceView({ content, threads, actions, composing, setComposing, submit, highlightComment }: {
+function SourceView({ content, threads, actions, composing, setComposing, submit, highlightComment, onSection }: {
   content: string;
   threads: { root: Comment; replies: Comment[] }[];
   actions: ThreadActions;
   composing: number | null;
   setComposing: (l: number | null) => void;
-  submit: (line: number, body: string) => Promise<void>;
+  onSection: (line: number) => void;
+  submit: (line: number, body: string, type?: CommentType) => Promise<void>;
   highlightComment: string | null;
 }) {
   const lines = content.split("\n");
@@ -404,12 +439,13 @@ function SourceView({ content, threads, actions, composing, setComposing, submit
             </button>
             <span className="ln">{n}</span>
             <span className="txt">{text || " "}</span>
+            {/^(#{1,6})\s/.test(text) && <button type="button" className="link" onClick={() => onSection(n)}>Comment on section</button>}
             {(ts || composing === n) && (
               <div className="src-extras">
                 {ts?.map((t) => (
                   <Thread key={t.root.id} root={t.root} replies={t.replies} actions={actions} highlighted={highlightComment === t.root.id} />
                 ))}
-                {composing === n && <Composer placeholder={`Comment on line ${n}…`} onCancel={() => setComposing(null)} onSubmit={(b) => submit(n, b)} />}
+                {composing === n && <Composer showType placeholder={`Comment on line ${n}…`} onCancel={() => setComposing(null)} onSubmit={(b, t) => submit(n, b, t)} />}
               </div>
             )}
           </div>

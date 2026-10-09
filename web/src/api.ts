@@ -49,6 +49,10 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  setContext: (key: string, body: { base?: string; branch?: string; workspace?: string; difftool?: string; pause_rule?: { mode: string; rule?: string } }) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/where`, body),
+  contextProposal: (key: string, id: string, dismiss: boolean) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/proposals`, { id, dismiss }),
+  diffToolSetting: () => request<{ value: string | null; difftool: string | null }>("GET", "/api/settings/difftool"),
+  setDiffToolSetting: (value: string) => request("POST", "/api/settings/difftool", { value }),
   sessions: () => request<SessionView[]>("GET", "/api/sessions"),
   session: (key: string) => request<SessionView>("GET", `/api/sessions/${key}`),
   repos: () => request<{ repos: RepoInfo[] }>("GET", "/api/repos"),
@@ -66,19 +70,22 @@ export const api = {
   createPr: (key: string, body: { head: string; repository: string; title: string; body: string; draft: boolean }) => request<{ pull_request: NonNullable<Session["pull_request"]>; session: Session }>("POST", `/api/sessions/${key}/pr`, body),
   refreshPr: (key: string) => request<{ pull_request: NonNullable<Session["pull_request"]>; session: Session }>("POST", `/api/sessions/${key}/pr/refresh`),
   doc: (key: string, kind: DocKind) => request<DocResponse>("GET", `/api/sessions/${key}/docs/${kind}`),
+  planRevisions: (key: string) => request<{ current: DocResponse | null; approved: DocResponse | null; viewed: DocResponse | null; change: string | null; pending: boolean }>("GET", `/api/sessions/${key}/docs/plan/revisions`),
+  markViewed: (key: string, kind: DocKind, sha: string) => request("POST", `/api/sessions/${key}/docs/${kind}/viewed`, { sha }),
   docPath: (key: string, kind: DocKind) => request<{ kind: DocKind; path: string; exists: boolean }>("GET", `/api/sessions/${key}/docs/${kind}/path`),
   comments: (key: string) => request<{ seq: number; comments: Comment[] }>("GET", `/api/sessions/${key}/comments`),
-  addComment: (key: string, c: { doc: DocKind; line?: number; match?: string; body: string; parent?: string }) =>
+  addComment: (key: string, c: { doc: DocKind; line?: number; match?: string; body: string; parent?: string; type?: import("./types").CommentType; scope?: import("./types").AnchorScope; code?: import("./types").CodeAnchor }) =>
     request<{ comments: Comment[]; seq: number }>("POST", `/api/sessions/${key}/comments/batch`, { comments: [c] }),
   editComment: (key: string, id: string, body: string) => request<{ comments: Comment[] }>("POST", `/api/sessions/${key}/comments/edit`, { edits: [{ id, body }] }),
+  promoteBlocker: (key: string, id: string) => request<{ comment: Comment }>("POST", `/api/sessions/${key}/comments/${id}/promote`, {}),
   resolve: (key: string, ids: string[], resolved: boolean) => request<{ comments: Comment[] }>("POST", `/api/sessions/${key}/comments/resolve`, { ids, resolved }),
   removeComments: (key: string, ids: string[]) => request<{ removed: number }>("POST", `/api/sessions/${key}/comments/remove`, { ids }),
-  setStage: (key: string, to: Stage) => request<{ stage: Stage }>("POST", `/api/sessions/${key}/stage`, { to }),
+  setStage: (key: string, to: Stage, override_reason?: string, plan_sha?: string) => request<{ stage: Stage }>("POST", `/api/sessions/${key}/stage`, { to, override_reason, plan_sha }),
   navigate: (key: string, target: Partial<NavTarget>) => request<{ viewers: number }>("POST", `/api/sessions/${key}/navigate`, target),
   changes: (key: string, scope?: ChangeScope) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes${scope ? `?scope=${scope}` : ""}`),
   openChanges: (key: string, scope?: ChangeScope) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, { scope: scope ?? null }),
   changesFile: (key: string, path: string, scope?: ChangeScope) => request<FileDiff>("GET", `/api/sessions/${key}/changes/file?path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ""}`),
-  startRun: (key: string, body: { provider: string; stage: string; model?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  startRun: (key: string, body: { milestone?: string; pause_rule?: { mode: string; rule?: string }; provider: string; stage: string; model?: string; effort?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
   prompt: (key: string, stage: PromptStage, extra?: string, implementationMode?: string, resumeRun?: string) => {
     const query = new URLSearchParams();
     if (extra) query.set("extra", extra);
@@ -101,6 +108,16 @@ export const api = {
   },
   setWorktreeDir: (scope: "global" | "repo", value: string | null, repo?: string) => request<WorktreeDirSetting>("POST", "/api/settings/worktree-dir", { scope, repo, value }),
   providers: () => request<{ providers: { id: string; available: boolean; version?: string; error?: string; models: { id: string; label: string }[] }[] }>("GET", "/api/providers"),
+  uploadAttachment: async (key: string, file: File): Promise<{ name: string; path: string }> => {
+    const res = await fetch(`/api/sessions/${key}/attachments`, {
+      method: "POST",
+      headers: { "x-plantool-actor": token(), "x-plantool-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
+      body: file,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new ApiError(res.status, data.error ?? "Upload failed");
+    return data;
+  },
 };
 
 export function liveUrl(key: string): string {

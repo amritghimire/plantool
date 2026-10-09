@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod assets;
 pub mod changes;
 pub mod commits;
@@ -22,7 +23,10 @@ pub use registry::Registry;
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_env("PLANTOOL_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_target(false).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init();
 }
 
 #[derive(Clone)]
@@ -41,19 +45,45 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     for s in registry.all() {
         runs.mark_orphans(&s);
     }
-    let state = AppState { registry: registry.clone(), config: config.clone(), runs, shutdown: shutdown_tx };
+    let state = AppState {
+        registry: registry.clone(),
+        config: config.clone(),
+        runs,
+        shutdown: shutdown_tx,
+    };
+
+    let idle_state = state.clone();
+    let idle_sweep = tokio::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            timer.tick().await;
+            for session in idle_state.registry.all() {
+                let minutes = git::git(
+                    session.session().cwd(),
+                    &["config", "--get", "plantool.idleMinutes"],
+                )
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30);
+                idle_state.runs.sweep_idle(&session, minutes).await;
+            }
+        }
+    });
 
     let _watcher = watcher::start(registry.clone(), config.home.clone());
 
     let app = routes::router(state.clone());
     let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    store::write_daemon_info(&config.home, &store::DaemonInfo {
-        pid: std::process::id(),
-        port: config.port,
-        protocol: plantool_core::PROTOCOL_VERSION,
-        version: config.version.clone(),
-    })?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|error| anyhow::anyhow!("Could not start plantool on {addr}: {error}. Run `plantool daemon status` to check the existing daemon, or choose a free port with PLANTOOL_PORT."))?;
+    store::write_daemon_info(
+        &config.home,
+        &store::DaemonInfo {
+            pid: std::process::id(),
+            port: config.port,
+            protocol: plantool_core::PROTOCOL_VERSION,
+            version: config.version.clone(),
+        },
+    )?;
     tracing::info!("plantool daemon listening on http://{addr}");
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -61,6 +91,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             tracing::info!("shutdown requested");
         })
         .await?;
+    idle_sweep.abort();
     let _ = store::remove_daemon_info(&config.home);
     Ok(())
 }

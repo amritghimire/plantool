@@ -42,12 +42,19 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String, GitError> {
 /// Git hooks run under the daemon's environment, which may not include the repo's virtualenv.
 fn commit_hook_path(cwd: &Path) -> Option<OsString> {
     let mut paths = Vec::new();
-    let checkout_bin = cwd.join(".venv").join(if cfg!(windows) { "Scripts" } else { "bin" });
+    let checkout_bin = cwd
+        .join(".venv")
+        .join(if cfg!(windows) { "Scripts" } else { "bin" });
     if checkout_bin.is_dir() {
         paths.push(checkout_bin);
     }
-    if let Ok(common_dir) = git(cwd, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) {
-        let main_bin = main_root(Path::new(&common_dir)).join(".venv").join(if cfg!(windows) { "Scripts" } else { "bin" });
+    if let Ok(common_dir) = git(
+        cwd,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ) {
+        let main_bin = main_root(Path::new(&common_dir))
+            .join(".venv")
+            .join(if cfg!(windows) { "Scripts" } else { "bin" });
         if main_bin.is_dir() && !paths.contains(&main_bin) {
             paths.push(main_bin);
         }
@@ -55,26 +62,52 @@ fn commit_hook_path(cwd: &Path) -> Option<OsString> {
     if paths.is_empty() {
         return None;
     }
-    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     std::env::join_paths(paths).ok()
 }
 
 pub fn detect_checkout(start: &Path) -> Result<Checkout, GitError> {
-    let start = if start.is_dir() { start.to_path_buf() } else { start.parent().map(Path::to_path_buf).unwrap_or_else(|| start.to_path_buf()) };
-    let out = git(&start, &["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]).map_err(|e| match e {
+    let start = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        start
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| start.to_path_buf())
+    };
+    let out = git(
+        &start,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-common-dir",
+        ],
+    )
+    .map_err(|e| match e {
         GitError::Failed { .. } => GitError::NotARepo(start.clone()),
         other => other,
     })?;
     let mut lines = out.lines();
     let root = PathBuf::from(lines.next().unwrap_or_default());
     let common_dir = PathBuf::from(lines.next().unwrap_or_default());
-    let branch = git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".to_string());
-    Ok(Checkout { root, common_dir, branch })
+    let branch =
+        git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".to_string());
+    Ok(Checkout {
+        root,
+        common_dir,
+        branch,
+    })
 }
 
 pub fn main_root(common_dir: &Path) -> PathBuf {
     if common_dir.file_name().and_then(|n| n.to_str()) == Some(".git") {
-        common_dir.parent().map(Path::to_path_buf).unwrap_or_else(|| common_dir.to_path_buf())
+        common_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| common_dir.to_path_buf())
     } else {
         common_dir.to_path_buf()
     }
@@ -109,7 +142,9 @@ pub fn slug_from_remote(url: &str) -> Option<String> {
     let no_git = url.strip_suffix(".git").unwrap_or(url);
     let no_git = no_git.trim_end_matches('/');
     let path = if let Some((_, rest)) = no_git.split_once("://") {
-        rest.split_once('/').map(|(_, p)| p.to_string()).unwrap_or_default()
+        rest.split_once('/')
+            .map(|(_, p)| p.to_string())
+            .unwrap_or_default()
     } else if let Some((_, rest)) = no_git.split_once(':') {
         rest.to_string()
     } else {
@@ -119,7 +154,11 @@ pub fn slug_from_remote(url: &str) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    let tail = if parts.len() >= 2 { &parts[parts.len() - 2..] } else { &parts[..] };
+    let tail = if parts.len() >= 2 {
+        &parts[parts.len() - 2..]
+    } else {
+        &parts[..]
+    };
     Some(sanitize_slug(&tail.join("-")))
 }
 
@@ -130,17 +169,32 @@ pub fn repo_slug(c: &Checkout) -> String {
             return s;
         }
     }
-    root.file_name().map(|n| sanitize_slug(&n.to_string_lossy())).unwrap_or_else(|| "repo".to_string())
+    root.file_name()
+        .map(|n| sanitize_slug(&n.to_string_lossy()))
+        .unwrap_or_else(|| "repo".to_string())
 }
 
 pub fn default_base(c: &Checkout) -> String {
-    if let Ok(r) = git(&c.root, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+    if let Ok(r) = git(
+        &c.root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) {
         if let Some((_, b)) = r.split_once('/') {
             return b.to_string();
         }
     }
     for cand in ["main", "master", "develop"] {
-        if git(&c.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{cand}")]).is_ok() {
+        if git(
+            &c.root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{cand}"),
+            ],
+        )
+        .is_ok()
+        {
             return cand.to_string();
         }
     }
@@ -171,11 +225,18 @@ pub fn worktree_dir_template(root: &Path) -> String {
 /// `plantool.worktreeDir` as set in the global git config, or in this checkout's own config.
 pub fn worktree_dir_setting(root: &Path, global: bool) -> Option<String> {
     let scope = if global { "--global" } else { "--local" };
-    git(root, &["config", scope, "--get", WORKTREE_DIR_KEY]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    git(root, &["config", scope, "--get", WORKTREE_DIR_KEY])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Set `plantool.worktreeDir` in the global or the checkout's config; an empty value unsets it.
-pub fn set_worktree_dir_setting(root: &Path, global: bool, value: Option<&str>) -> Result<(), GitError> {
+pub fn set_worktree_dir_setting(
+    root: &Path,
+    global: bool,
+    value: Option<&str>,
+) -> Result<(), GitError> {
     let scope = if global { "--global" } else { "--local" };
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         Some(v) => git(root, &["config", scope, WORKTREE_DIR_KEY, v]).map(|_| ()),
@@ -185,7 +246,10 @@ pub fn set_worktree_dir_setting(root: &Path, global: bool, value: Option<&str>) 
 }
 
 pub fn resolve_worktree_dir(root: &Path, template: &str, slug: &str) -> PathBuf {
-    let repo = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".to_string());
+    let repo = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".to_string());
     let mut path = template.replace("{repo}", &repo);
     if path.contains("{slug}") {
         path = path.replace("{slug}", slug);
@@ -197,7 +261,11 @@ pub fn resolve_worktree_dir(root: &Path, template: &str, slug: &str) -> PathBuf 
         (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
         _ => PathBuf::from(path),
     };
-    let path = if path.is_absolute() { path } else { root.join(path) };
+    let path = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
     let mut out = PathBuf::new();
     for part in path.components() {
         match part {
@@ -235,7 +303,16 @@ pub fn worktree_add(c: &Checkout, path: &Path, branch: &str, base: &str) -> Resu
         std::fs::create_dir_all(parent)?;
     }
     let p = path.to_string_lossy().to_string();
-    let exists = git(&c.root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok();
+    let exists = git(
+        &c.root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .is_ok();
     if exists {
         git(&c.root, &["worktree", "add", &p, branch])?;
     } else {
@@ -311,7 +388,10 @@ pub fn is_dirty(cwd: &Path) -> Result<bool, GitError> {
 
 /// Paths `git status` reports, staged or not, including untracked files. Renames list the new path.
 pub fn changed_paths(cwd: &Path) -> Result<Vec<String>, GitError> {
-    let out = git(cwd, &["status", "--porcelain", "-z", "--untracked-files=all"])?;
+    let out = git(
+        cwd,
+        &["status", "--porcelain", "-z", "--untracked-files=all"],
+    )?;
     let mut entries = out.split('\0').filter(|e| !e.is_empty());
     let mut files = Vec::new();
     while let Some(entry) = entries.next() {
@@ -326,8 +406,13 @@ pub fn changed_paths(cwd: &Path) -> Result<Vec<String>, GitError> {
 
 pub fn commit_all(cwd: &Path, message: &str) -> Result<String, GitError> {
     match commit_milestone(cwd, message, false)? {
-        CommitOutcome::Committed(sha) | CommitOutcome::HookRewrote { sha: Some(sha), .. } => Ok(sha),
-        CommitOutcome::HookRewrote { files, .. } => Err(GitError::Failed { args: "commit".into(), stderr: format!("hooks rewrote {}", files.join(", ")) }),
+        CommitOutcome::Committed(sha) | CommitOutcome::HookRewrote { sha: Some(sha), .. } => {
+            Ok(sha)
+        }
+        CommitOutcome::HookRewrote { files, .. } => Err(GitError::Failed {
+            args: "commit".into(),
+            stderr: format!("hooks rewrote {}", files.join(", ")),
+        }),
     }
 }
 
@@ -335,14 +420,26 @@ pub fn commit_all(cwd: &Path, message: &str) -> Result<String, GitError> {
 pub enum CommitOutcome {
     Committed(String),
     /// Hooks changed files. `sha` is set when the commit still landed; the rewritten files are staged either way.
-    HookRewrote { sha: Option<String>, files: Vec<String> },
+    HookRewrote {
+        sha: Option<String>,
+        files: Vec<String>,
+    },
 }
 
 /// Paths with edits that are not in the index. Everything is staged before a milestone commit
 /// runs, so anything unstaged afterwards came from a hook.
 fn unstaged_paths(cwd: &Path) -> Result<Vec<String>, GitError> {
-    let mut files: Vec<String> = git(cwd, &["diff", "--name-only"])?.lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
-    files.extend(git(cwd, &["ls-files", "--others", "--exclude-standard"])?.lines().filter(|l| !l.is_empty()).map(str::to_string));
+    let mut files: Vec<String> = git(cwd, &["diff", "--name-only"])?
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    files.extend(
+        git(cwd, &["ls-files", "--others", "--exclude-standard"])?
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string),
+    );
     files.sort();
     files.dedup();
     Ok(files)
@@ -371,7 +468,10 @@ fn classify_commit(cwd: &Path, result: Result<(), GitError>) -> Result<CommitOut
         Ok(_) if files.is_empty() => Ok(CommitOutcome::Committed(head_sha(cwd)?)),
         Ok(_) => {
             git(cwd, &["add", "-A"])?;
-            Ok(CommitOutcome::HookRewrote { sha: Some(head_sha(cwd)?), files })
+            Ok(CommitOutcome::HookRewrote {
+                sha: Some(head_sha(cwd)?),
+                files,
+            })
         }
         Err(_) if !files.is_empty() => {
             git(cwd, &["add", "-A"])?;
@@ -396,13 +496,23 @@ pub enum CommitStep {
     Line(String),
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, GitError> + Send + 'static) -> Result<T, GitError> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| GitError::Io(std::io::Error::other(e)))?
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, GitError> + Send + 'static,
+) -> Result<T, GitError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| GitError::Io(std::io::Error::other(e)))?
 }
 
 /// `commit_milestone`, streaming git's and the hooks' output line by line. Notifying `cancel`
 /// kills `git commit` and every process it started; the files stay staged.
-pub async fn commit_streaming(cwd: &Path, message: &str, amend: bool, cancel: std::sync::Arc<tokio::sync::Notify>, mut on_step: impl FnMut(CommitStep) + Send) -> Result<CommitOutcome, CommitError> {
+pub async fn commit_streaming(
+    cwd: &Path,
+    message: &str,
+    amend: bool,
+    cancel: std::sync::Arc<tokio::sync::Notify>,
+    mut on_step: impl FnMut(CommitStep) + Send,
+) -> Result<CommitOutcome, CommitError> {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -410,13 +520,25 @@ pub async fn commit_streaming(cwd: &Path, message: &str, amend: bool, cancel: st
     blocking(move || git(&dir, &["add", "-A"])).await?;
     on_step(CommitStep::Committing);
     let mut command = tokio::process::Command::new("git");
-    command.args(commit_args(message, amend)).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    command
+        .args(commit_args(message, amend))
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     if let Some(path) = commit_hook_path(cwd) {
         command.env("PATH", path);
     }
     #[cfg(unix)]
     command.process_group(0);
-    let mut child = command.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { GitError::Missing } else { GitError::Io(e) })?;
+    let mut child = command.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            GitError::Missing
+        } else {
+            GitError::Io(e)
+        }
+    })?;
     let mut stdout = child.stdout.take().map(|s| BufReader::new(s).lines());
     let mut stderr = child.stderr.take().map(|s| BufReader::new(s).lines());
     let mut errors = Vec::new();
@@ -449,7 +571,14 @@ pub async fn commit_streaming(cwd: &Path, message: &str, amend: bool, cancel: st
         terminate(&mut child).await;
         return Err(CommitError::Cancelled);
     };
-    let result = if status.success() { Ok(()) } else { Err(GitError::Failed { args: commit_args(message, amend).join(" "), stderr: errors.join("\n").trim().to_string() }) };
+    let result = if status.success() {
+        Ok(())
+    } else {
+        Err(GitError::Failed {
+            args: commit_args(message, amend).join(" "),
+            stderr: errors.join("\n").trim().to_string(),
+        })
+    };
     let dir = cwd.to_path_buf();
     Ok(blocking(move || classify_commit(&dir, result)).await?)
 }
@@ -460,11 +589,20 @@ async fn terminate(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     if let Some(pid) = child.id() {
         let group = format!("-{pid}");
-        let _ = tokio::process::Command::new("kill").args(["-TERM", "--", &group]).status().await;
-        if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await.is_ok() {
+        let _ = tokio::process::Command::new("kill")
+            .args(["-TERM", "--", &group])
+            .status()
+            .await;
+        if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait())
+            .await
+            .is_ok()
+        {
             return;
         }
-        let _ = tokio::process::Command::new("kill").args(["-KILL", "--", &group]).status().await;
+        let _ = tokio::process::Command::new("kill")
+            .args(["-KILL", "--", &group])
+            .status()
+            .await;
     }
     let _ = child.start_kill();
     let _ = child.wait().await;
@@ -477,7 +615,10 @@ pub fn diff_file(cwd: &Path, base: &str, path: &str) -> Result<String, GitError>
     if tracked {
         return git(cwd, &["diff", "--no-color", base, "--", path]);
     }
-    let out = Command::new("git").args(["diff", "--no-color", "--no-index", "--", "/dev/null", path]).current_dir(cwd).output()?;
+    let out = Command::new("git")
+        .args(["diff", "--no-color", "--no-index", "--", "/dev/null", path])
+        .current_dir(cwd)
+        .output()?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
@@ -492,14 +633,109 @@ pub fn diff_numstat(cwd: &Path, base: &str) -> Result<Vec<FileStat>, GitError> {
         if p.is_empty() {
             continue;
         }
-        stats.push(FileStat { path: p.to_string(), added: a.parse().unwrap_or(0), deleted: d.parse().unwrap_or(0) });
+        stats.push(FileStat {
+            path: p.to_string(),
+            added: a.parse().unwrap_or(0),
+            deleted: d.parse().unwrap_or(0),
+        });
     }
     let untracked = git(cwd, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
     for p in untracked.lines().filter(|l| !l.is_empty()) {
-        let added = std::fs::read_to_string(cwd.join(p)).map(|s| s.lines().count() as u32).unwrap_or(0);
-        stats.push(FileStat { path: p.to_string(), added, deleted: 0 });
+        let added = std::fs::read_to_string(cwd.join(p))
+            .map(|s| s.lines().count() as u32)
+            .unwrap_or(0);
+        stats.push(FileStat {
+            path: p.to_string(),
+            added,
+            deleted: 0,
+        });
     }
     Ok(stats)
+}
+
+pub fn snapshot_tree(cwd: &Path, index: &Path) -> Result<String, GitError> {
+    let result = (|| {
+        for args in [
+            vec!["read-tree", "HEAD"],
+            vec!["add", "-A"],
+            vec!["write-tree"],
+        ] {
+            let output = Command::new("git")
+                .current_dir(cwd)
+                .env("GIT_INDEX_FILE", index)
+                .args(&args)
+                .output()?;
+            if !output.status.success() {
+                return Err(GitError::Failed {
+                    args: args.join(" "),
+                    stderr: String::from_utf8_lossy(&output.stderr).into(),
+                });
+            }
+            if args[0] == "write-tree" {
+                return Ok(String::from_utf8_lossy(&output.stdout).trim().into());
+            }
+        }
+        unreachable!()
+    })();
+    let _ = std::fs::remove_file(index);
+    result
+}
+
+pub fn context_precheck(
+    session: &plantool_core::Session,
+    workspace: Option<&Path>,
+    base: Option<&str>,
+    branch: Option<&str>,
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    let target = workspace.unwrap_or(session.cwd());
+    for path in [session.cwd().as_path(), target] {
+        match git(path, &["status", "--porcelain"]) {
+            Ok(status) if !status.is_empty() => {
+                blockers.push(format!("{} has uncommitted changes", path.display()))
+            }
+            Err(e) => blockers.push(e.to_string()),
+            _ => {}
+        }
+    }
+    if let Some(base) = base {
+        if let Err(e) = git(
+            target,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{base}^{{commit}}"),
+            ],
+        ) {
+            blockers.push(e.to_string());
+        }
+    }
+    if let Some(branch) = branch {
+        if let Err(e) = git(target, &["check-ref-format", "--branch", branch]) {
+            blockers.push(e.to_string());
+        }
+        if let Err(e) = git(
+            target,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("refs/heads/{branch}"),
+            ],
+        ) {
+            blockers.push(e.to_string());
+        }
+    }
+    if let Some(workspace) = workspace {
+        match detect_checkout(workspace) {
+            Ok(checkout) if checkout.common_dir == session.repo.common_dir => {}
+            _ => blockers.push("Workspace must be a checkout of this repository".into()),
+        }
+    }
+    blockers.sort();
+    blockers.dedup();
+    blockers
 }
 
 #[cfg(test)]
@@ -508,10 +744,22 @@ mod tests {
 
     #[test]
     fn slug_from_ssh_https_and_bare() {
-        assert_eq!(slug_from_remote("git@github.com:datachain-ai/studio.git").as_deref(), Some("datachain-ai-studio"));
-        assert_eq!(slug_from_remote("https://github.com/datachain-ai/studio").as_deref(), Some("datachain-ai-studio"));
-        assert_eq!(slug_from_remote("ssh://git@github.com/Owner/Repo.git").as_deref(), Some("owner-repo"));
-        assert_eq!(slug_from_remote("/srv/git/tools.git").as_deref(), Some("git-tools"));
+        assert_eq!(
+            slug_from_remote("git@github.com:datachain-ai/studio.git").as_deref(),
+            Some("datachain-ai-studio")
+        );
+        assert_eq!(
+            slug_from_remote("https://github.com/datachain-ai/studio").as_deref(),
+            Some("datachain-ai-studio")
+        );
+        assert_eq!(
+            slug_from_remote("ssh://git@github.com/Owner/Repo.git").as_deref(),
+            Some("owner-repo")
+        );
+        assert_eq!(
+            slug_from_remote("/srv/git/tools.git").as_deref(),
+            Some("git-tools")
+        );
         assert_eq!(slug_from_remote(""), None);
     }
 
@@ -556,8 +804,14 @@ mod tests {
             main.join(".worktrees").join("s")
         );
         set_worktree_dir_setting(&root, false, Some("../{repo}-worktrees")).unwrap();
-        assert_eq!(worktree_dir_setting(&root, false).as_deref(), Some("../{repo}-worktrees"));
-        assert_eq!(default_worktree_dir(&c, "s"), main.parent().unwrap().join("repo-worktrees").join("s"));
+        assert_eq!(
+            worktree_dir_setting(&root, false).as_deref(),
+            Some("../{repo}-worktrees")
+        );
+        assert_eq!(
+            default_worktree_dir(&c, "s"),
+            main.parent().unwrap().join("repo-worktrees").join("s")
+        );
         set_worktree_dir_setting(&root, false, Some("  ")).unwrap();
         assert_eq!(worktree_dir_setting(&root, false), None);
         set_worktree_dir_setting(&root, false, None).unwrap();
@@ -584,7 +838,10 @@ mod tests {
         worktree_add(&c, &wt, "feature", "main").unwrap();
         let c2 = detect_checkout(&wt).unwrap();
         assert_eq!(c2.branch, "feature");
-        assert_eq!(main_root(&c2.common_dir).canonicalize().unwrap(), root.canonicalize().unwrap());
+        assert_eq!(
+            main_root(&c2.common_dir).canonicalize().unwrap(),
+            root.canonicalize().unwrap()
+        );
         assert_eq!(repo_slug(&c2), "repo");
 
         std::fs::write(wt.join("b.txt"), "x\ny\n").unwrap();
@@ -649,7 +906,10 @@ mod tests {
         assert_ne!(first, second);
         assert!(!is_dirty(&root).unwrap());
         assert!(diff_numstat(&root, &second).unwrap().is_empty());
-        assert_eq!(git(&root, &["log", "-1", "--format=%s"]).unwrap(), "Milestone 1");
+        assert_eq!(
+            git(&root, &["log", "-1", "--format=%s"]).unwrap(),
+            "Milestone 1"
+        );
     }
 
     fn hook_repo(hook: &str) -> (tempfile::TempDir, PathBuf) {
@@ -679,13 +939,31 @@ mod tests {
     fn hook_that_rewrites_and_fails_stages_its_edits() {
         let (_tmp, root) = hook_repo("#!/bin/sh\nprintf 'formatted\\n' >> a.txt\nexit 1\n");
         let out = commit_milestone(&root, "Milestone 1", false).unwrap();
-        assert_eq!(out, CommitOutcome::HookRewrote { sha: None, files: vec!["a.txt".into()] });
-        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 1, "nothing committed");
-        assert!(git(&root, &["diff", "--name-only"]).unwrap().is_empty(), "hook edits are staged");
+        assert_eq!(
+            out,
+            CommitOutcome::HookRewrote {
+                sha: None,
+                files: vec!["a.txt".into()]
+            }
+        );
+        assert_eq!(
+            git(&root, &["log", "--oneline"]).unwrap().lines().count(),
+            1,
+            "nothing committed"
+        );
+        assert!(
+            git(&root, &["diff", "--name-only"]).unwrap().is_empty(),
+            "hook edits are staged"
+        );
         // the hook appends again on the retry, so disable it to mimic a now-clean formatter run
         std::fs::remove_file(root.join(".git/hooks/pre-commit")).unwrap();
-        assert!(matches!(commit_milestone(&root, "Milestone 1", false).unwrap(), CommitOutcome::Committed(_)));
-        assert!(std::fs::read_to_string(root.join("a.txt")).unwrap().contains("formatted"));
+        assert!(matches!(
+            commit_milestone(&root, "Milestone 1", false).unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+        assert!(std::fs::read_to_string(root.join("a.txt"))
+            .unwrap()
+            .contains("formatted"));
     }
 
     #[cfg(unix)]
@@ -693,13 +971,34 @@ mod tests {
     fn hook_that_rewrites_but_passes_leaves_a_commit_to_amend() {
         let (_tmp, root) = hook_repo("#!/bin/sh\nprintf 'formatted\\n' >> a.txt\nexit 0\n");
         let out = commit_milestone(&root, "Milestone 1", false).unwrap();
-        let sha = match out { CommitOutcome::HookRewrote { sha: Some(sha), files } => { assert_eq!(files, vec!["a.txt".to_string()]); sha } other => panic!("{other:?}") };
+        let sha = match out {
+            CommitOutcome::HookRewrote {
+                sha: Some(sha),
+                files,
+            } => {
+                assert_eq!(files, vec!["a.txt".to_string()]);
+                sha
+            }
+            other => panic!("{other:?}"),
+        };
         assert_eq!(head_sha(&root).unwrap(), sha);
-        assert!(git(&root, &["diff", "--name-only"]).unwrap().is_empty(), "hook edits are staged");
+        assert!(
+            git(&root, &["diff", "--name-only"]).unwrap().is_empty(),
+            "hook edits are staged"
+        );
         std::fs::remove_file(root.join(".git/hooks/pre-commit")).unwrap();
-        assert!(matches!(commit_milestone(&root, "Milestone 1", true).unwrap(), CommitOutcome::Committed(_)));
-        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 2, "the retry amended instead of adding a commit");
-        assert!(git(&root, &["show", "HEAD:a.txt"]).unwrap().contains("formatted"));
+        assert!(matches!(
+            commit_milestone(&root, "Milestone 1", true).unwrap(),
+            CommitOutcome::Committed(_)
+        ));
+        assert_eq!(
+            git(&root, &["log", "--oneline"]).unwrap().lines().count(),
+            2,
+            "the retry amended instead of adding a commit"
+        );
+        assert!(git(&root, &["show", "HEAD:a.txt"])
+            .unwrap()
+            .contains("formatted"));
     }
 
     #[cfg(unix)]
@@ -709,7 +1008,11 @@ mod tests {
 
         let (_tmp, root) = hook_repo("#!/bin/sh\npre-commit\n");
         let hooks = root.join(".git/hooks");
-        git(&root, &["config", "core.hooksPath", hooks.to_str().unwrap()]).unwrap();
+        git(
+            &root,
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        )
+        .unwrap();
         let bin = root.join(".venv/bin");
         std::fs::create_dir_all(&bin).unwrap();
         let pre_commit = bin.join("pre-commit");
@@ -717,29 +1020,60 @@ mod tests {
         std::fs::set_permissions(&pre_commit, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let worktree = root.parent().unwrap().join("worktree");
-        git(&root, &["worktree", "add", "-q", "-b", "milestone", worktree.to_str().unwrap()]).unwrap();
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "milestone",
+                worktree.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
         std::fs::write(worktree.join("a.txt"), "changed\n").unwrap();
-        assert!(matches!(commit_milestone(&worktree, "Milestone 1", false).unwrap(), CommitOutcome::HookRewrote { .. }));
-        assert_eq!(std::fs::read_to_string(worktree.join("hook-ran")).unwrap(), "ran");
+        assert!(matches!(
+            commit_milestone(&worktree, "Milestone 1", false).unwrap(),
+            CommitOutcome::HookRewrote { .. }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("hook-ran")).unwrap(),
+            "ran"
+        );
     }
 
     #[cfg(unix)]
-    async fn stream(root: &Path, cancel: std::sync::Arc<tokio::sync::Notify>) -> (Result<CommitOutcome, CommitError>, Vec<CommitStep>) {
+    async fn stream(
+        root: &Path,
+        cancel: std::sync::Arc<tokio::sync::Notify>,
+    ) -> (Result<CommitOutcome, CommitError>, Vec<CommitStep>) {
         let mut steps = Vec::new();
-        let out = commit_streaming(root, "Milestone 1", false, cancel, |step| steps.push(step)).await;
+        let out =
+            commit_streaming(root, "Milestone 1", false, cancel, |step| steps.push(step)).await;
         (out, steps)
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn streaming_commit_reports_hook_output_as_it_runs() {
-        let (_tmp, root) = hook_repo("#!/bin/sh\necho 'ruff....Passed'\necho 'mypy failed on nothing' >&2\n");
+        let (_tmp, root) =
+            hook_repo("#!/bin/sh\necho 'ruff....Passed'\necho 'mypy failed on nothing' >&2\n");
         let (out, steps) = stream(&root, Default::default()).await;
         assert!(matches!(out.unwrap(), CommitOutcome::Committed(_)));
         assert_eq!(steps[0], CommitStep::Committing);
-        assert!(steps.contains(&CommitStep::Line("ruff....Passed".into())), "{steps:?}");
-        assert!(steps.contains(&CommitStep::Line("mypy failed on nothing".into())), "{steps:?}");
-        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 2);
+        assert!(
+            steps.contains(&CommitStep::Line("ruff....Passed".into())),
+            "{steps:?}"
+        );
+        assert!(
+            steps.contains(&CommitStep::Line("mypy failed on nothing".into())),
+            "{steps:?}"
+        );
+        assert_eq!(
+            git(&root, &["log", "--oneline"]).unwrap().lines().count(),
+            2
+        );
     }
 
     #[cfg(unix)]
@@ -747,11 +1081,19 @@ mod tests {
     async fn streaming_commit_keeps_the_failure_and_rewrite_rules() {
         let (_tmp, root) = hook_repo("#!/bin/sh\necho 'lint says no' >&2\nexit 1\n");
         match stream(&root, Default::default()).await.0 {
-            Err(CommitError::Git(GitError::Failed { stderr, .. })) => assert_eq!(stderr, "lint says no"),
+            Err(CommitError::Git(GitError::Failed { stderr, .. })) => {
+                assert_eq!(stderr, "lint says no")
+            }
             other => panic!("{other:?}"),
         }
         let (_tmp, root) = hook_repo("#!/bin/sh\nprintf 'formatted\\n' >> a.txt\nexit 1\n");
-        assert_eq!(stream(&root, Default::default()).await.0.unwrap(), CommitOutcome::HookRewrote { sha: None, files: vec!["a.txt".into()] });
+        assert_eq!(
+            stream(&root, Default::default()).await.0.unwrap(),
+            CommitOutcome::HookRewrote {
+                sha: None,
+                files: vec!["a.txt".into()]
+            }
+        );
     }
 
     #[cfg(unix)]
@@ -770,9 +1112,20 @@ mod tests {
         })
         .await;
         assert!(matches!(out, Err(CommitError::Cancelled)), "{out:?}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "the hook was killed, not waited for");
-        assert_eq!(git(&root, &["log", "--oneline"]).unwrap().lines().count(), 1, "nothing committed");
-        assert_eq!(git(&root, &["diff", "--cached", "--name-only"]).unwrap(), "a.txt", "files stay staged");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the hook was killed, not waited for"
+        );
+        assert_eq!(
+            git(&root, &["log", "--oneline"]).unwrap().lines().count(),
+            1,
+            "nothing committed"
+        );
+        assert_eq!(
+            git(&root, &["diff", "--cached", "--name-only"]).unwrap(),
+            "a.txt",
+            "files stay staged"
+        );
         assert!(!root.join(".git/index.lock").exists());
     }
 
@@ -798,8 +1151,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_preserves_the_owners_index() {
+        let (_tmp, root) = hook_repo("exit 0");
+        std::fs::write(root.join("staged.txt"), "staged\n").unwrap();
+        git(&root, &["add", "staged.txt"]).unwrap();
+        let before = git(&root, &["diff", "--cached"]).unwrap();
+        std::fs::write(root.join("unstaged.txt"), "unstaged\n").unwrap();
+        let index = root.join(".git").join("plantool-test-index");
+        let tree = snapshot_tree(&root, &index).unwrap();
+        assert_eq!(git(&root, &["diff", "--cached"]).unwrap(), before);
+        assert_eq!(
+            git(&root, &["show", &format!("{tree}:unstaged.txt")]).unwrap(),
+            "unstaged"
+        );
+        assert!(!index.exists());
+    }
+
+    #[test]
     fn not_a_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(matches!(detect_checkout(tmp.path()), Err(GitError::NotARepo(_))));
+        assert!(matches!(
+            detect_checkout(tmp.path()),
+            Err(GitError::NotARepo(_))
+        ));
     }
 }

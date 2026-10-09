@@ -15,17 +15,39 @@ pub fn run(a: Args) -> anyhow::Result<()> {
     let now = chrono_now();
     let mut rows = Vec::new();
     for s in sessions {
-        let key = s.get("key").and_then(|k| k.as_str()).unwrap_or("?").to_string();
-        let stage = s.pointer("/state/stage").and_then(|k| k.as_str()).unwrap_or("?").to_string();
-        let updated = s.pointer("/state/updated_at").and_then(|k| k.as_str()).unwrap_or("").to_string();
+        let key = s
+            .get("key")
+            .and_then(|k| k.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let stage = s
+            .pointer("/state/stage")
+            .and_then(|k| k.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let updated = s
+            .pointer("/state/updated_at")
+            .and_then(|k| k.as_str())
+            .unwrap_or("")
+            .to_string();
         let (done, total) = s
             .get("docs")
             .and_then(|d| d.as_array())
             .map(|docs| {
                 docs.iter()
                     .filter(|d| d.get("kind").and_then(|k| k.as_str()) == Some("plan"))
-                    .flat_map(|d| d.get("progress").and_then(|p| p.as_array()).cloned().unwrap_or_default())
-                    .fold((0u64, 0u64), |(d, t), p| (d + p.get("done").and_then(|x| x.as_u64()).unwrap_or(0), t + p.get("total").and_then(|x| x.as_u64()).unwrap_or(0)))
+                    .flat_map(|d| {
+                        d.get("progress")
+                            .and_then(|p| p.as_array())
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .fold((0u64, 0u64), |(d, t), p| {
+                        (
+                            d + p.get("done").and_then(|x| x.as_u64()).unwrap_or(0),
+                            t + p.get("total").and_then(|x| x.as_u64()).unwrap_or(0),
+                        )
+                    })
             })
             .unwrap_or((0, 0));
         let age_days = age_in_days(&updated, &now);
@@ -47,14 +69,27 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         return Ok(());
     }
     for r in rows {
-        let pct = if r["total"].as_u64().unwrap_or(0) > 0 { format!("{}/{}", r["done"], r["total"]) } else { "-".into() };
+        let pct = if r["total"].as_u64().unwrap_or(0) > 0 {
+            format!("{}/{}", r["done"], r["total"])
+        } else {
+            "-".into()
+        };
         println!(
             "{:40} {:22} {:>8} {}{}",
             r["key"].as_str().unwrap_or(""),
             r["stage"].as_str().unwrap_or(""),
             pct,
-            r["updated_at"].as_str().unwrap_or("").chars().take(10).collect::<String>(),
-            if r["stale"].as_bool().unwrap_or(false) { "  stale" } else { "" }
+            r["updated_at"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(10)
+                .collect::<String>(),
+            if r["stale"].as_bool().unwrap_or(false) {
+                "  stale"
+            } else {
+                ""
+            }
         );
     }
     Ok(())

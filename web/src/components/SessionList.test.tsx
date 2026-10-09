@@ -58,3 +58,24 @@ it("filters by attention and keeps PR and drop actions separate", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Drop session" }));
   await vi.waitFor(() => expect(remove).toHaveBeenCalledWith("repo/review", false));
 });
+
+it("finds a session by its brief and offers a way to clear the search", async () => {
+  vi.spyOn(api, "sessions").mockResolvedValue([base, { ...base, key: "repo/two", url_path: "/s/repo/two", session: { ...base.session, slug: "two", title: "Second task", brief: "Repair the login timeout" } }]);
+  render(<MemoryRouter><SessionList /></MemoryRouter>);
+  await screen.findByRole("link", { name: "Open One" });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search sessions" }), { target: { value: "login" } });
+  expect(screen.getByRole("link", { name: "Open Second task" })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Open One" })).toBeNull();
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search sessions" }), { target: { value: "missing" } });
+  fireEvent.click(screen.getByRole("button", { name: "Clear search and filters" }));
+  expect(screen.getByRole("link", { name: "Open One" })).toBeInTheDocument();
+});
+
+it("puts sessions that need attention before recently updated work", async () => {
+  const recent = { ...base, key: "repo/recent", url_path: "/s/repo/recent", session: { ...base.session, slug: "recent", title: "Recent" }, state: { ...base.state, updated_at: "2026-02-01T00:00:00Z" } };
+  const review = { ...base, key: "repo/review", url_path: "/s/repo/review", session: { ...base.session, slug: "review", title: "Needs review" }, state: { ...base.state, stage: "plan-review" as const } };
+  vi.spyOn(api, "sessions").mockResolvedValue([recent, review]);
+  render(<MemoryRouter><SessionList /></MemoryRouter>);
+  await screen.findByRole("link", { name: "Open Needs review" });
+  expect(screen.getAllByRole("link", { name: /^Open (Needs review|Recent)$/ }).map((link) => link.getAttribute("aria-label"))).toEqual(["Open Needs review", "Open Recent"]);
+});

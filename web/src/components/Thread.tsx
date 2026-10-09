@@ -6,6 +6,7 @@ import type { Comment } from "../types";
 import { Composer } from "./Composer";
 
 export interface ThreadActions {
+  promote?: (root: Comment) => Promise<void>;
   reply: (parent: Comment, body: string) => Promise<void>;
   resolve: (root: Comment, resolved: boolean) => Promise<void>;
   edit: (c: Comment, body: string) => Promise<void>;
@@ -17,12 +18,16 @@ export function Thread({ root, replies, actions, highlighted }: { root: Comment;
   const [editing, setEditing] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(root.resolved);
   const all = [root, ...replies];
+  const latestAgent = replies.filter((r) => r.kind === "agent").sort((a, b) => b.seq - a.seq)[0];
+  const status = root.resolved ? "Resolved" : latestAgent?.proposes_resolve ? "Agent proposes resolution" : latestAgent ? "Agent replied · awaiting your review" : root.anchor.outdated ? "Outdated · unaddressed" : "Open";
   return (
     <div id={`c-${root.id}`} className={`thread ${root.resolved ? "resolved" : ""} ${highlighted ? "highlight" : ""}`}>
-      <div className="thread-head" onClick={() => setCollapsed((c) => !c)}>
+      <div className="thread-head">
+        <button className="link" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)} type="button">{status}</button>
+        <span>{(root.type ?? "note").replace("-", " ")}</span>
         <span className={`kind kind-${root.kind}`}>{root.kind}</span>
         <span className="muted">
-          line {root.anchor.line}
+          {root.anchor.code ? `${root.anchor.code.path}:${root.anchor.code.line}` : root.anchor.scope === "document" ? "Document" : root.anchor.scope === "section" ? `Section · line ${root.anchor.line}` : `line ${root.anchor.line}`}
           {root.anchor.outdated && <span className="outdated"> · outdated</span>}
           {root.resolved && " · resolved"}
         </span>
@@ -60,6 +65,7 @@ export function Thread({ root, replies, actions, highlighted }: { root: Comment;
               <Composer draftKey={`reply:${root.id}`} placeholder="Reply…" submitLabel="Reply" onCancel={() => setReplying(false)} onSubmit={async (b) => { await actions.reply(root, b); setReplying(false); }} />
             ) : (
               <>
+                {root.kind === "agent" && actions.promote && <button className="btn ghost" type="button" onClick={() => void actions.promote?.(root)}>Promote to blocker</button>}
                 <button className="btn ghost" onClick={() => setReplying(true)} type="button">
                   Reply
                 </button>

@@ -35,6 +35,11 @@ pub fn random_token() -> String {
 
 impl Config {
     pub fn from_env(version: &str) -> Config {
-        Config { home: default_home(), port: default_port(), token: random_token(), version: version.to_string() }
+        Config {
+            home: default_home(),
+            port: default_port(),
+            token: random_token(),
+            version: version.to_string(),
+        }
     }
 }

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { api } from "../api";
 import { RunPanel, type RunLine } from "./RunPanel";
 import type { Run } from "../types";
 
@@ -30,4 +31,16 @@ it("keeps live turn work in the timeline", () => {
   render(<RunPanel sessionKey="repo/x" run={{ ...run, status: "running" }} lines={lines.slice(0, 4)} onClose={() => {}} />);
   expect(screen.queryByText(/Finished turn/)).toBeNull();
   expect(screen.getByText("Read plan")).toBeVisible();
+});
+
+it("keeps an unsent message when sending fails", async () => {
+  const send = vi.spyOn(api, "runInput").mockRejectedValue(new Error("Connection lost"));
+  render(<RunPanel sessionKey="repo/x" run={{ ...run, status: "running" }} lines={[]} onClose={() => {}} />);
+  const input = screen.getByPlaceholderText(/Tell the agent something/);
+  fireEvent.change(input, { target: { value: "Please check the tests" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(screen.getByText("Connection lost")).toBeVisible());
+  expect(input).toHaveValue("Please check the tests");
+  expect(send).toHaveBeenCalledWith("repo/x", "r", { text: "Please check the tests" });
+  vi.restoreAllMocks();
 });

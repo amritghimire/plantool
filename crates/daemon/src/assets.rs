@@ -15,14 +15,28 @@ pub fn serve(uri: &Uri, token: &str) -> Response {
     if let Some(file) = Assets::get(candidate) {
         let mime = mime_for(candidate);
         if candidate.ends_with(".html") {
-            let html = String::from_utf8_lossy(&file.data).replace(TOKEN_PLACEHOLDER, &format!("{token:?}"));
+            let html = String::from_utf8_lossy(&file.data)
+                .replace(TOKEN_PLACEHOLDER, &format!("{token:?}"));
             return html_response(html);
         }
-        return ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], file.data.into_owned()).into_response();
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            file.data.into_owned(),
+        )
+            .into_response();
     }
     match Assets::get("index.html") {
-        Some(index) => html_response(String::from_utf8_lossy(&index.data).replace(TOKEN_PLACEHOLDER, &format!("{token:?}"))),
-        None => (StatusCode::NOT_FOUND, "web assets are not built; run `npm run build` in web/").into_response(),
+        Some(index) => html_response(
+            String::from_utf8_lossy(&index.data).replace(TOKEN_PLACEHOLDER, &format!("{token:?}")),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            "web assets are not built; run `npm run build` in web/",
+        )
+            .into_response(),
     }
 }
 

@@ -1,20 +1,23 @@
 import { useEffect, useRef, useState } from "react";
+import type { CommentType } from "../types";
 import { clearDraft, getDraft, setDraft } from "../lib/drafts";
 
-export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, submitLabel = "Comment", draftKey }: {
+export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, submitLabel = "Comment", draftKey, showType = false }: {
   placeholder: string;
-  onSubmit: (body: string) => Promise<void>;
+  onSubmit: (body: string, type?: CommentType) => Promise<void>;
   onCancel?: () => void;
   autoFocus?: boolean;
   submitLabel?: string;
   /** Keeps the text across re-renders and document refreshes. */
   draftKey?: string;
+  showType?: boolean;
 }) {
   const [body, setBodyState] = useState(() => (draftKey ? getDraft(draftKey) : ""));
   const setBody = (v: string) => {
     setBodyState(v);
     if (draftKey) setDraft(draftKey, v);
   };
+  const [commentType, setCommentType] = useState<CommentType>("note");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -34,7 +37,7 @@ export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, su
     setBusy(true);
     setErr(null);
     try {
-      await onSubmit(body);
+      await onSubmit(body, showType ? commentType : undefined);
       setBodyState("");
       if (draftKey) clearDraft(draftKey);
     } catch (e) {
@@ -45,6 +48,7 @@ export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, su
   };
   return (
     <div className="composer">
+      {showType && <label>Feedback type <select aria-label="Feedback type" value={commentType} onChange={(e) => setCommentType(e.target.value as CommentType)}>{["note", "blocker", "question", "suggestion", "change-approach"].map((t) => <option key={t} value={t}>{t.replace("-", " ")}</option>)}</select></label>}
       <textarea
         ref={ref}
         value={body}

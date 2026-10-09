@@ -17,7 +17,13 @@ pub enum RunCommitError {
 /// Commit everything in `cwd` while the browser watches: the session records the commit, streams
 /// its output as `commit-progress` events, and lets the human cancel it. The work runs in its own
 /// task so a dropped request cannot leave the record behind.
-pub async fn run_commit(session: Arc<LiveSession>, scope: CommitScope, cwd: PathBuf, message: String, amend: bool) -> Result<CommitOutcome, RunCommitError> {
+pub async fn run_commit(
+    session: Arc<LiveSession>,
+    scope: CommitScope,
+    cwd: PathBuf,
+    message: String,
+    amend: bool,
+) -> Result<CommitOutcome, RunCommitError> {
     let (id, cancel) = session.begin_commit(scope).ok_or(RunCommitError::Busy)?;
     let task = tokio::spawn(async move {
         let dirty = Arc::new(AtomicBool::new(false));
@@ -34,7 +40,9 @@ pub async fn run_commit(session: Arc<LiveSession>, scope: CommitScope, cwd: Path
             }
         });
         let outcome = git::commit_streaming(&cwd, &message, amend, cancel, |step| match step {
-            CommitStep::Committing => session.update_commit(&id, true, |job| job.phase = CommitPhase::Hooks),
+            CommitStep::Committing => {
+                session.update_commit(&id, true, |job| job.phase = CommitPhase::Hooks)
+            }
             CommitStep::Line(line) => {
                 session.update_commit(&id, false, |job| job.lines.push(line));
                 dirty.store(true, Ordering::Relaxed);
@@ -43,15 +51,21 @@ pub async fn run_commit(session: Arc<LiveSession>, scope: CommitScope, cwd: Path
         .await;
         flusher.abort();
         let (phase, error) = match &outcome {
-            Ok(CommitOutcome::Committed(_)) | Ok(CommitOutcome::HookRewrote { sha: Some(_), .. }) => (CommitPhase::Done, None),
-            Ok(CommitOutcome::HookRewrote { files, .. }) => (CommitPhase::Failed, Some(format!("git hooks rewrote {}", files.join(", ")))),
+            Ok(CommitOutcome::Committed(_))
+            | Ok(CommitOutcome::HookRewrote { sha: Some(_), .. }) => (CommitPhase::Done, None),
+            Ok(CommitOutcome::HookRewrote { files, .. }) => (
+                CommitPhase::Failed,
+                Some(format!("git hooks rewrote {}", files.join(", "))),
+            ),
             Err(CommitError::Cancelled) => (CommitPhase::Cancelled, None),
             Err(e) => (CommitPhase::Failed, Some(e.to_string())),
         };
         session.finish_commit(&id, phase, error);
         outcome
     });
-    let outcome = task.await.map_err(|e| CommitError::Git(git::GitError::Io(std::io::Error::other(e))))?;
+    let outcome = task
+        .await
+        .map_err(|e| CommitError::Git(git::GitError::Io(std::io::Error::other(e))))?;
     Ok(outcome?)
 }
 

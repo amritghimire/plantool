@@ -1,3 +1,4 @@
+import { DiffToolSettings } from "./DiffToolSettings";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { RepoInfo, WorktreeDirSetting } from "../types";
@@ -73,6 +74,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <DiffToolSettings />
         <h3>Settings</h3>
         <label>
           Worktree location <span className="muted small">(where session worktrees are created)</span>

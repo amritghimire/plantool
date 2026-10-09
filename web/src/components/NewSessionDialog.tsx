@@ -5,6 +5,7 @@ import type { RepoInfo } from "../types";
 import { relTime } from "../lib/format";
 
 const OTHER = "__other__";
+const slugFromTitle = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
 
 export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
@@ -12,12 +13,18 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   const [choice, setChoice] = useState<string>(OTHER);
   const [path, setPath] = useState("");
   const [slug, setSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
   const [title, setTitle] = useState("");
   const [brief, setBrief] = useState("");
   const [worktree, setWorktree] = useState(false);
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, onClose]);
   useEffect(() => {
     api.repos()
       .then((r) => {
@@ -42,7 +49,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
     }
   };
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>New session</h3>
         <label>
@@ -58,28 +65,22 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
           {choice === OTHER && <input value={path} placeholder="/absolute/path/to/a/git/checkout" autoFocus onChange={(e) => setPath(e.target.value)} />}
         </label>
         <label>
-          Slug
-          <input value={slug} placeholder="fix-login-timeout" onChange={(e) => setSlug(e.target.value.trim())} />
-          {slug && !slugOk && <span className="error small">letters, digits, - _ . only</span>}
+          What are you working on?
+          <input value={title} placeholder="Fix the login timeout" onChange={(e) => { const next = e.target.value; setTitle(next); if (!slugEdited) setSlug(slugFromTitle(next)); }} />
         </label>
         <label>
-          Title <span className="muted small">(optional, derived from the slug)</span>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} />
+          Session ID <span className="muted small">(used in links and file paths)</span>
+          <input value={slug} placeholder="fix-login-timeout" onChange={(e) => { setSlugEdited(true); setSlug(e.target.value.trim()); }} />
+          {slug && !slugOk && <span className="error small">Use letters, digits, hyphens, underscores, or periods.</span>}
         </label>
         <label>
-          Brief <span className="muted small">(what to research or build; goes into every prompt)</span>
-          <textarea rows={4} value={brief} onChange={(e) => setBrief(e.target.value)} />
+          Brief <span className="muted small">(what the agent should research or build)</span>
+          <textarea rows={4} value={brief} placeholder="Describe the goal, important constraints, and what done looks like." onChange={(e) => setBrief(e.target.value)} />
         </label>
-        <label>
-          Base branch <span className="muted small">(optional; default origin/HEAD or main)</span>
-          <input value={base} onChange={(e) => setBase(e.target.value)} />
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
-          <span>
-            Create a git worktree now <span className="muted small">(otherwise one is created when implementation starts)</span>
-          </span>
-        </label>
+        <details className="new-session-options"><summary>Workspace options</summary>
+          <label>Base branch <span className="muted small">(default: origin/HEAD or main)</span><input value={base} onChange={(e) => setBase(e.target.value)} /></label>
+          <label className="check"><input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /><span>Create a git worktree now <span className="muted small">(otherwise one is created when implementation starts)</span></span></label>
+        </details>
         {err && <div className="error">{err}</div>}
         <div className="composer-actions">
           <span className="spacer" />
@@ -87,7 +88,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button className="btn primary" disabled={busy || !slugOk || !repo} onClick={() => void create()} type="button">
-            Create
+            {busy ? "Creating…" : "Create session"}
           </button>
         </div>
       </div>

@@ -1,26 +1,70 @@
-use plantool_core::{ChangeReview, CommitJob, Comment, DocKind, Run, Session, Stage};
+use plantool_core::{ChangeReview, Comment, CommitJob, DocKind, Run, Session, Stage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum LiveEvent {
-    CommentAdded { comment: Comment },
-    CommentsAdded { comments: Vec<Comment> },
-    CommentUpdated { comment: Comment },
-    CommentRemoved { ids: Vec<String> },
-    ThreadResolution { ids: Vec<String>, resolved: bool },
-    DocRefreshed { kind: DocKind, sha: String, lines: u32, reanchored: usize, outdated: usize },
-    StageChanged { from: Stage, to: Stage, actor: plantool_core::Actor },
-    SessionUpdated { session: Session },
-    SessionRemoved { key: String },
-    RunStarted { run: Run },
-    RunUpdated { run: Run },
-    RunEvent { run_id: String, seq: u64, event: serde_json::Value },
-    RunEnded { run: Run },
-    RunRemoved { id: String },
-    ChangesOpened { review: ChangeReview },
-    Navigate { target: NavTarget, viewers: usize },
-    CommitProgress { commit: CommitJob },
+    CommentAdded {
+        comment: Comment,
+    },
+    CommentsAdded {
+        comments: Vec<Comment>,
+    },
+    CommentUpdated {
+        comment: Comment,
+    },
+    CommentRemoved {
+        ids: Vec<String>,
+    },
+    ThreadResolution {
+        ids: Vec<String>,
+        resolved: bool,
+    },
+    DocRefreshed {
+        kind: DocKind,
+        sha: String,
+        lines: u32,
+        reanchored: usize,
+        outdated: usize,
+    },
+    StageChanged {
+        from: Stage,
+        to: Stage,
+        actor: plantool_core::Actor,
+    },
+    SessionUpdated {
+        session: Session,
+    },
+    SessionRemoved {
+        key: String,
+    },
+    RunStarted {
+        run: Run,
+    },
+    RunUpdated {
+        run: Run,
+    },
+    RunEvent {
+        run_id: String,
+        seq: u64,
+        event: serde_json::Value,
+    },
+    RunEnded {
+        run: Run,
+    },
+    RunRemoved {
+        id: String,
+    },
+    ChangesOpened {
+        review: ChangeReview,
+    },
+    Navigate {
+        target: NavTarget,
+        viewers: usize,
+    },
+    CommitProgress {
+        commit: CommitJob,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

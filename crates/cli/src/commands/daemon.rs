@@ -47,13 +47,28 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         }
         DaemonCmd::Restart { force } => {
             if let Some(h) = c.health() {
-                let live: Vec<serde_json::Value> = c.get::<Vec<serde_json::Value>>("/api/sessions").unwrap_or_default();
-                let running = live.iter().flat_map(|s| s["runs"].as_array().cloned().unwrap_or_default()).filter(|r| matches!(r["status"].as_str(), Some("starting" | "running" | "waiting" | "idle"))).count();
+                let live: Vec<serde_json::Value> = c
+                    .get::<Vec<serde_json::Value>>("/api/sessions")
+                    .unwrap_or_default();
+                let running = live
+                    .iter()
+                    .flat_map(|s| s["runs"].as_array().cloned().unwrap_or_default())
+                    .filter(|r| {
+                        matches!(
+                            r["status"].as_str(),
+                            Some("starting" | "running" | "waiting" | "idle")
+                        )
+                    })
+                    .count();
                 if running > 0 && !force {
                     anyhow::bail!("{running} hosted run(s) are live and would be stopped; finish them or pass --force");
                 }
                 let _: serde_json::Value = c.post("/shutdown", &serde_json::json!({}))?;
-                println!("stopping daemon {} on {}", h["version"].as_str().unwrap_or(""), c.base);
+                println!(
+                    "stopping daemon {} on {}",
+                    h["version"].as_str().unwrap_or(""),
+                    c.base
+                );
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 while c.health().is_some() && std::time::Instant::now() < deadline {
                     std::thread::sleep(std::time::Duration::from_millis(150));
@@ -63,7 +78,10 @@ pub fn run(a: Args) -> anyhow::Result<()> {
                 }
             }
             c.ensure_daemon()?;
-            let v = c.health().and_then(|h| h["version"].as_str().map(|s| s.to_string())).unwrap_or_default();
+            let v = c
+                .health()
+                .and_then(|h| h["version"].as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
             println!("daemon {v} running on {}", c.base);
         }
         DaemonCmd::Status => match c.health() {
@@ -81,7 +99,9 @@ pub fn serve(a: ServeArgs) -> anyhow::Result<()> {
     }
     config.home = home();
     std::fs::create_dir_all(&config.home)?;
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     rt.block_on(async move {
         plantool_daemon::init_tracing();
         plantool_daemon::serve(config).await

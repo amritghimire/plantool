@@ -4,7 +4,8 @@ use crate::store::{self, SessionStore};
 use plantool_core::anchor;
 use plantool_core::markdown;
 use plantool_core::{
-    transition, Actor, ChangeReview, Comment, CommentKind, CommitJob, CommitPhase, CommitScope, DocKind, DocRevision, DocState, Run, Session, Stage, State,
+    transition, Actor, ChangeReview, Comment, CommentKind, CommitJob, CommitPhase, CommitScope,
+    DocKind, DocRevision, DocState, Run, Session, Stage, State,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -17,9 +18,14 @@ pub enum RegistryError {
     #[error("no session named {0}")]
     NotFound(String),
     #[error("{reference} matches more than one session: {}", keys.join(", "))]
-    Ambiguous { reference: String, keys: Vec<String> },
+    Ambiguous {
+        reference: String,
+        keys: Vec<String>,
+    },
     #[error("session {key} already belongs to {existing}; pass --repo-slug to keep them apart")]
     RepoMismatch { key: String, existing: String },
+    #[error("{0}")]
+    ReviewBlocked(String),
     #[error("invalid slug {0:?}: use letters, digits, dots, underscores and dashes")]
     BadSlug(String),
     #[error("{0}")]
@@ -61,6 +67,14 @@ pub struct CreateSession {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewComment {
+    #[serde(default)]
+    pub code: Option<plantool_core::CodeAnchor>,
+    #[serde(default, rename = "type")]
+    pub comment_type: plantool_core::CommentType,
+    #[serde(default)]
+    pub scope: plantool_core::AnchorScope,
+    #[serde(default)]
+    pub proposes_resolve: bool,
     pub doc: DocKind,
     #[serde(default)]
     pub line: Option<u32>,
@@ -115,6 +129,8 @@ pub struct RepoInfo {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
+    pub handoff: plantool_core::handoff::Handoff,
+    pub step: String,
     pub key: String,
     pub url_path: String,
     pub dir: PathBuf,
@@ -123,6 +139,7 @@ pub struct SessionView {
     pub docs: Vec<DocSummary>,
     pub runs: Vec<Run>,
     pub open_comments: usize,
+    pub branch_now: Option<String>,
     pub workspace_branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<CommitJob>,
@@ -154,24 +171,51 @@ fn short_id() -> String {
 pub fn valid_slug(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 100
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
         && !s.starts_with('.')
 }
 
 impl LiveSession {
     fn open(store: SessionStore) -> anyhow::Result<Option<Arc<LiveSession>>> {
-        let Some(session) = store.load_meta()? else { return Ok(None) };
+        let Some(session) = store.load_meta()? else {
+            return Ok(None);
+        };
         let state = store.load_state()?;
         let mut docs = BTreeMap::new();
         for (kind, ds) in &state.docs {
             if let Some(content) = store.load_revision(*kind, &ds.sha)? {
-                docs.insert(*kind, DocRevision { kind: *kind, sha: ds.sha.clone(), content, captured_at: ds.captured_at.clone() });
+                docs.insert(
+                    *kind,
+                    DocRevision {
+                        kind: *kind,
+                        sha: ds.sha.clone(),
+                        content,
+                        captured_at: ds.captured_at.clone(),
+                    },
+                );
             }
         }
-        let runs = store.load_runs()?.into_iter().map(|r| (r.id.clone(), r)).collect();
+        let runs = store
+            .load_runs()?
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect();
         let (tx, _) = broadcast::channel(256);
         let key = session.key();
-        Ok(Some(Arc::new(LiveSession { key, store, inner: Mutex::new(Inner { session, state, docs, runs, removed: false, commit: None }), tx })))
+        Ok(Some(Arc::new(LiveSession {
+            key,
+            store,
+            inner: Mutex::new(Inner {
+                session,
+                state,
+                docs,
+                runs,
+                removed: false,
+                commit: None,
+            }),
+            tx,
+        })))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -204,7 +248,48 @@ impl LiveSession {
                 return Ok(Some(d.clone()));
             }
         }
-        Ok(self.store.load_revision(kind, sha)?.map(|content| DocRevision { kind, sha: sha.to_string(), content, captured_at: String::new() }))
+        Ok(self
+            .store
+            .load_revision(kind, sha)?
+            .map(|content| DocRevision {
+                kind,
+                sha: sha.to_string(),
+                content,
+                captured_at: String::new(),
+            }))
+    }
+
+    pub fn mark_viewed(&self, kind: DocKind, sha: &str) -> Result<(), RegistryError> {
+        if self.doc_revision(kind, sha)?.is_none() {
+            return Err(anyhow::anyhow!("unknown document revision").into());
+        }
+        let mut g = self.lock();
+        g.state.viewed.insert(kind, sha.into());
+        self.persist_state(&g)?;
+        Ok(())
+    }
+
+    pub fn propose_revision(&self, reason: String) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        let old = g
+            .state
+            .approved
+            .as_ref()
+            .map(|a| a.sha.clone())
+            .unwrap_or_default();
+        g.state.proposals.push(plantool_core::Proposal {
+            id: short_id(),
+            kind: plantool_core::ProposalKind::PlanRevision,
+            old,
+            new: String::new(),
+            reason,
+            created_at: plantool_core::now(),
+        });
+        g.state.plan_revision_pending = true;
+        let session = g.session.clone();
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        self.persist_state(&g)?;
+        Ok(())
     }
 
     pub fn view(&self) -> SessionView {
@@ -223,12 +308,25 @@ impl LiveSession {
                     lines: ds.map(|d| d.lines).unwrap_or(0),
                     title: rev.and_then(|r| markdown::title(&r.content)),
                     captured_at: ds.map(|d| d.captured_at.clone()),
-                    progress: rev.map(|r| markdown::progress(&r.content)).unwrap_or_default(),
+                    progress: rev
+                        .map(|r| markdown::progress(&r.content))
+                        .unwrap_or_default(),
                 }
             })
             .collect();
-        let open_comments = g.state.comments.iter().filter(|c| !c.resolved && c.parent.is_none()).count();
+        let open_comments = g
+            .state
+            .comments
+            .iter()
+            .filter(|c| !c.resolved && c.parent.is_none())
+            .count();
+        let handoff = plantool_core::handoff::handoff(
+            &g.state,
+            &g.runs.values().cloned().collect::<Vec<_>>(),
+        );
         SessionView {
+            step: handoff.step.into(),
+            handoff,
             key: self.key.clone(),
             url_path: format!("/s/{}", self.key),
             dir: self.store.dir.clone(),
@@ -237,6 +335,11 @@ impl LiveSession {
             docs,
             runs: g.runs.values().cloned().collect(),
             open_comments,
+            branch_now: git::git(
+                g.session.cwd(),
+                &["symbolic-ref", "--quiet", "--short", "HEAD"],
+            )
+            .ok(),
             workspace_branch: match &g.session.worktree {
                 Some(path) => git::verify_worktree(&g.session.repo, path, None)
                     .ok()
@@ -255,7 +358,58 @@ impl LiveSession {
         g.state.seq += 1;
         g.state.updated_at = plantool_core::now();
         let seq = g.state.seq;
-        let _ = self.tx.send(LiveMessage { seq, at: g.state.updated_at.clone(), event });
+        let entry = match &event {
+            LiveEvent::DocRefreshed { kind, .. } => Some(("document", format!("{kind} revised"))),
+            LiveEvent::StageChanged { to, .. } => Some(("step", format!("Step changed to {to}"))),
+            LiveEvent::CommentAdded { comment } => Some((
+                "comment",
+                format!("{} commented on {}", comment.author, comment.doc),
+            )),
+            LiveEvent::CommentsAdded { comments } => {
+                Some(("comment", format!("{} comments added", comments.len())))
+            }
+            LiveEvent::ThreadResolution { resolved, .. } => Some((
+                "review",
+                if *resolved {
+                    "Comments resolved"
+                } else {
+                    "Comments reopened"
+                }
+                .into(),
+            )),
+            LiveEvent::RunStarted { run } => Some((
+                "run",
+                format!("{} agent run started", run.provider.as_str()),
+            )),
+            LiveEvent::RunEvent { event, .. }
+                if matches!(
+                    event.get("type").and_then(|v| v.as_str()),
+                    Some("permission" | "input-request")
+                ) =>
+            {
+                Some(("permission", "Agent needs your answer".into()))
+            }
+            LiveEvent::RunEnded { run } => {
+                Some(("run", format!("{} agent run ended", run.provider.as_str())))
+            }
+            LiveEvent::SessionUpdated { .. } => {
+                Some(("session", "Session settings changed".into()))
+            }
+            _ => None,
+        };
+        if let Some((activity_type, summary)) = entry {
+            g.state.activity.push(plantool_core::Activity {
+                seq,
+                at: g.state.updated_at.clone(),
+                activity_type: activity_type.into(),
+                summary,
+            });
+        }
+        let _ = self.tx.send(LiveMessage {
+            seq,
+            at: g.state.updated_at.clone(),
+            event,
+        });
         seq
     }
 
@@ -273,10 +427,43 @@ impl LiveSession {
         if g.docs.get(&kind).map(|d| d.sha == sha).unwrap_or(false) {
             return Ok(None);
         }
-        let rev = DocRevision { kind, sha: sha.clone(), content: content.clone(), captured_at: plantool_core::now() };
+        let rev = DocRevision {
+            kind,
+            sha: sha.clone(),
+            content: content.clone(),
+            captured_at: plantool_core::now(),
+        };
         self.store.save_revision(&rev)?;
-        let old = g.docs.insert(kind, rev.clone()).map(|d| d.content).unwrap_or_default();
-        let mut affected: Vec<&mut Comment> = g.state.comments.iter_mut().filter(|c| c.doc == kind).collect();
+        let old = g
+            .docs
+            .insert(kind, rev.clone())
+            .map(|d| d.content)
+            .unwrap_or_default();
+        if kind == DocKind::Plan {
+            if let Some(approved) = &g.state.approved {
+                let baseline = self
+                    .store
+                    .load_revision(kind, &approved.sha)?
+                    .unwrap_or_else(|| old.clone());
+                let change = markdown::classify_plan_change(&baseline, &content);
+                let unticked = markdown::checkboxes(&old).iter().any(|task| {
+                    task.checked
+                        && markdown::checkboxes(&content).iter().any(|next| {
+                            next.phase == task.phase && next.text == task.text && !next.checked
+                        })
+                });
+                g.state.plan_change = Some(change);
+                g.state.plan_revision_pending = g.state.plan_revision_pending
+                    || change == markdown::PlanChange::ScopeChange
+                    || unticked;
+            }
+        }
+        let mut affected: Vec<&mut Comment> = g
+            .state
+            .comments
+            .iter_mut()
+            .filter(|c| c.doc == kind)
+            .collect();
         let mut changed = 0;
         let mut outdated = 0;
         for c in affected.iter_mut() {
@@ -289,45 +476,368 @@ impl LiveSession {
                 outdated += 1;
             }
         }
+        if kind == DocKind::Plan {
+            let rule = g.session.pause_rule.clone();
+            let phases = markdown::phases(&content);
+            for milestone in &mut g.state.milestones {
+                if !phases.iter().any(|p| p.name == milestone.key) {
+                    milestone.status = "superseded".into();
+                }
+            }
+            for phase in phases {
+                let completed: Vec<_> = phase
+                    .tasks
+                    .iter()
+                    .filter(|t| t.checked)
+                    .map(|t| t.text.clone())
+                    .collect();
+                if let Some(saved) = g.state.milestones.iter_mut().find(|m| m.key == phase.name) {
+                    if saved.status == "superseded" {
+                        saved.status = "pending".into();
+                    }
+                    for text in completed {
+                        if !saved.completed_tasks.contains(&text) {
+                            saved.completed_tasks.push(text);
+                        }
+                    }
+                } else {
+                    g.state.milestones.push(plantool_core::Milestone {
+                        key: phase.name,
+                        status: "pending".into(),
+                        base: None,
+                        head: None,
+                        run_id: None,
+                        completed_tasks: completed,
+                        pause_rule: rule.clone(),
+                    });
+                }
+            }
+        }
         let lines = anchor::line_count(&content);
-        g.state.docs.insert(kind, DocState { sha: sha.clone(), captured_at: rev.captured_at.clone(), lines });
+        g.state.docs.insert(
+            kind,
+            DocState {
+                sha: sha.clone(),
+                captured_at: rev.captured_at.clone(),
+                lines,
+            },
+        );
         let auto = match (kind, g.state.stage) {
-            (DocKind::Research | DocKind::Investigation, Stage::New | Stage::Researching) => Some(Stage::ResearchReview),
-            (DocKind::Plan | DocKind::QuickFix, Stage::New | Stage::Researching | Stage::ResearchReview | Stage::Planning) => Some(Stage::PlanReview),
+            (DocKind::Research | DocKind::Investigation, Stage::New | Stage::Researching) => {
+                Some(Stage::ResearchReview)
+            }
+            (
+                DocKind::Plan | DocKind::QuickFix,
+                Stage::New | Stage::Researching | Stage::ResearchReview | Stage::Planning,
+            ) => Some(Stage::PlanReview),
             _ => None,
         };
-        self.broadcast(&mut g, LiveEvent::DocRefreshed { kind, sha, lines, reanchored: changed, outdated });
+        self.broadcast(
+            &mut g,
+            LiveEvent::DocRefreshed {
+                kind,
+                sha,
+                lines,
+                reanchored: changed,
+                outdated,
+            },
+        );
         if let Some(to) = auto {
             let from = g.state.stage;
             g.state.stage = to;
-            self.broadcast(&mut g, LiveEvent::StageChanged { from, to, actor: Actor::Agent });
+            self.broadcast(
+                &mut g,
+                LiveEvent::StageChanged {
+                    from,
+                    to,
+                    actor: Actor::Agent,
+                },
+            );
         }
         self.persist_state(&g)?;
         if g.session.mirror {
-            let target = g.session.repo.root.join("REVIEWS").join(format!("{}_{}.md", kind.as_str(), g.session.slug));
+            let target = g.session.repo.root.join("REVIEWS").join(format!(
+                "{}_{}.md",
+                kind.as_str(),
+                g.session.slug
+            ));
             let _ = store::write_atomic(&target, content.as_bytes());
         }
         Ok(Some(rev))
     }
 
     pub fn set_stage(&self, to: Stage, actor: Actor) -> Result<Stage, RegistryError> {
+        self.set_stage_with_override(to, actor, None)
+    }
+
+    pub fn set_stage_with_override(
+        &self,
+        to: Stage,
+        actor: Actor,
+        reason: Option<String>,
+    ) -> Result<Stage, RegistryError> {
+        self.set_stage_reviewed(to, actor, reason, None)
+    }
+
+    pub fn set_stage_reviewed(
+        &self,
+        to: Stage,
+        actor: Actor,
+        reason: Option<String>,
+        plan_sha: Option<&str>,
+    ) -> Result<Stage, RegistryError> {
         let mut g = self.lock();
         let from = g.state.stage;
         transition(from, to, actor)?;
+        if to == Stage::Approved
+            && plan_sha.is_some_and(|sha| {
+                g.docs.get(&DocKind::Plan).map(|doc| doc.sha.as_str()) != Some(sha)
+            })
+        {
+            return Err(RegistryError::ReviewBlocked("The plan changed while you were reviewing. Reload and review the current revision.".into()));
+        }
+        if to == Stage::Implementing && g.state.plan_revision_pending {
+            return Err(RegistryError::ReviewBlocked(
+                "accept the plan revision before continuing implementation".into(),
+            ));
+        }
+        if to == Stage::Approved {
+            let blockers = plantool_core::review::owner_blockers(&g.state.comments);
+            let reason = reason.filter(|r| !r.trim().is_empty());
+            if !blockers.is_empty() && reason.is_none() {
+                return Err(RegistryError::ReviewBlocked(
+                    "resolve owner blockers or provide an override reason".into(),
+                ));
+            }
+            g.state.approved = g
+                .docs
+                .get(&DocKind::Plan)
+                .map(|doc| plantool_core::Approval {
+                    sha: doc.sha.clone(),
+                    at: plantool_core::now(),
+                    override_reason: reason,
+                    open_blockers: blockers,
+                });
+        }
+        if to == Stage::Approved {
+            if g.state.plan_revision_pending {
+                let phases = g
+                    .docs
+                    .get(&DocKind::Plan)
+                    .map(|doc| markdown::phases(&doc.content))
+                    .unwrap_or_default();
+                for milestone in &mut g.state.milestones {
+                    if let Some(phase) = phases.iter().find(|phase| phase.name == milestone.key) {
+                        milestone.completed_tasks = phase
+                            .tasks
+                            .iter()
+                            .filter(|task| task.checked)
+                            .map(|task| task.text.clone())
+                            .collect();
+                        if matches!(milestone.status.as_str(), "approved" | "completed")
+                            && phase.tasks.iter().any(|task| !task.checked)
+                        {
+                            milestone.status = "pending".into();
+                            milestone.run_id = None;
+                            milestone.base = None;
+                            milestone.head = None;
+                        }
+                    }
+                }
+            }
+            g.state.plan_revision_pending = false;
+            g.state.plan_change = None;
+            g.state
+                .proposals
+                .retain(|p| p.kind != plantool_core::ProposalKind::PlanRevision);
+        }
         if from != to {
             g.state.stage = to;
             self.broadcast(&mut g, LiveEvent::StageChanged { from, to, actor });
-            self.persist_state(&g)?;
+        } else if to == Stage::Approved {
+            let session = g.session.clone();
+            self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
         }
+        self.persist_state(&g)?;
         Ok(to)
+    }
+
+    pub fn select_milestone(&self, key: &str) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        if !g
+            .state
+            .milestones
+            .iter()
+            .any(|m| m.key == key && m.status == "pending")
+        {
+            return Err(RegistryError::ReviewBlocked(
+                "milestone must be a pending plan phase".into(),
+            ));
+        }
+        g.state.selected_milestone = Some(key.into());
+        self.persist_state(&g)?;
+        Ok(())
+    }
+
+    pub fn pause(&self, reason: Option<String>) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        g.state.pause_reason = reason;
+        let session = g.session.clone();
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        self.persist_state(&g)?;
+        Ok(())
+    }
+
+    pub fn milestone_status(
+        &self,
+        key: &str,
+        status: &str,
+        run: &Run,
+    ) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        if let Some(milestone) = g.state.milestones.iter_mut().find(|m| m.key == key) {
+            milestone.status = status.into();
+            milestone.run_id = Some(run.id.clone());
+            milestone.base = run.milestone_base.clone();
+            milestone.head = if status == "completed" || status == "review" {
+                git::snapshot_tree(
+                    &run.cwd,
+                    &self.store.dir.join(format!(".index-{}", short_id())),
+                )
+                .ok()
+            } else {
+                git::head_sha(&run.cwd).ok()
+            };
+        }
+        let session = g.session.clone();
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        self.persist_state(&g)?;
+        Ok(())
+    }
+
+    pub fn propose_context(
+        &self,
+        change: &crate::routes::where_context::Update,
+    ) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        let session = g.session.clone();
+        for (kind, old, new) in [
+            (
+                plantool_core::ProposalKind::Base,
+                session.base.clone(),
+                change.base.clone(),
+            ),
+            (
+                plantool_core::ProposalKind::Branch,
+                git::git(session.cwd(), &["branch", "--show-current"]).unwrap_or_default(),
+                change.branch.clone(),
+            ),
+            (
+                plantool_core::ProposalKind::Workspace,
+                session.cwd().to_string_lossy().into(),
+                change
+                    .workspace
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into()),
+            ),
+            (
+                plantool_core::ProposalKind::Difftool,
+                session.difftool.clone().unwrap_or_else(|| "auto".into()),
+                change.difftool.clone(),
+            ),
+        ] {
+            if let Some(new) = new {
+                g.state.proposals.push(plantool_core::Proposal {
+                    id: short_id(),
+                    kind,
+                    old,
+                    new,
+                    reason: change.reason.clone(),
+                    created_at: plantool_core::now(),
+                });
+            }
+        }
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        self.persist_state(&g)?;
+        Ok(())
+    }
+
+    pub fn dismiss_proposal(&self, id: &str) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        g.state.proposals.retain(|p| p.id != id);
+        let session = g.session.clone();
+        self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        self.persist_state(&g)?;
+        Ok(())
+    }
+
+    pub fn apply_context(
+        &self,
+        change: &crate::routes::where_context::Update,
+    ) -> Result<Session, RegistryError> {
+        let mut g = self.lock();
+        if change.base.is_some() || change.branch.is_some() || change.workspace.is_some() {
+            g.state.review = None;
+        }
+        if let Some(base) = &change.base {
+            g.session.base = base.clone();
+        }
+        if let Some(workspace) = &change.workspace {
+            g.session.worktree = if workspace == &g.session.repo.root {
+                None
+            } else {
+                Some(workspace.clone())
+            };
+        }
+        if let Some(tool) = &change.difftool {
+            g.session.difftool = if tool == "auto" {
+                None
+            } else {
+                Some(tool.clone())
+            };
+        }
+        if let Some(rule) = &change.pause_rule {
+            g.session.pause_rule = rule.clone();
+            for milestone in &mut g.state.milestones {
+                if milestone.status == "pending" {
+                    milestone.pause_rule = rule.clone();
+                }
+            }
+        }
+        let session = g.session.clone();
+        self.store.save_meta(&session)?;
+        self.broadcast(
+            &mut g,
+            LiveEvent::SessionUpdated {
+                session: session.clone(),
+            },
+        );
+        if let Some(entry) = g.state.activity.last_mut() {
+            entry.summary = format!(
+                "Context changed: workspace {}, base {}, branch {}, diff tool {}",
+                session.cwd().display(),
+                session.base,
+                git::git(session.cwd(), &["branch", "--show-current"]).unwrap_or_default(),
+                session.difftool.as_deref().unwrap_or("auto")
+            );
+        }
+        self.persist_state(&g)?;
+        Ok(session)
     }
 
     pub fn set_brief(&self, brief: Option<String>) -> Result<Session, RegistryError> {
         let mut g = self.lock();
-        g.session.brief = brief.map(|b| b.trim().to_string()).filter(|b| !b.is_empty());
+        g.session.brief = brief
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty());
         self.store.save_meta(&g.session)?;
         let session = g.session.clone();
-        self.broadcast(&mut g, LiveEvent::SessionUpdated { session: session.clone() });
+        self.broadcast(
+            &mut g,
+            LiveEvent::SessionUpdated {
+                session: session.clone(),
+            },
+        );
         self.persist_state(&g)?;
         Ok(session)
     }
@@ -366,7 +876,12 @@ impl LiveSession {
         g.session.worktree = Some(dir);
         self.store.save_meta(&g.session)?;
         let session = g.session.clone();
-        self.broadcast(&mut g, LiveEvent::SessionUpdated { session: session.clone() });
+        self.broadcast(
+            &mut g,
+            LiveEvent::SessionUpdated {
+                session: session.clone(),
+            },
+        );
         self.persist_state(&g)?;
         Ok(session)
     }
@@ -419,27 +934,102 @@ impl LiveSession {
         Ok(())
     }
 
-    fn resolve_anchor(&self, g: &Inner, nc: &NewComment) -> Result<plantool_core::Anchor, RegistryError> {
+    fn resolve_anchor(
+        &self,
+        g: &Inner,
+        nc: &NewComment,
+    ) -> Result<plantool_core::Anchor, RegistryError> {
         if let Some(parent) = &nc.parent {
-            let p = g.state.comments.iter().find(|c| &c.id == parent).ok_or_else(|| RegistryError::UnknownComment(parent.clone()))?;
+            let p = g
+                .state
+                .comments
+                .iter()
+                .find(|c| &c.id == parent)
+                .ok_or_else(|| RegistryError::UnknownComment(parent.clone()))?;
             return Ok(p.anchor.clone());
         }
-        let content = g.docs.get(&nc.doc).map(|d| d.content.as_str()).ok_or_else(|| RegistryError::NoDoc(nc.doc, self.store.doc_path(nc.doc)))?;
-        if let Some(m) = &nc.match_text {
-            return Ok(anchor::resolve_match(content, m)?);
+        if let Some(code) = &nc.code {
+            if code.path.is_empty()
+                || code.path.starts_with('/')
+                || code.path.split(['/', '\\']).any(|p| p == "..")
+                || code.side != "new"
+                || code.line == 0
+            {
+                return Err(RegistryError::ReviewBlocked(
+                    "code comments require a relative file path and a new-side line".into(),
+                ));
+            }
+            let path = g.session.cwd().join(&code.path);
+            let canonical = path.canonicalize().map_err(anyhow::Error::from)?;
+            if !canonical.starts_with(
+                g.session
+                    .cwd()
+                    .canonicalize()
+                    .map_err(anyhow::Error::from)?,
+            ) {
+                return Err(RegistryError::ReviewBlocked(
+                    "file is outside the workspace".into(),
+                ));
+            }
+            let content = std::fs::read_to_string(canonical).map_err(anyhow::Error::from)?;
+            let text = anchor::line_text(&content, code.line).ok_or(
+                anchor::AnchorError::OutOfRange(code.line, anchor::line_count(&content)),
+            )?;
+            if text != code.context {
+                return Err(RegistryError::ReviewBlocked(
+                    "code line changed; refresh the diff before commenting".into(),
+                ));
+            }
+            return Ok(plantool_core::Anchor {
+                code: Some(code.clone()),
+                scope: plantool_core::AnchorScope::Line,
+                line: code.line,
+                text: code.context.clone(),
+                outdated: false,
+            });
         }
-        if let Some(line) = nc.line {
-            return Ok(anchor::anchor_at_line(content, line)?);
+        let content = g
+            .docs
+            .get(&nc.doc)
+            .map(|d| d.content.as_str())
+            .ok_or_else(|| RegistryError::NoDoc(nc.doc, self.store.doc_path(nc.doc)))?;
+        if nc.scope == plantool_core::AnchorScope::Document {
+            return Ok(plantool_core::Anchor {
+                code: None,
+                scope: nc.scope,
+                line: 1,
+                text: String::new(),
+                outdated: false,
+            });
         }
-        Err(anchor::AnchorError::NoMatch(String::new()).into())
+        let mut found = if let Some(m) = &nc.match_text {
+            anchor::resolve_match(content, m)?
+        } else if let Some(line) = nc.line {
+            anchor::anchor_at_line(content, line)?
+        } else {
+            return Err(anchor::AnchorError::NoMatch(String::new()).into());
+        };
+        if nc.scope == plantool_core::AnchorScope::Section && !found.text.starts_with('#') {
+            return Err(anyhow::anyhow!("a section comment must match a heading").into());
+        }
+        found.scope = nc.scope;
+        Ok(found)
     }
 
-    pub fn dry_run(&self, items: &[NewComment]) -> Result<Vec<plantool_core::Anchor>, RegistryError> {
+    pub fn dry_run(
+        &self,
+        items: &[NewComment],
+    ) -> Result<Vec<plantool_core::Anchor>, RegistryError> {
         let g = self.lock();
         items.iter().map(|nc| self.resolve_anchor(&g, nc)).collect()
     }
 
-    pub fn add_comments(&self, items: Vec<NewComment>, default_kind: CommentKind, default_author: &str) -> Result<Vec<Comment>, RegistryError> {
+    pub fn add_comments(
+        &self,
+        items: Vec<NewComment>,
+        default_kind: CommentKind,
+        default_author: &str,
+    ) -> Result<Vec<Comment>, RegistryError> {
         let mut g = self.lock();
         let mut resolved = Vec::with_capacity(items.len());
         for nc in &items {
@@ -450,10 +1040,18 @@ impl LiveSession {
         for (nc, anchor) in items.into_iter().zip(resolved) {
             g.state.seq += 1;
             let doc = match &nc.parent {
-                Some(p) => g.state.comments.iter().find(|c| &c.id == p).map(|c| c.doc).unwrap_or(nc.doc),
+                Some(p) => g
+                    .state
+                    .comments
+                    .iter()
+                    .find(|c| &c.id == p)
+                    .map(|c| c.doc)
+                    .unwrap_or(nc.doc),
                 None => nc.doc,
             };
             let c = Comment {
+                comment_type: nc.comment_type,
+                proposes_resolve: nc.proposes_resolve,
                 id: short_id(),
                 doc,
                 anchor,
@@ -470,29 +1068,98 @@ impl LiveSession {
             created.push(c);
         }
         let event = if created.len() == 1 {
-            LiveEvent::CommentAdded { comment: created[0].clone() }
+            LiveEvent::CommentAdded {
+                comment: created[0].clone(),
+            }
         } else {
-            LiveEvent::CommentsAdded { comments: created.clone() }
+            LiveEvent::CommentsAdded {
+                comments: created.clone(),
+            }
         };
         self.broadcast(&mut g, event);
         self.persist_state(&g)?;
         Ok(created)
     }
 
+    pub fn refresh_code_anchors(&self) -> Result<(), RegistryError> {
+        let mut g = self.lock();
+        let root = g
+            .session
+            .cwd()
+            .canonicalize()
+            .map_err(anyhow::Error::from)?;
+        let mut changed = Vec::new();
+        for comment in &mut g.state.comments {
+            let Some(code) = &comment.anchor.code else {
+                continue;
+            };
+            let path = root.join(&code.path);
+            let content = path
+                .canonicalize()
+                .ok()
+                .filter(|p| p.starts_with(&root))
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_default();
+            let next = anchor::reanchor_code(&content, &comment.anchor);
+            if next != comment.anchor {
+                comment.anchor = next;
+                changed.push(comment.clone());
+            }
+        }
+        if !changed.is_empty() {
+            for comment in changed {
+                self.broadcast(&mut g, LiveEvent::CommentUpdated { comment });
+            }
+            self.persist_state(&g)?;
+        }
+        Ok(())
+    }
+
+    pub fn promote_blocker(&self, id: &str) -> Result<Comment, RegistryError> {
+        let mut g = self.lock();
+        let c = g
+            .state
+            .comments
+            .iter_mut()
+            .find(|c| c.id == id && c.parent.is_none())
+            .ok_or_else(|| RegistryError::UnknownComment(id.into()))?;
+        c.comment_type = plantool_core::CommentType::Blocker;
+        c.kind = CommentKind::Human;
+        c.updated_at = Some(plantool_core::now());
+        let c = c.clone();
+        self.broadcast(&mut g, LiveEvent::CommentUpdated { comment: c.clone() });
+        self.persist_state(&g)?;
+        Ok(c)
+    }
+
     pub fn edit_comment(&self, id: &str, body: String) -> Result<Comment, RegistryError> {
         let mut g = self.lock();
         let seq = g.state.seq + 1;
-        let c = g.state.comments.iter_mut().find(|c| c.id == id).ok_or_else(|| RegistryError::UnknownComment(id.to_string()))?;
+        let c = g
+            .state
+            .comments
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| RegistryError::UnknownComment(id.to_string()))?;
         c.body = body;
         c.updated_at = Some(plantool_core::now());
         c.seq = seq;
         let out = c.clone();
-        self.broadcast(&mut g, LiveEvent::CommentUpdated { comment: out.clone() });
+        self.broadcast(
+            &mut g,
+            LiveEvent::CommentUpdated {
+                comment: out.clone(),
+            },
+        );
         self.persist_state(&g)?;
         Ok(out)
     }
 
-    pub fn resolve_comments(&self, ids: &[String], resolved: bool) -> Result<Vec<Comment>, RegistryError> {
+    pub fn resolve_comments(
+        &self,
+        ids: &[String],
+        resolved: bool,
+    ) -> Result<Vec<Comment>, RegistryError> {
         let mut g = self.lock();
         for id in ids {
             if !g.state.comments.iter().any(|c| &c.id == id) {
@@ -503,7 +1170,8 @@ impl LiveSession {
         let now = plantool_core::now();
         let mut out = Vec::new();
         for c in g.state.comments.iter_mut() {
-            let in_thread = ids.contains(&c.id) || c.parent.as_ref().map(|p| ids.contains(p)).unwrap_or(false);
+            let in_thread =
+                ids.contains(&c.id) || c.parent.as_ref().map(|p| ids.contains(p)).unwrap_or(false);
             if in_thread {
                 c.resolved = resolved;
                 c.updated_at = Some(now.clone());
@@ -511,7 +1179,13 @@ impl LiveSession {
                 out.push(c.clone());
             }
         }
-        self.broadcast(&mut g, LiveEvent::ThreadResolution { ids: ids.to_vec(), resolved });
+        self.broadcast(
+            &mut g,
+            LiveEvent::ThreadResolution {
+                ids: ids.to_vec(),
+                resolved,
+            },
+        );
         self.persist_state(&g)?;
         Ok(out)
     }
@@ -526,7 +1200,8 @@ impl LiveSession {
         let before = g.state.comments.len();
         let mut removed_ids: Vec<String> = Vec::new();
         g.state.comments.retain(|c| {
-            let gone = ids.contains(&c.id) || c.parent.as_ref().map(|p| ids.contains(p)).unwrap_or(false);
+            let gone =
+                ids.contains(&c.id) || c.parent.as_ref().map(|p| ids.contains(p)).unwrap_or(false);
             if gone {
                 removed_ids.push(c.id.clone());
             }
@@ -557,17 +1232,26 @@ impl LiveSession {
     }
 
     pub fn comment(&self, id: &str) -> Option<Comment> {
-        self.lock().state.comments.iter().find(|c| c.id == id).cloned()
+        self.lock()
+            .state
+            .comments
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
     }
 
     pub fn context(&self, comment: &Comment, radius: u32) -> Vec<(u32, String)> {
         let g = self.lock();
-        let Some(doc) = g.docs.get(&comment.doc) else { return Vec::new() };
+        let Some(doc) = g.docs.get(&comment.doc) else {
+            return Vec::new();
+        };
         let lines: Vec<&str> = doc.content.lines().collect();
         let center = comment.anchor.line.max(1) as usize;
         let start = center.saturating_sub(radius as usize).max(1);
         let end = (center + radius as usize).min(lines.len());
-        (start..=end).filter_map(|n| lines.get(n - 1).map(|l| (n as u32, l.to_string()))).collect()
+        (start..=end)
+            .filter_map(|n| lines.get(n - 1).map(|l| (n as u32, l.to_string())))
+            .collect()
     }
 
     pub fn navigate(&self, target: NavTarget) -> usize {
@@ -604,11 +1288,24 @@ impl LiveSession {
         Ok(true)
     }
 
-    pub fn append_run_event(&self, run_id: &str, seq: u64, event: serde_json::Value) -> anyhow::Result<()> {
+    pub fn append_run_event(
+        &self,
+        run_id: &str,
+        seq: u64,
+        event: serde_json::Value,
+    ) -> anyhow::Result<()> {
         let line = serde_json::json!({ "seq": seq, "at": plantool_core::now(), "event": event });
         self.store.append_run_event(run_id, &line.to_string())?;
         let mut g = self.lock();
-        self.broadcast(&mut g, LiveEvent::RunEvent { run_id: run_id.to_string(), seq, event });
+        self.broadcast(
+            &mut g,
+            LiveEvent::RunEvent {
+                run_id: run_id.to_string(),
+                seq,
+                event,
+            },
+        );
+        self.persist_state(&g)?;
         Ok(())
     }
 
@@ -618,7 +1315,14 @@ impl LiveSession {
         if g.commit.is_some() {
             return None;
         }
-        let job = CommitJob { id: short_id(), scope, phase: CommitPhase::Staging, started_at: plantool_core::now(), lines: Vec::new(), error: None };
+        let job = CommitJob {
+            id: short_id(),
+            scope,
+            phase: CommitPhase::Staging,
+            started_at: plantool_core::now(),
+            lines: Vec::new(),
+            error: None,
+        };
         let cancel = Arc::new(tokio::sync::Notify::new());
         let id = job.id.clone();
         g.commit = Some((job.clone(), cancel.clone()));
@@ -629,7 +1333,9 @@ impl LiveSession {
     /// Change the running commit; `announce` broadcasts the new state.
     pub fn update_commit(&self, id: &str, announce: bool, change: impl FnOnce(&mut CommitJob)) {
         let mut g = self.lock();
-        let Some((job, _)) = g.commit.as_mut().filter(|(job, _)| job.id == id) else { return };
+        let Some((job, _)) = g.commit.as_mut().filter(|(job, _)| job.id == id) else {
+            return;
+        };
         change(job);
         let excess = job.lines.len().saturating_sub(COMMIT_LINES);
         job.lines.drain(..excess);
@@ -642,7 +1348,9 @@ impl LiveSession {
     /// Announce the commit's final phase and forget it.
     pub fn finish_commit(&self, id: &str, phase: CommitPhase, error: Option<String>) {
         let mut g = self.lock();
-        let Some((mut job, _)) = g.commit.take_if(|(job, _)| job.id == id) else { return };
+        let Some((mut job, _)) = g.commit.take_if(|(job, _)| job.id == id) else {
+            return;
+        };
         job.phase = phase;
         job.error = error;
         self.broadcast(&mut g, LiveEvent::CommitProgress { commit: job });
@@ -680,7 +1388,10 @@ impl Registry {
                 Err(e) => tracing::warn!("skipping {}: {e}", dir.display()),
             }
         }
-        let reg = Registry { home, sessions: RwLock::new(map) };
+        let reg = Registry {
+            home,
+            sessions: RwLock::new(map),
+        };
         for s in reg.all() {
             for kind in DocKind::ALL {
                 if let Err(e) = s.capture_doc(kind) {
@@ -692,24 +1403,45 @@ impl Registry {
     }
 
     pub fn all(&self) -> Vec<Arc<LiveSession>> {
-        self.sessions.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
+        self.sessions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn get_key(&self, key: &str) -> Option<Arc<LiveSession>> {
-        self.sessions.read().unwrap_or_else(|e| e.into_inner()).get(key).cloned()
+        self.sessions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned()
     }
 
-    pub fn resolve(&self, reference: &str, cwd: Option<&Path>) -> Result<Arc<LiveSession>, RegistryError> {
+    pub fn resolve(
+        &self,
+        reference: &str,
+        cwd: Option<&Path>,
+    ) -> Result<Arc<LiveSession>, RegistryError> {
         let reference = reference.trim().trim_matches('/');
         if let Some(s) = self.get_key(reference) {
             return Ok(s);
         }
         let all = self.all();
-        let mut matches: Vec<Arc<LiveSession>> = all.iter().filter(|s| s.session().slug == reference).cloned().collect();
+        let mut matches: Vec<Arc<LiveSession>> = all
+            .iter()
+            .filter(|s| s.session().slug == reference)
+            .cloned()
+            .collect();
         if matches.len() > 1 {
             if let Some(cwd) = cwd {
                 if let Ok(c) = git::detect_checkout(cwd) {
-                    let narrowed: Vec<Arc<LiveSession>> = matches.iter().filter(|s| same_repo(&s.session(), &c)).cloned().collect();
+                    let narrowed: Vec<Arc<LiveSession>> = matches
+                        .iter()
+                        .filter(|s| same_repo(&s.session(), &c))
+                        .cloned()
+                        .collect();
                     if narrowed.len() == 1 {
                         matches = narrowed;
                     }
@@ -719,7 +1451,10 @@ impl Registry {
         match matches.len() {
             0 => Err(RegistryError::NotFound(reference.to_string())),
             1 => Ok(matches.remove(0)),
-            _ => Err(RegistryError::Ambiguous { reference: reference.to_string(), keys: matches.iter().map(|s| s.key.clone()).collect() }),
+            _ => Err(RegistryError::Ambiguous {
+                reference: reference.to_string(),
+                keys: matches.iter().map(|s| s.key.clone()).collect(),
+            }),
         }
     }
 
@@ -727,7 +1462,11 @@ impl Registry {
         if !valid_slug(&intent.slug) {
             return Err(RegistryError::BadSlug(intent.slug));
         }
-        let start = intent.repo.clone().or(intent.cwd.clone()).unwrap_or_else(|| PathBuf::from("."));
+        let start = intent
+            .repo
+            .clone()
+            .or(intent.cwd.clone())
+            .unwrap_or_else(|| PathBuf::from("."));
         let checkout = git::detect_checkout(&start)?;
         let repo_slug = match &intent.repo_slug {
             Some(r) => git::sanitize_slug(r),
@@ -739,9 +1478,15 @@ impl Registry {
             if same_repo(&s, &checkout) {
                 return Ok((existing, false));
             }
-            return Err(RegistryError::RepoMismatch { key, existing: s.repo.root.display().to_string() });
+            return Err(RegistryError::RepoMismatch {
+                key,
+                existing: s.repo.root.display().to_string(),
+            });
         }
-        let base = intent.base.clone().unwrap_or_else(|| git::default_base(&checkout));
+        let base = intent
+            .base
+            .clone()
+            .unwrap_or_else(|| git::default_base(&checkout));
         let worktree = if intent.worktree {
             let dir = intent
                 .worktree_dir
@@ -753,15 +1498,25 @@ impl Registry {
             None
         };
         let session = Session {
+            pause_rule: Default::default(),
+            difftool: None,
             repo_slug: repo_slug.clone(),
             slug: intent.slug.clone(),
-            title: intent.title.clone().unwrap_or_else(|| intent.slug.replace(['-', '_'], " ")),
+            title: intent
+                .title
+                .clone()
+                .unwrap_or_else(|| intent.slug.replace(['-', '_'], " ")),
             repo: checkout,
             worktree,
             pull_request: None,
             base,
             mirror: intent.mirror,
-            brief: intent.brief.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(|b| b.to_string()),
+            brief: intent
+                .brief
+                .as_deref()
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .map(|b| b.to_string()),
             created_in: intent.repo.clone().or(intent.cwd.clone()),
             created_at: plantool_core::now(),
         };
@@ -770,17 +1525,23 @@ impl Registry {
         std::fs::create_dir_all(&st.dir).map_err(|e| anyhow::anyhow!(e))?;
         st.save_meta(&session)?;
         st.save_state(&State::default())?;
-        let live = LiveSession::open(st)?.ok_or_else(|| anyhow::anyhow!("failed to open new session"))?;
+        let live =
+            LiveSession::open(st)?.ok_or_else(|| anyhow::anyhow!("failed to open new session"))?;
         for kind in DocKind::ALL {
             let _ = live.capture_doc(kind);
         }
-        self.sessions.write().unwrap_or_else(|e| e.into_inner()).insert(key, live.clone());
+        self.sessions
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, live.clone());
         Ok((live, true))
     }
 
     /// Drop a session: its folder under the plantool home and, on request, its git worktree.
     pub fn remove(&self, key: &str, remove_worktree: bool) -> Result<Session, RegistryError> {
-        let live = self.get_key(key).ok_or_else(|| RegistryError::NotFound(key.to_string()))?;
+        let live = self
+            .get_key(key)
+            .ok_or_else(|| RegistryError::NotFound(key.to_string()))?;
         let session = live.session();
         if remove_worktree {
             if let Some(wt) = &session.worktree {
@@ -790,21 +1551,111 @@ impl Registry {
         {
             let mut g = live.lock();
             g.removed = true;
-            live.broadcast(&mut g, LiveEvent::SessionRemoved { key: key.to_string() });
+            live.broadcast(
+                &mut g,
+                LiveEvent::SessionRemoved {
+                    key: key.to_string(),
+                },
+            );
         }
-        self.sessions.write().unwrap_or_else(|e| e.into_inner()).remove(key);
-        std::fs::remove_dir_all(&live.store.dir).map_err(|e| anyhow::anyhow!("removing {}: {e}", live.store.dir.display()))?;
+        self.sessions
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
+        std::fs::remove_dir_all(&live.store.dir)
+            .map_err(|e| anyhow::anyhow!("removing {}: {e}", live.store.dir.display()))?;
         Ok(session)
     }
 
     /// Repositories seen across sessions, most recently used first.
+    pub fn import_bundle(
+        &self,
+        mut bundle: crate::archive::Bundle,
+        repo: &Path,
+        workspace: Option<&Path>,
+    ) -> Result<SessionView, RegistryError> {
+        let checkout = git::detect_checkout(repo)?;
+        if let Some(path) = workspace {
+            let found = git::detect_checkout(path)?;
+            if found.common_dir != checkout.common_dir {
+                return Err(anyhow::anyhow!("workspace belongs to another repository").into());
+            }
+        }
+        let repo_slug = git::repo_slug(&checkout);
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+        let original = bundle.session.slug.chars().take(80).collect::<String>();
+        let mut slug = original.clone();
+        let mut counter = 1;
+        while sessions.contains_key(&format!("{repo_slug}/{slug}"))
+            || store::session_dir(&self.home, &repo_slug, &slug).exists()
+        {
+            slug = format!("{original}-import-{counter}");
+            counter += 1;
+        }
+        bundle.session.slug = slug;
+        bundle.session.repo_slug = repo_slug;
+        bundle.session.repo = checkout;
+        bundle.session.worktree = workspace
+            .filter(|p| *p != bundle.session.repo.root)
+            .map(Path::to_path_buf);
+        bundle.session.created_in = Some(repo.into());
+        bundle.session.mirror = false;
+        bundle.session.pull_request = None;
+        bundle.state.review = None;
+        let key = bundle.session.key();
+        let store = SessionStore::new(store::session_dir(
+            &self.home,
+            &bundle.session.repo_slug,
+            &bundle.session.slug,
+        ));
+        for revision in &bundle.revisions {
+            store.save_revision(revision)?;
+        }
+        for doc in &bundle.documents {
+            store::write_atomic(&store.doc_path(doc.kind), doc.content.as_bytes())
+                .map_err(anyhow::Error::from)?;
+            store.save_revision(doc)?;
+        }
+        for run in &mut bundle.runs {
+            run.cwd = bundle.session.cwd().clone();
+            run.status = plantool_core::RunStatus::Stopped;
+            run.milestone_review = None;
+            run.milestone_pending = false;
+            store.save_run(run)?;
+        }
+        for (id, content) in &bundle.transcripts {
+            store::write_atomic(&store.run_log_path(id), content.as_bytes())
+                .map_err(anyhow::Error::from)?;
+        }
+        store.save_state(&bundle.state)?;
+        store.save_meta(&bundle.session)?;
+        let live = LiveSession::open(store)?
+            .ok_or_else(|| anyhow::anyhow!("import did not create a session"))?;
+        let view = live.view();
+        sessions.insert(key, live);
+        Ok(view)
+    }
+
     pub fn repos(&self) -> Vec<RepoInfo> {
         let mut by_root: BTreeMap<PathBuf, RepoInfo> = BTreeMap::new();
         for s in self.all() {
             let sess = s.session();
             let st = s.state();
-            let last = if st.updated_at.is_empty() { sess.created_at.clone() } else { st.updated_at.clone() };
-            let e = by_root.entry(sess.repo.root.clone()).or_insert_with(|| RepoInfo { root: sess.repo.root.clone(), repo_slug: sess.repo_slug.clone(), branch: sess.repo.branch.clone(), base: sess.base.clone(), sessions: 0, last_used: String::new() });
+            let last = if st.updated_at.is_empty() {
+                sess.created_at.clone()
+            } else {
+                st.updated_at.clone()
+            };
+            let e = by_root
+                .entry(sess.repo.root.clone())
+                .or_insert_with(|| RepoInfo {
+                    root: sess.repo.root.clone(),
+                    repo_slug: sess.repo_slug.clone(),
+                    branch: sess.repo.branch.clone(),
+                    base: sess.base.clone(),
+                    sessions: 0,
+                    last_used: String::new(),
+                });
             e.sessions += 1;
             if last > e.last_used {
                 e.last_used = last;

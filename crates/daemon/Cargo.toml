@@ -22,7 +22,9 @@ which.workspace = true
 futures.workspace = true
 rand.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 rust-embed.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
