@@ -133,6 +133,43 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
         h.app.clone().oneshot(upload(b"")).await.unwrap().status(),
         StatusCode::BAD_REQUEST
     );
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header(header::HOST, "127.0.0.1")
+                .header("x-plantool-actor", "tok")
+                .header("x-plantool-filename", format!("{}.png", "x".repeat(150)))
+                .body(Body::from(b"image".to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(body["path"].as_str().unwrap().ends_with(".png"));
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header(header::HOST, "127.0.0.1")
+                .header("x-plantool-actor", "tok")
+                .body(Body::from(vec![0; 10 * 1024 * 1024 + 1]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        response.status(),
+        StatusCode::BAD_REQUEST | StatusCode::PAYLOAD_TOO_LARGE
+    ));
 }
 
 #[tokio::test]

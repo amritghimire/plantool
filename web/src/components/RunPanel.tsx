@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
-import { clearDraft, getDraft, setDraft } from "../lib/drafts";
+import { AttachmentComposer, useAttachmentDraft } from "./AttachmentComposer";
 import { providerLabel } from "../lib/agents";
 import { PERMISSION_MODES, type PermissionMode, type Run, type RunEvent } from "../types";
 
@@ -159,12 +159,14 @@ export function projectRun(lines: RunLine[]) {
 }
 
 export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessionKey: string; run: Run | null; lines: RunLine[]; onClose: () => void; onResume?: (run: Run) => void }) {
-  const draftKey = run ? `run:${run.id}` : "";
-  const [input, setInput] = useState(() => draftKey ? getDraft(draftKey) : "");
+  const composer = useAttachmentDraft(sessionKey, `run:${run?.id ?? ""}`);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const destinationKey = `${sessionKey}:${run?.id ?? ""}`;
+  const currentDestination = useRef(destinationKey);
+  currentDestination.current = destinationKey;
+  useEffect(() => { setBusy(false); setErr(null); }, [destinationKey]);
   const scroller = useRef<HTMLDivElement>(null);
-  useEffect(() => { setInput(draftKey ? getDraft(draftKey) : ""); }, [draftKey]);
   const { items, pending, turns } = useMemo(() => projectRun(lines), [lines]);
   const previousFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -200,30 +202,24 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
   }, [lines.length]);
   if (!run) return null;
   const send = async (body: unknown): Promise<boolean> => {
+    const destination = destinationKey;
     setBusy(true);
     setErr(null);
     try {
       await api.runInput(sessionKey, run.id, body);
       return true;
     } catch (e) {
-      setErr((e as Error).message);
+      if (currentDestination.current === destination) setErr((e as Error).message);
       return false;
     } finally {
-      setBusy(false);
+      if (currentDestination.current === destination) setBusy(false);
     }
   };
-  const sendText = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
-    if (await send({ text })) {
-      setInput("");
-      clearDraft(draftKey);
-    }
-  };
+  const sendText = () => composer.send(async (text) => { await api.runInput(sessionKey, run.id, { text }); });
   const live = run.status === "running" || run.status === "starting" || run.status === "waiting" || run.status === "idle";
   return (
     <section className="run-panel">
-      <header className="run-head">
+      <header className="run-head button-row">
         <span className={`run-status ${run.status}`} />
         <strong>
           {providerLabel(run.provider)} · {run.task ?? run.stage}
@@ -233,7 +229,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
         <span className="muted small">{run.status}</span>
         {live ? (
           <select
-            className="permission-select"
+            className="permission-select" aria-label="Run permissions"
             title={PERMISSION_MODES.find((m) => m.id === (run.permission_mode ?? "ask"))?.hint}
             value={run.permission_mode ?? "ask"}
             disabled={busy}
@@ -258,7 +254,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
             Resume
           </button>
         )}
-        <button className="btn ghost" onClick={onClose} type="button" title="Hide">
+        <button className="btn ghost" onClick={onClose} type="button" title="Hide" aria-label="Hide run">
           ×
         </button>
       </header>
@@ -280,7 +276,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
           <div className="permission-title">{pd.title}</div>
           {pd.detail && <pre className="permission-detail">{pd.detail}</pre>}
           {pd.kind === "permission" && (
-            <div className="composer-actions">
+            <div className="composer-actions button-row">
               {(pd.options?.length ? pd.options : [{ id: "allow", label: "Allow" }, { id: "deny", label: "Deny" }]).map((o) => (
                 <button key={o.id} className={`btn ${o.id.startsWith("allow") ? "primary" : "ghost"}`} disabled={busy} onClick={() => void send({ permission: { request_id: pd.request_id, decision: o.id } })} type="button">
                   {o.label}
@@ -296,23 +292,13 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
           {pd.kind === "input" && <InputAnswer pd={pd} busy={busy} onAnswer={(answers) => void send({ input: { request_id: pd.request_id, answers } })} />}
         </div>
       ))}
-      {err && <div className="error">{err}</div>}
+      {err && <div className="error run-error" role="alert">{err}</div>}
       {live && (
         <div className="run-input">
-          <textarea
-            rows={2}
-            value={input}
-            placeholder="Tell the agent something… (⌘↩)"
-            onChange={(e) => { setInput(e.target.value); setDraft(draftKey, e.target.value); }}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && input.trim()) {
-                void sendText();
-              }
-            }}
-          />
+          <AttachmentComposer composer={composer} placeholder="Tell the agent something… (⌘↩)" label="Message to agent" onSend={() => void sendText()} disabled={busy} />
           <button
             className="btn primary"
-            disabled={busy || !input.trim()}
+            disabled={busy || !composer.canSend}
             onClick={() => void sendText()}
             type="button"
           >
@@ -328,12 +314,12 @@ function ActivityView({ a }: { a: Activity }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`activity ${a.status}`}>
-      <div className="activity-head" onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="activity-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <span className="activity-kind">{a.kind}</span>
         <span className="activity-title">{a.title}</span>
         <span className="spacer" />
         <span className="muted small">{a.status}</span>
-      </div>
+      </button>
       {open && (a.detail || a.output) && <pre className="activity-body">{[a.detail, a.output].filter(Boolean).join("\n\n")}</pre>}
     </div>
   );
@@ -385,7 +371,7 @@ function InputAnswer({ pd, busy, onAnswer }: { pd: Pending; busy: boolean; onAns
           )}
         </label>
       ))}
-      <div className="composer-actions">
+      <div className="composer-actions button-row">
         <span className="spacer" />
         <button className="btn primary" disabled={busy} onClick={() => onAnswer(answers)} type="button">
           Answer

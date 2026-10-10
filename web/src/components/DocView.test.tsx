@@ -91,8 +91,8 @@ describe("DocView", () => {
     fireEvent.click(screen.getByText("Copy prompt"));
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Research for `repo/x`"));
     expect(await screen.findByText("Copied")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Run it here"));
-    expect(onStartRun).toHaveBeenCalled();
+    expect(screen.queryByText("Run it here")).toBeNull();
+    expect(onStartRun).not.toHaveBeenCalled();
   });
 
   it("slides mode shows one section at a time and anchors to absolute lines", async () => {
@@ -164,4 +164,20 @@ it("allows typed general comments in source view", async () => {
   fireEvent.change(screen.getByPlaceholderText("Comment on the whole document…"), { target: { value: "What is the assumption?" } });
   fireEvent.click(screen.getByText("Comment"));
   await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("plan", 1, "What is the assumption?", "question", "document"));
+});
+
+it.each(["rendered", "source", "slides"] as const)("navigates without composing in %s mode", (mode) => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  render(<DocView kind="research" doc={deck} path={null} comments={[]} actions={actions} onAdd={async () => {}} mode={mode} target={{ line: 9, nonce: 1 }} highlightComment={null} showResolved={false} />);
+  expect(document.querySelector('[data-line="9"]')).not.toBeNull();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  if (mode === "slides") expect(document.querySelector(".slides")?.firstElementChild).toHaveAttribute("aria-label", "Slides");
+});
+it.each(["source", "slides"] as const)("preserves section scope in %s mode", async (mode) => {
+  const onAdd = vi.fn(async () => {});
+  render(<DocView kind="research" doc={deck} path={null} comments={[]} actions={actions} onAdd={onAdd} mode={mode} target={null} highlightComment={null} showResolved={false} />);
+  fireEvent.click(screen.getAllByText("Comment on section")[0]);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Section feedback" } });
+  fireEvent.click(screen.getByText("Comment"));
+  await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("research", 1, "Section feedback", "note", "section"));
 });

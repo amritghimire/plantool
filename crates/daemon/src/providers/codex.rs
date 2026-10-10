@@ -177,6 +177,7 @@ pub async fn run(
     let mut phase = 0u8;
     let mut thread_rx: Option<oneshot::Receiver<Result<Value, String>>> = None;
     let mut turn_rx: Option<oneshot::Receiver<Result<Value, String>>> = None;
+    let mut steer_receivers: Vec<oneshot::Receiver<Result<Value, String>>> = Vec::new();
     let mut init_rx = Some(init_rx);
     let mut stopped = false;
     let mut mode = opts.permission_mode;
@@ -245,7 +246,7 @@ pub async fn run(
         if phase == 2 && active_turn.is_none() && turn_rx.is_none() && !queued.is_empty() {
             let text = queued.remove(0);
             let tid = thread_id.clone().unwrap_or_default();
-            let rx = rpc.request("turn/start", json!({ "threadId": tid, "input": [{ "type": "text", "text": text, "text_elements": [] }], "approvalPolicy": codex_approval(mode), "sandboxPolicy": codex_sandbox_policy(mode, &opts.writable_roots) })).await?;
+            let rx = rpc.request("turn/start", json!({ "threadId": tid, "input": super::attachments::codex_input(&text, &opts.writable_roots)?, "approvalPolicy": codex_approval(mode), "sandboxPolicy": codex_sandbox_policy(mode, &opts.writable_roots) })).await?;
             turn_rx = Some(rx);
         }
         if let Some(rx) = turn_rx.as_mut() {
@@ -280,6 +281,25 @@ pub async fn run(
                 turn_rx = None;
             }
         }
+
+        let mut pending = Vec::new();
+        for mut rx in steer_receivers.drain(..) {
+            match rx.try_recv() {
+                Ok(Err(message)) => {
+                    emit(
+                        &sink,
+                        ProviderEvent::Status {
+                            label: "Follow-up rejected".into(),
+                            detail: Some(message),
+                        },
+                    )
+                    .await;
+                }
+                Ok(Ok(_)) | Err(oneshot::error::TryRecvError::Closed) => {}
+                Err(oneshot::error::TryRecvError::Empty) => pending.push(rx),
+            }
+        }
+        steer_receivers = pending;
 
         tokio::select! {
             line = lines.next_line() => {
@@ -425,7 +445,8 @@ pub async fn run(
                     Some(RunInput::Text(text)) => {
                         emit(&sink, ProviderEvent::Message { id: format!("u-{}", plantool_core::now()), role: "user".into(), content: text.clone() }).await;
                         if let (Some(tid), Some(turn)) = (&thread_id, &active_turn) {
-                            let _rx = rpc.request("turn/steer", json!({ "threadId": tid, "expectedTurnId": turn, "input": [{ "type": "text", "text": text, "text_elements": [] }] })).await?;
+                            let rx = rpc.request("turn/steer", json!({ "threadId": tid, "expectedTurnId": turn, "input": super::attachments::codex_input(&text, &opts.writable_roots)? })).await?;
+                            steer_receivers.push(rx);
                         } else {
                             queued.push(text);
                         }

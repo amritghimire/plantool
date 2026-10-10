@@ -68,12 +68,12 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
       .then((diff) => setDiffs((d) => ({ ...d, [path]: { kind: "ready", diff } })))
       .catch((e: Error) => setDiffs((d) => ({ ...d, [path]: { kind: "error", message: e.message } })));
   };
-  if (err && !data) return <div className="doc-empty"><p className="error">{err}</p></div>;
+  if (err && !data) return <div className="doc-empty"><p className="error" role="alert">{err}</p></div>;
   if (!data) return <div className="doc-empty muted">Loading…</div>;
   const total = data.stat.reduce((a, f) => ({ added: a.added + f.added, deleted: a.deleted + f.deleted }), { added: 0, deleted: 0 });
   return (
     <div className="changes">
-      <div className="changes-head">
+      <div className="changes-head button-row">
         <div>
           <strong>{data.stat.length}</strong> file{data.stat.length === 1 ? "" : "s"} changed {data.label}
           <span className="added"> +{total.added}</span>
@@ -89,7 +89,7 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
       </div>
       {data.difftool_open_comments !== undefined && <p className="muted">Difftool comments (read only): {data.difftool_open_comments === null ? "not available" : `${data.difftool_open_comments} open`}. Resolve them in difftool.</p>}
       {data.step_available && (
-        <div className="changes-scope">
+        <div className="changes-scope button-row">
           <span className="muted small">show</span>
           <div className="seg" role="tablist" aria-label="Change scope">
             <button className={data.scope === "step" ? "active" : ""} onClick={() => pickScope("step")} type="button" role="tab" aria-selected={data.scope === "step"}>
@@ -108,10 +108,10 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
         </p>
       )}
       {data.review?.tool === "git-difftool" && <p className="banner">git difftool was launched on this machine.</p>}
-      {err && <p className="error">{err}</p>}
+      {err && <p className="error" role="alert">{err}</p>}
       {data.message && <p className="muted">{data.message}</p>}
       {actions && comments.some((c) => !c.parent && c.anchor.code) && <section aria-label="Code review comments"><h3>Code review comments</h3>{comments.filter((c) => !c.parent && c.anchor.code).map((root) => <Thread key={root.id} root={root} replies={comments.filter((c) => c.parent === root.id)} actions={actions} highlighted={root.id === highlightComment} />)}</section>}
-      {data.drift && <details className="banner" open={!data.drift.checked || data.drift.outside_files.length > 0 || data.drift.ticks_without_diff || data.drift.plan_changed}>
+      {data.drift && <details className="banner disclosure" open={!data.drift.checked || data.drift.outside_files.length > 0 || data.drift.ticks_without_diff || data.drift.plan_changed}>
         <summary>Plan and code · {data.drift.checked ? "heuristic drift check" : "drift not checked"}</summary>
         {!data.drift.checked && <p>The plan has no parseable affected-files table. Add one to check changed files against the plan.</p>}
         {data.drift.checked && data.drift.outside_files.length > 0 && <p>Outside planned files: {data.drift.outside_files.join(", ")}</p>}
@@ -120,7 +120,7 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
         <p>Planned files: {data.drift.planned_files.join(", ") || "Not listed"}</p>
         <p className="muted">These signals help find drift. They do not prove a task is complete.</p>
       </details>}
-      {data.milestones && <details><summary>Planned milestones and completed tasks</summary>{data.milestones.map((m) => <section key={m.key}><strong>{m.key} · {m.status}</strong><ul>{m.completed_tasks.map((task) => <li key={task}>{task}</li>)}</ul></section>)}</details>}
+      {data.milestones && <details className="disclosure"><summary>Planned milestones and completed tasks</summary>{data.milestones.map((m) => <section key={m.key}><strong>{m.key} · {m.status}</strong><ul>{m.completed_tasks.map((task) => <li key={task}>{task}</li>)}</ul></section>)}</details>}
       <table className="stat">
         <tbody>
           {data.stat.map((f) => {
@@ -143,7 +143,7 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
                     {!state || state.kind === "loading" ? (
                       <div className="muted small file-diff">Loading diff…</div>
                     ) : state.kind === "error" ? (
-                      <div className="error small file-diff">{state.message}</div>
+                      <div className="error small file-diff" role="alert">{state.message}</div>
                     ) : (
                       <DiffBlock diff={state.diff} review={actions && onAdded ? { sessionKey, comments, actions, onAdded } : undefined} />
                     )}

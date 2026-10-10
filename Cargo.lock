@@ -1298,6 +1298,7 @@ version = "0.0.14"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "futures",
  "http-body-util",
  "notify",

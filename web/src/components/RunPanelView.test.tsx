@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { api } from "../api";
 import { RunPanel, type RunLine } from "./RunPanel";
 import type { Run } from "../types";
@@ -42,5 +42,45 @@ it("keeps an unsent message when sending fails", async () => {
   await waitFor(() => expect(screen.getByText("Connection lost")).toBeVisible());
   expect(input).toHaveValue("Please check the tests");
   expect(send).toHaveBeenCalledWith("repo/x", "r", { text: "Please check the tests" });
+  vi.restoreAllMocks();
+});
+
+it("exposes an activity disclosure to keyboard users", () => {
+  const activityLines: RunLine[] = [
+    { seq: 1, event: { type: "activity-start", id: "a", kind: "tool", title: "Inspect a long path", detail: "/repository/long/path/file.ts" } },
+  ];
+  render(<RunPanel sessionKey="repo/activity" run={{ ...run, status: "running" }} lines={activityLines} onClose={() => {}} />);
+  const disclosure = screen.getByRole("button", { name: /Inspect a long path/ });
+  disclosure.focus();
+  expect(disclosure).toHaveFocus();
+  expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(disclosure);
+  expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText("/repository/long/path/file.ts")).toBeVisible();
+});
+
+it("retains permission options and sends the chosen decision", async () => {
+  const send = vi.spyOn(api, "runInput").mockResolvedValue({ ok: true });
+  render(<RunPanel sessionKey="repo/permission" run={{ ...run, status: "waiting" }} lines={[{ seq: 1, event: { type: "permission", request_id: "p2", kind: "permission", title: "Allow this command?", options: [{ id: "allow-once", label: "Allow once" }, { id: "deny", label: "Deny" }] } }]} onClose={() => {}} />);
+  expect(screen.getByLabelText("Run permissions")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith("repo/permission", "r", { permission: { request_id: "p2", decision: "allow-once" } }));
+});
+
+it("captures the run receiving an attachment while preserving a new run draft", async () => {
+  let resolve!: (value: { ok: boolean }) => void;
+  const pending = new Promise<{ ok: boolean }>((yes) => { resolve = yes; });
+  const send = vi.spyOn(api, "runInput").mockReturnValue(pending);
+  vi.spyOn(api, "uploadAttachment").mockResolvedValue({ name: "notes.txt", path: "/session/attachments/notes.txt" });
+  const { rerender } = render(<RunPanel sessionKey="repo/race" run={{ ...run, status: "running" }} lines={[]} onClose={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [new File(["notes"], "notes.txt")] } });
+  await screen.findByText("Uploaded");
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  rerender(<RunPanel sessionKey="repo/race" run={{ ...run, id: "other", status: "running" }} lines={[]} onClose={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Message to agent"), { target: { value: "Other run draft" } });
+  await act(async () => resolve({ ok: true }));
+  expect(send).toHaveBeenCalledWith("repo/race", "r", { text: "Attached file: /session/attachments/notes.txt" });
+  expect(screen.getByLabelText("Message to agent")).toHaveValue("Other run draft");
+  expect(screen.queryByLabelText("Attachments")).toBeNull();
   vi.restoreAllMocks();
 });

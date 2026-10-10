@@ -41,6 +41,7 @@ function setup(currentView = view) {
   render(
     <Sidebar
       view={currentView}
+      onHandoff={() => {}}
       comments={[question]}
       activeTab="research"
       onTab={() => {}}
@@ -164,4 +165,16 @@ it("offers approval for a stopped scoped milestone with an adaptive checkpoint",
   setup({ ...view, state: { ...view.state, stage: "implementing" }, runs: [run] });
   await screen.findByDisplayValue("Milestone 1: phase");
   expect(screen.getByText("Approve milestone and continue")).toBeEnabled();
+});
+
+it("renders one handoff with a live announcement", () => {
+  setup({ ...view, handoff: { step: "Research", label: "Ready to plan", action: "Plan it" } });
+  expect(screen.getAllByRole("button", { name: "Plan it" })).toHaveLength(1);
+  expect(screen.getByRole("status")).toHaveTextContent("Research · Ready to plan");
+  expect(screen.getByRole("status").closest("aside")).not.toBeNull();
+});
+
+it("keeps approval available when the handoff navigates to review", () => {
+  setup({ ...view, state: { ...view.state, stage: "plan-review" }, docs: view.docs.map((doc) => ({ ...doc, exists: true })), handoff: { step: "Plan", label: "Review needed", action: "Review plan" } });
+  expect(screen.getByRole("button", { name: "Approve plan" })).toBeEnabled();
 });

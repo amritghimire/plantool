@@ -69,32 +69,12 @@ pub async fn run(
         for root in &opts.writable_roots {
             cmd.arg("--add-dir").arg(root);
         }
-        for path in prompt
-            .lines()
-            .filter_map(|line| line.strip_prefix("Attached file: "))
-        {
-            let Ok(file) = std::path::Path::new(path).canonicalize() else {
-                continue;
-            };
-            let native = file
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| {
-                    matches!(
-                        ext.to_ascii_lowercase().as_str(),
-                        "jpg" | "jpeg" | "png" | "gif" | "webp" | "pdf" | "heic" | "heif"
-                    )
-                });
-            if native
-                && opts.writable_roots.iter().any(|root| {
-                    root.join("attachments")
-                        .canonicalize()
-                        .is_ok_and(|dir| file.starts_with(dir))
-                })
-                && file.is_file()
-            {
-                cmd.arg("--attachment").arg(file);
-            }
+        for file in super::attachments::file_args(
+            &prompt,
+            &opts.writable_roots,
+            plantool_core::Provider::Copilot,
+        )? {
+            cmd.arg("--attachment").arg(file);
         }
         match mode {
             PermissionMode::Ask => {

@@ -26,10 +26,10 @@ export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: s
       const result = await response.json() as { session: { url_path: string } }; window.location.assign(result.session.url_path);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
-  return <details className="side-block"><summary>Export or import session</summary>
+  return <details className="side-block disclosure context-form"><summary>Export or import session</summary>
     <p>Documents, comments, decisions, a summary, and approved and last-viewed revisions are included.</p>
-    <label><input type="checkbox" checked={transcripts} onChange={(e) => setTranscripts(e.target.checked)} /> Include agent transcripts</label>
-    <label><input type="checkbox" checked={revisions} onChange={(e) => setRevisions(e.target.checked)} /> Include all revisions</label>
+    <label className="check-row"><input type="checkbox" checked={transcripts} onChange={(e) => setTranscripts(e.target.checked)} /> Include agent transcripts</label>
+    <label className="check-row"><input type="checkbox" checked={revisions} onChange={(e) => setRevisions(e.target.checked)} /> Include all revisions</label>
     <button className="btn" type="button" disabled={busy} onClick={() => void download()}>Download zip</button>
     <label>Import repository <input value={repository} onChange={(e) => setRepository(e.target.value)} /></label>
     <label>Import workspace (optional) <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} /></label>

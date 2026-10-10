@@ -11,8 +11,8 @@ export function CodeReview({ sessionKey, path, line, context, comments, onAdded 
     await api.addComment(sessionKey, { doc: "plan", body, type, code: { path, side: "new", line, context } });
     setOpen(false); onAdded();
   };
-  return <div className="code-review">
-    <button type="button" className="link" aria-label={`Comment on ${path}:${line}`} onClick={() => setOpen(!open)}>Comment on line {line}</button>
+  return <div className="code-review button-row">
+    <button type="button" className="link" aria-expanded={open} aria-label={`Comment on ${path}:${line}`} onClick={() => setOpen(!open)}>Comment on line {line}</button>
     {open && <Composer showType draftKey={`code:${sessionKey}:${path}:${line}`} placeholder={`Comment on ${path}:${line}…`} onSubmit={add} onCancel={() => setOpen(false)} />}
     {count > 0 && <span className="muted small">{count} comment{count === 1 ? "" : "s"} · see Code review comments above</span>}
   </div>;

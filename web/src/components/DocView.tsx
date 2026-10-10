@@ -171,11 +171,6 @@ export function DocView(p: Props) {
               <span>Paste this into your agent</span>
               <span className="spacer" />
               <CopyButton text={p.prompt} label="Copy prompt" />
-              {p.onStartRun && (
-                <button className="btn primary small" onClick={p.onStartRun} type="button">
-                  Run it here
-                </button>
-              )}
             </div>
             <pre className="prompt-text">{p.prompt}</pre>
           </div>
@@ -200,7 +195,7 @@ export function DocView(p: Props) {
 
   if (p.mode === "source") {
     return (
-      <>{documentComments}<SourceView
+      <div className="source-document">{documentComments}<SourceView
         content={p.doc.content}
         threads={threads}
         actions={p.actions}
@@ -209,7 +204,7 @@ export function DocView(p: Props) {
         submit={submit}
         onSection={(line) => { setScope("section"); setComposing(line); }}
         highlightComment={p.highlightComment}
-      /></>
+      /></div>
     );
   }
 
@@ -271,8 +266,7 @@ export function DocView(p: Props) {
           }
         }} data-line={start} data-end={block.end}>
         {gutter}
-        {type === "heading" && <button className="link" onClick={() => { setScope("section"); setComposing(start); }} type="button">Comment on section</button>}
-        {inner}
+        {type === "heading" ? <div className="heading-row">{inner}<button className="link section-action" onClick={() => { setScope("section"); setComposing(start); }} type="button">Comment on section</button></div> : inner}
         {extras}
       </div>
     );
@@ -326,8 +320,9 @@ export function DocView(p: Props) {
     const s = slides[current];
     const openOn = (sl: { start: number; end: number }) => threads.filter((t) => !t.root.resolved && t.root.anchor.line >= sl.start && t.root.anchor.line <= sl.end).length;
     return (
-      <div className="slides">
+      <div className="slides-document">
         {documentComments}
+      <div className="slides">
         <nav className="outline" aria-label="Slides">
           {slides.map((sl) => {
             const n = openOn(sl);
@@ -364,6 +359,7 @@ export function DocView(p: Props) {
             </button>
           </footer>
         </section>
+      </div>
       </div>
     );
   }
@@ -434,12 +430,12 @@ function SourceView({ content, threads, actions, composing, setComposing, submit
         const ts = byLine.get(n);
         return (
           <div key={n} className="src-line blk" data-line={n} data-end={n}>
-            <button className="gutter" onClick={() => setComposing(composing === n ? null : n)} type="button">
+            <button className="gutter" aria-label={`Comment on line ${n}`} onClick={() => setComposing(composing === n ? null : n)} type="button">
               +
             </button>
             <span className="ln">{n}</span>
-            <span className="txt">{text || " "}</span>
-            {/^(#{1,6})\s/.test(text) && <button type="button" className="link" onClick={() => onSection(n)}>Comment on section</button>}
+            <span className="txt">{text || " "}
+            {/^(#{1,6})\s/.test(text) && <button type="button" className="link section-action" onClick={() => onSection(n)}>Comment on section</button>}</span>
             {(ts || composing === n) && (
               <div className="src-extras">
                 {ts?.map((t) => (

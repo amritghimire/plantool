@@ -32,8 +32,8 @@ function CommitSection({ preview, message, onMessage, busy, error, onCommit, com
     {count > 0 && <details><summary className="small">Files in this commit</summary><ul>{preview.changed_files.map((file) => <li key={file}>{file}</li>)}</ul></details>}
     <label>Commit message<textarea rows={4} value={message} onChange={(e) => onMessage(e.target.value)} disabled={busy} placeholder="Subject line, blank line, body" /></label>
     {preview.live_run && <div className="muted small">An agent run is live in this checkout. It may be editing files while you commit.</div>}
-    {error && <div className="error">{error}</div>}
-    {commit ? <CommitProgress job={commit} label="Committing…" onCancel={onCancelCommit} /> : <div className="composer-actions"><span className="spacer" /><button className="btn primary" type="button" disabled={busy || !message.trim()} onClick={onCommit}>Commit all changes</button></div>}
+    {error && <div className="error" role="alert">{error}</div>}
+    {commit ? <CommitProgress job={commit} label="Committing…" onCancel={onCancelCommit} /> : <div className="composer-actions button-row dialog-actions"><span className="spacer" /><button className="btn primary" type="button" disabled={busy || !message.trim()} onClick={onCommit}>Commit all changes</button></div>}
   </div>;
 }
 
@@ -82,11 +82,11 @@ export function PrDialog({ sessionKey, commit, onCancelCommit, onClose, onDraftA
     finally { setBusy(false); }
   };
   const reason = blockReason(preview, preflightError, { title, body });
-  return <div className="modal-backdrop" onClick={() => !busy && onClose()}><div className="modal pr-dialog" role="dialog" aria-modal="true" aria-label="Create pull request" onClick={(e) => e.stopPropagation()}>
+  return <div className="modal-backdrop" onClick={() => !busy && onClose()}><div className="modal form-stack pr-dialog" role="dialog" aria-modal="true" aria-label="Create pull request" onClick={(e) => e.stopPropagation()}>
     <h3>Pull request</h3>
     <p className="muted small">The agent writes the first draft. Review and edit it before creating the PR.</p>
-    <div className="composer-actions"><button className={`btn ${hasDraft ? "ghost" : "primary"}`} type="button" disabled={busy} onClick={onDraftAgent}>{hasDraft ? "Redraft with agent" : "Draft with agent"}</button></div>
-    {preflightError && <div className="error">{preflightError}</div>}
+    <div className="composer-actions button-row dialog-actions"><button className={`btn ${hasDraft ? "ghost" : "primary"}`} type="button" disabled={busy} onClick={onDraftAgent}>{hasDraft ? "Redraft with agent" : "Draft with agent"}</button></div>
+    {preflightError && <div className="error" role="alert">{preflightError}</div>}
     {preview && <Checks preview={preview} busy={busy} onRefresh={reload} />}
     {preview?.dirty && <CommitSection preview={preview} message={commitMessage} onMessage={(message) => { commitEdited.current = true; setCommitMessage(message); }} busy={busy} error={commitError} onCommit={() => void commitAll()} commit={commit} onCancelCommit={onCancelCommit} />}
     {commitNote && <div className="muted small">{commitNote}</div>}
@@ -94,8 +94,8 @@ export function PrDialog({ sessionKey, commit, onCancelCommit, onClose, onDraftA
     <label>Title<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary of the change" /></label>
     <label>Body<textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What changed and why" /></label>
     {!preview?.existing && <fieldset className="handoff-options"><legend>Create as</legend><label><input type="radio" name="pr-mode" checked={mode === "draft"} onChange={() => setMode("draft")} /> Draft</label><label><input type="radio" name="pr-mode" checked={mode === "ready"} onChange={() => setMode("ready")} /> Ready for review</label></fieldset>}
-    {error && <div className="error">{error}</div>}
-    <div className="composer-actions"><span className="spacer" /><button className="btn ghost" disabled={busy} onClick={onClose} type="button">Cancel</button><button className="btn primary" disabled={busy || reason !== null} title={reason ?? undefined} onClick={() => void submit()} type="button">{preview?.existing ? "Link existing PR" : "Create PR"}</button></div>
+    {error && <div className="error" role="alert">{error}</div>}
+    <div className="composer-actions button-row dialog-actions"><span className="spacer" /><button className="btn ghost" disabled={busy} onClick={onClose} type="button">Cancel</button><button className="btn primary" disabled={busy || reason !== null} title={reason ?? undefined} onClick={() => void submit()} type="button">{preview?.existing ? "Link existing PR" : "Create PR"}</button></div>
     {reason && <p className="muted small pr-reason">{reason}</p>}
   </div></div>;
 }
