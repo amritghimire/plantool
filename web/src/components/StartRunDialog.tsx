@@ -121,7 +121,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   };
   return (
     <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label={resume ? "Resume run" : STAGE_TEXT[stage].label} onClick={(e) => e.stopPropagation()}>
         <h3>{resume ? "Resume run" : STAGE_TEXT[stage].label}</h3>
         <p className="muted small">{STAGE_TEXT[stage].hint}</p>
         <label>
@@ -143,7 +143,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           </select>
         </label>
         {providers && <ProviderSetup providers={providers} onRecheck={() => void api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message))} />}
-        {current?.error && <div className="error">{current.error}</div>}
+        {current?.error && <div className="error" role="alert">{current.error}</div>}
         {resumable.length > 0 && (
           <label>
             Continue from
@@ -206,7 +206,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           </label>
         )}
         {stage === "implement" && (
-          <label className="check">
+          <label className="check check-row">
             <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
             <span>
               Work in a git worktree <span className="muted small">(.worktrees/&lt;slug&gt; or git config plantool.worktreeDir, off the base branch; your checkout stays untouched)</span>
@@ -222,15 +222,15 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           <label><input type="radio" name="handoff" checked={handoff === "keep"} onChange={() => setHandoff("keep")} /> Keep running and start</label>
         </fieldset>}
         {preview && (
-          <details className="prompt-preview">
+          <details className="prompt-preview disclosure">
             <summary>
               The prompt the agent gets <CopyButton text={preview} label="copy" className="link" />
             </summary>
             <pre className="prompt-text">{preview}</pre>
           </details>
         )}
-        {err && <div className="error">{err}</div>}
-        <div className="composer-actions">
+        {err && <div className="error" role="alert">{err}</div>}
+        <div className="composer-actions button-row dialog-actions">
           <span className="spacer" />
           <button className="btn ghost" onClick={onClose} type="button">
             Cancel

@@ -41,3 +41,14 @@ test("hides the scope switch outside step-by-step implementation", async () => {
   await screen.findByText(/against main/);
   expect(screen.queryByText("This milestone")).toBeNull();
 });
+
+test("announces diff errors while keeping the full path reachable", async () => {
+  const path = `${"nested-directory/".repeat(15)}file.ts`;
+  vi.spyOn(api, "changes").mockResolvedValue({ ...base, stat: [{ path, added: 1, deleted: 0 }] });
+  vi.spyOn(api, "changesFile").mockRejectedValue(new Error(`Unable to read ${path}`));
+  render(<ChangesTab sessionKey="repo/long-path" nonce={0} />);
+  const toggle = await screen.findByRole("button", { name: `Expand ${path}` });
+  fireEvent.click(toggle);
+  expect(await screen.findByRole("alert")).toHaveTextContent(`Unable to read ${path}`);
+  expect(screen.getByRole("button", { name: `Collapse ${path}` })).toBeInTheDocument();
+});

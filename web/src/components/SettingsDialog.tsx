@@ -73,9 +73,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <DiffToolSettings />
+      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
         <h3>Settings</h3>
+        <DiffToolSettings />
         <label>
           Worktree location <span className="muted small">(where session worktrees are created)</span>
           <select value={scope} onChange={(e) => setScope(e.target.value)}>
@@ -100,9 +100,9 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
         )}
         {setting && <div className="muted small">Stored as <code>{setting.key}</code>; the CLI flags <code>--worktree-dir</code> and <code>--dir</code> still win.</div>}
-        {err && <div className="error">{err}</div>}
-        <div className="composer-actions">
-          {saved && <span className="muted small">Saved</span>}
+        {err && <div className="error" role="alert">{err}</div>}
+        <div className="composer-actions button-row dialog-actions">
+          {saved && <span className="muted small" role="status">Saved</span>}
           <span className="spacer" />
           <button className="btn ghost" onClick={onClose} type="button">
             Close

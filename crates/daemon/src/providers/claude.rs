@@ -89,7 +89,7 @@ pub async fn run(
 
     let init = json!({ "type": "control_request", "request_id": "plantool-init", "request": { "subtype": "initialize", "hooks": {} } });
     stdin.write_all(format!("{init}\n").as_bytes()).await?;
-    send_user(&mut stdin, &opts.prompt).await?;
+    send_user(&mut stdin, &opts.prompt, &opts.writable_roots).await?;
     emit(
         &sink,
         ProviderEvent::Message {
@@ -247,7 +247,7 @@ pub async fn run(
                             emit(&sink, ProviderEvent::TurnStarted { turn_id: format!("t{turn_counter}") }).await;
                         }
                         emit(&sink, ProviderEvent::Message { id: format!("u{turn_counter}-{}", plantool_core::now()), role: "user".into(), content: text.clone() }).await;
-                        send_user(&mut stdin, &text).await?;
+                        send_user(&mut stdin, &text, &opts.writable_roots).await?;
                     }
                     Some(RunInput::Permission { request_id, decision }) => {
                         if let Some(p) = pending.remove(&request_id) {
@@ -319,8 +319,12 @@ pub async fn run(
     Ok(())
 }
 
-async fn send_user(stdin: &mut tokio::process::ChildStdin, text: &str) -> anyhow::Result<()> {
-    let msg = json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "text", "text": text }] } });
+async fn send_user(
+    stdin: &mut tokio::process::ChildStdin,
+    text: &str,
+    roots: &[std::path::PathBuf],
+) -> anyhow::Result<()> {
+    let msg = super::attachments::claude_message(text, roots)?;
     stdin.write_all(format!("{msg}\n").as_bytes()).await?;
     stdin.flush().await?;
     Ok(())

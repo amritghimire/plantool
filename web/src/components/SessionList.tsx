@@ -86,8 +86,8 @@ export function SessionList() {
     {settings && <SettingsDialog onClose={() => setSettings(false)} />}
     {dropping && <DropSessionDialog view={dropping} busy={busy} onClose={() => setDropping(null)} onDelete={drop} />}
     <main className="list">
-      {error && <p className="error">{error}</p>}
-      {sessions && sessions.length > 0 && <div className="list-filters" role="group" aria-label="Filter sessions">
+      {error && <p className="error" role="alert">{error}</p>}
+      {sessions && sessions.length > 0 && <div className="list-filters button-row" role="group" aria-label="Filter sessions">
         {FILTERS.map(({ id, label }) => <button key={id} className={filter === id ? "active" : ""} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label} <span className="badge">{sessions.filter((s) => matchesFilter(s, id)).length}</span></button>)}
       </div>}
       {sessions && sessions.length > 0 && <input className="session-search" type="search" aria-label="Search sessions" placeholder="Search sessions, repositories, or briefs…" value={query} onChange={(event) => setQuery(event.target.value)} />}

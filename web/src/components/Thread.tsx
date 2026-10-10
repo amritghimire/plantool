@@ -21,12 +21,12 @@ export function Thread({ root, replies, actions, highlighted }: { root: Comment;
   const latestAgent = replies.filter((r) => r.kind === "agent").sort((a, b) => b.seq - a.seq)[0];
   const status = root.resolved ? "Resolved" : latestAgent?.proposes_resolve ? "Agent proposes resolution" : latestAgent ? "Agent replied · awaiting your review" : root.anchor.outdated ? "Outdated · unaddressed" : "Open";
   return (
-    <div id={`c-${root.id}`} className={`thread ${root.resolved ? "resolved" : ""} ${highlighted ? "highlight" : ""}`}>
+    <div id={`c-${root.id}`} className={`thread feedback-${root.type ?? "note"} ${root.resolved ? "resolved" : ""} ${highlighted ? "highlight" : ""}`}>
       <div className="thread-head">
         <button className="link" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)} type="button">{status}</button>
-        <span>{(root.type ?? "note").replace("-", " ")}</span>
+        <span className={`feedback-badge feedback-${root.type ?? "note"}`}>{(root.type ?? "note").replace("-", " ")}</span>
         <span className={`kind kind-${root.kind}`}>{root.kind}</span>
-        <span className="muted">
+        <span className="muted thread-anchor">
           {root.anchor.code ? `${root.anchor.code.path}:${root.anchor.code.line}` : root.anchor.scope === "document" ? "Document" : root.anchor.scope === "section" ? `Section · line ${root.anchor.line}` : `line ${root.anchor.line}`}
           {root.anchor.outdated && <span className="outdated"> · outdated</span>}
           {root.resolved && " · resolved"}
@@ -60,7 +60,7 @@ export function Thread({ root, replies, actions, highlighted }: { root: Comment;
               )}
             </div>
           ))}
-          <div className="thread-actions">
+          <div className="thread-actions button-row">
             {replying ? (
               <Composer draftKey={`reply:${root.id}`} placeholder="Reply…" submitLabel="Reply" onCancel={() => setReplying(false)} onSubmit={async (b) => { await actions.reply(root, b); setReplying(false); }} />
             ) : (
@@ -86,7 +86,7 @@ function EditBox({ initial, onSubmit, onCancel }: { initial: string; onSubmit: (
   return (
     <div className="composer">
       <textarea value={body} rows={3} onChange={(e) => setBody(e.target.value)} />
-      <div className="composer-actions">
+      <div className="composer-actions button-row">
         <span className="spacer" />
         <button className="btn ghost" onClick={onCancel} type="button">
           Cancel

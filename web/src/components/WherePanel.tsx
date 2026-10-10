@@ -24,7 +24,7 @@ export function WherePanel({ view, onUpdated }: { view: SessionView; onUpdated: 
       onUpdated(result.view);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
-  return <details className="side-block"><summary>Where · workspace, branch, base and diff tool</summary>
+  return <><details className="side-block disclosure context-form"><summary>Where · workspace, branch, base and diff tool</summary>
     <label>Workspace <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} /></label>
     <label>Branch <input value={branch} onChange={(e) => setBranch(e.target.value)} /></label>
     <label>Base <input value={base} onChange={(e) => setBase(e.target.value)} /></label>
@@ -32,12 +32,13 @@ export function WherePanel({ view, onUpdated }: { view: SessionView; onUpdated: 
     <label>Pause rule <select value={pauseMode} onChange={(e) => setPauseMode(e.target.value as typeof pauseMode)}><option value="no-pauses">No pauses</option><option value="every-milestone">Every milestone</option><option value="plain-language">When this rule applies</option></select></label>
     {pauseMode === "plain-language" && <label>Checkpoint rule <textarea value={pauseText} onChange={(e) => setPauseText(e.target.value)} placeholder="Pause before changing a public API or when an assumption fails." /></label>}
     <p>Diff window: {view.session.base} → {base}…working tree. A live agent will stop and resume in the selected workspace.</p>
-    {error && <p role="alert">{error}</p>}
     <button type="button" className="btn primary" disabled={busy || !base.trim() || !workspace.trim()} onClick={() => void apply()}>Apply context change</button>
     <button type="button" className="btn ghost" onClick={() => void api.session(view.key).then(onUpdated).catch((e: Error) => setError(e.message))}>Re-check</button>
+  </details>
+    {error && <p className="error" role="alert">{error}</p>}
     {(view.state.proposals ?? []).filter((p) => p.kind !== "plan-revision").map((p) => <div className="banner" key={p.id}><strong>Agent proposes {p.kind}</strong><p>{p.old} → {p.new}</p><p>{p.reason}</p>
       <button type="button" className="btn" onClick={() => void api.contextProposal(view.key, p.id, false).then((r) => onUpdated(r.view)).catch((e: Error) => setError(e.message))}>Apply proposal</button>
       <button type="button" className="btn ghost" onClick={() => void api.contextProposal(view.key, p.id, true).then((r) => onUpdated(r.view)).catch((e: Error) => setError(e.message))}>Dismiss</button>
     </div>)}
-  </details>;
+  </>;
 }

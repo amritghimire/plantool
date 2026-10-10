@@ -55,6 +55,12 @@ async fn start(
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let provider = Provider::parse(&body.provider)
         .ok_or_else(|| bad_request(format!("unknown provider {}", body.provider)))?;
+    crate::providers::attachments::validate(
+        body.prompt.as_deref().unwrap_or(""),
+        std::slice::from_ref(&s.store.dir),
+        provider,
+    )
+    .map_err(|e| bad_request(e.to_string()))?;
     if provider == Provider::Ollama {
         let model = body
             .model
@@ -329,6 +335,12 @@ async fn input(
                 "accept the plan revision before continuing implementation".into(),
             ));
         }
+        crate::providers::attachments::validate(
+            &t,
+            std::slice::from_ref(&s.store.dir),
+            run.provider,
+        )
+        .map_err(|e| bad_request(e.to_string()))?;
         s.pause(None)?;
         RunInput::Text(t)
     } else {
@@ -658,8 +670,19 @@ async fn upload_attachment(
                 '_'
             }
         })
-        .take(100)
         .collect();
+    let safe = if safe.len() > 100 {
+        let extension = std::path::Path::new(&safe)
+            .extension()
+            .and_then(|s| s.to_str())
+            .filter(|s| s.len() <= 12);
+        match extension {
+            Some(extension) => format!("{}.{}", &safe[..99 - extension.len()], extension),
+            None => safe[..100].to_string(),
+        }
+    } else {
+        safe
+    };
     let name = format!(
         "{}-{}",
         uuid::Uuid::new_v4().simple(),

@@ -47,8 +47,8 @@ export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, su
     }
   };
   return (
-    <div className="composer">
-      {showType && <label>Feedback type <select aria-label="Feedback type" value={commentType} onChange={(e) => setCommentType(e.target.value as CommentType)}>{["note", "blocker", "question", "suggestion", "change-approach"].map((t) => <option key={t} value={t}>{t.replace("-", " ")}</option>)}</select></label>}
+    <div className="composer form-stack">
+      {showType && <label className={`feedback-field feedback-${commentType}`}>Feedback type <select aria-label="Feedback type" value={commentType} onChange={(e) => setCommentType(e.target.value as CommentType)}>{["note", "blocker", "question", "suggestion", "change-approach"].map((t) => <option key={t} value={t}>{t.replace("-", " ")}</option>)}</select></label>}
       <textarea
         ref={ref}
         value={body}
@@ -60,8 +60,8 @@ export function Composer({ placeholder, onSubmit, onCancel, autoFocus = true, su
           if (e.key === "Escape") cancel();
         }}
       />
-      {err && <div className="error">{err}</div>}
-      <div className="composer-actions">
+      {err && <div className="error" role="alert">{err}</div>}
+      <div className="composer-actions button-row">
         <span className="muted">Markdown, ⌘↩ to send</span>
         <span className="spacer" />
         {onCancel && (

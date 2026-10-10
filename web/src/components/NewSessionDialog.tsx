@@ -50,7 +50,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   };
   return (
     <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="New session" onClick={(e) => e.stopPropagation()}>
         <h3>New session</h3>
         <label>
           Repository
@@ -77,12 +77,12 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
           Brief <span className="muted small">(what the agent should research or build)</span>
           <textarea rows={4} value={brief} placeholder="Describe the goal, important constraints, and what done looks like." onChange={(e) => setBrief(e.target.value)} />
         </label>
-        <details className="new-session-options"><summary>Workspace options</summary>
+        <details className="new-session-options disclosure"><summary>Workspace options</summary>
           <label>Base branch <span className="muted small">(default: origin/HEAD or main)</span><input value={base} onChange={(e) => setBase(e.target.value)} /></label>
-          <label className="check"><input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /><span>Create a git worktree now <span className="muted small">(otherwise one is created when implementation starts)</span></span></label>
+          <label className="check check-row"><input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /><span>Create a git worktree now <span className="muted small">(otherwise one is created when implementation starts)</span></span></label>
         </details>
-        {err && <div className="error">{err}</div>}
-        <div className="composer-actions">
+        {err && <div className="error" role="alert">{err}</div>}
+        <div className="composer-actions button-row dialog-actions">
           <span className="spacer" />
           <button className="btn ghost" onClick={onClose} type="button">
             Cancel

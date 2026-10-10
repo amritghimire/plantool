@@ -1,4 +1,3 @@
-import { Handoff } from "./Handoff";
 import { DecisionSummary } from "./DecisionSummary";
 import { ArchivePanel } from "./ArchivePanel";
 import { WherePanel } from "./WherePanel";
@@ -459,6 +458,8 @@ export function SessionPage() {
       </header>
       <Sidebar
         onHandoff={onHandoff}
+        reviewPanel={kind === "plan" && docs.plan && <DecisionSummary doc={docs.plan} onNavigate={(line) => setTarget({ line, nonce: Date.now() })} onCritique={(prompt) => setDialog({ stage: "critique", initialPrompt: prompt })} />}
+        activityPanel={<AwaySummary sessionKey={key} state={view.state} />}
         contextPanel={<><ArchivePanel sessionKey={key} repo={view.session.repo.root} /><WherePanel key={`${key}:${view.session.base}:${view.session.worktree}:${view.session.difftool}:${view.workspace_branch}:${JSON.stringify(view.session.pause_rule)}`} view={view} onUpdated={setView} /></>}
         view={view}
         comments={comments}
@@ -486,23 +487,19 @@ export function SessionPage() {
         busy={busy}
       />
       <main className="content">
-      <AwaySummary sessionKey={key} state={view.state} />
-      <div>
+      <div className={`document-notices mode-${mode}`}>
         {!connected && <p className="banner">Disconnected. This view may be stale. Reconnecting to the local daemon…</p>}
         {view.state.pause_reason && <p className="banner">Checkpoint: {view.state.pause_reason}</p>}
-        {view.handoff && <Handoff step={view.state.milestones?.length && view.handoff.step === "Build" ? `Build ${Math.min(view.state.milestones.filter((m) => m.status === "approved" || m.status === "completed").length + 1, view.state.milestones.length)} of ${view.state.milestones.length}` : view.handoff.step} label={view.handoff.label} action={view.handoff.action} onAction={onHandoff} />}
       </div>
 
         {kind ? (
           <>
-          {kind === "plan" && docs.plan && <DecisionSummary doc={docs.plan} onComment={(line) => { setTarget({ line, nonce: Date.now(), compose: true }); }} onCritique={(prompt) => setDialog({ stage: "critique", initialPrompt: prompt })} />}
           {kind === "plan" && docs.plan && <PlanRevisions sessionKey={key} sha={docs.plan.sha} content={docs.plan.content} onAccept={() => void onStage("approved")} />}
           <DocView
             kind={kind}
             doc={docs[kind] ?? null}
             path={paths[kind] ?? view.docs.find((d) => d.kind === kind)?.path ?? null}
             prompt={prompts[kind] ?? null}
-            onStartRun={kind === "research" || kind === "plan" ? () => setDialog({ stage: kind }) : undefined}
             comments={comments.filter((c) => c.doc === kind && !c.anchor.code)}
             actions={actions}
             onAdd={onAdd}

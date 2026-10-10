@@ -102,21 +102,12 @@ pub async fn run(
         if let Some(variant) = &opts.effort {
             cmd.arg("--variant").arg(variant);
         }
-        for path in prompt
-            .lines()
-            .filter_map(|line| line.strip_prefix("Attached file: "))
-        {
-            let Ok(file) = std::path::Path::new(path).canonicalize() else {
-                continue;
-            };
-            if opts.writable_roots.iter().any(|root| {
-                root.join("attachments")
-                    .canonicalize()
-                    .is_ok_and(|dir| file.starts_with(dir))
-            }) && file.is_file()
-            {
-                cmd.arg("--file").arg(file);
-            }
+        for file in super::attachments::file_args(
+            &prompt,
+            &opts.writable_roots,
+            plantool_core::Provider::Ollama,
+        )? {
+            cmd.arg("--file").arg(file);
         }
         cmd.arg(&prompt)
             .current_dir(&opts.cwd)

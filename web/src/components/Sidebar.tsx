@@ -5,10 +5,13 @@ import { relTime, shortPath, workspacePath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
 import { Thread, type ThreadActions } from "./Thread";
 import { DropSessionDialog } from "./DropSessionDialog";
+import { Handoff } from "./Handoff";
 import { CommitProgress } from "./CommitProgress";
 
 export interface SidebarProps {
   contextPanel?: ReactNode;
+  reviewPanel?: ReactNode;
+  activityPanel?: ReactNode;
   onHandoff?: () => void;
   view: SessionView;
   comments: Comment[];
@@ -113,24 +116,17 @@ export function Sidebar(p: SidebarProps) {
 
   return (
     <aside className="sidebar">
-      {p.view.handoff && <div><p className="muted small">{p.view.handoff.step} · {p.view.handoff.label}</p>{p.onHandoff && <button type="button" className="btn primary small" onClick={p.onHandoff}>{p.view.handoff.action}</button>}</div>}
+      {p.view.handoff && <Handoff step={p.view.state.milestones?.length && p.view.handoff.step === "Build" ? `Build ${Math.min(p.view.state.milestones.filter((m) => m.status === "approved" || m.status === "completed").length + 1, p.view.state.milestones.length)} of ${p.view.state.milestones.length}` : p.view.handoff.step} label={p.view.handoff.label} action={p.view.handoff.action} onAction={p.onHandoff ?? (() => {})} />}
+      {blockers.length > 0 && <div className="banner" role="status">{blockers.length} open blockers. Resolve them before approval.</div>}
+      {p.reviewPanel}
+      {p.activityPanel}
       {p.contextPanel}
-      <div className="mobile-next">
-        <span className={`stage-pill stage-${stage}`}>{STAGE_LABEL[stage]}</span>
-        <span className="spacer" />
-        {stage === "new" && <button className="btn small" disabled={p.busy} onClick={() => p.onStartRun("research")}>Start research</button>}
-        {(stage === "researching" || stage === "research-review") && <button className="btn small" disabled={p.busy} onClick={() => p.onStartRun("plan")}>Plan it</button>}
-        {(stage === "planning" || stage === "plan-review") && <button className="btn small" disabled={p.busy || !plan?.exists || blockers.length > 0} onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}>Approve plan</button>}
-        {stage === "approved" && <button className="btn small" disabled={p.busy} onClick={() => p.onStartRun("implement")}>Start implementation</button>}
-        {stage === "implementing" && <button className="btn small" disabled={p.busy} onClick={p.onOpenChanges}>Review changes</button>}
-        {stage === "implementation-review" && <button className="btn small" disabled={p.busy} onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}>Accept implementation</button>}
-      </div>
       <div className="side-block">
         <div className="side-title">{s.title}</div>
         <div className="muted small">{p.view.key}</div>
         {s.worktree && p.view.workspace_branch === null && <div className="error small">Workspace missing, detached, or no longer in this repository. Open workspace details to choose a valid worktree.</div>}
         {s.pull_request && <div className="small">PR <a href={s.pull_request.url} target="_blank" rel="noreferrer">#{s.pull_request.number}</a> · {s.pull_request.state.toLowerCase()}{s.pull_request.draft ? " draft" : ""} <button className="link" type="button" onClick={p.onRefreshPr}>Refresh</button><span className="muted">checked {relTime(s.pull_request.updated_at)}</span></div>}
-        <details className="session-context"><summary>Workspace details</summary>
+        <details className="session-context disclosure"><summary>Workspace details</summary>
         <div className="workspace-detail" title={workspacePath(s)}>
           <span className="muted small">Workspace <button className="link" type="button" onClick={() => {
             setWorkspaceError(null);
@@ -160,7 +156,12 @@ export function Sidebar(p: SidebarProps) {
         </details>
       </div>
 
-      <details className="side-block actions">
+        {(stage === "planning" || stage === "plan-review") && blockers.length > 0 && <div className="banner">
+          <p>{blockers.length} open blockers. Resolve them or record why you are overriding them.</p>
+          <label>Override reason <input value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label>
+          <button className="btn ghost" type="button" disabled={p.busy || !plan?.exists || !overrideReason.trim()} onClick={() => void p.onStage("approved", overrideReason)}>Approve with recorded override</button>
+        </div>}
+      <details className="side-block actions disclosure">
         <summary>More actions</summary>
         {stage === "new" && !s.brief && <div className="muted small">Add a brief below so the agent knows what success looks like.</div>}
         {liveRun && <div className="run-handoff"><span className={`run-status ${liveRun.status}`} /><span>{liveRun.status === "waiting" ? "The agent needs your answer." : liveRun.status === "idle" ? "The agent finished its turn. Review its work or send a follow-up." : "The agent is working. Follow its progress here."}</span><button className="btn small" type="button" onClick={() => p.onSelectRun(liveRun.id)}>Open run</button></div>}
@@ -168,9 +169,9 @@ export function Sidebar(p: SidebarProps) {
         {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
         {stage === "new" && (
           <>
-            <button className="btn" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
+            {p.view.handoff?.action !== "Start research" && (<button className="btn" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
               Start research
-            </button>
+            </button>)}
             <div className="skip-row muted small">
               skip:
               <button className="link" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
@@ -184,9 +185,9 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "researching" || stage === "research-review") && (
           <>
-            <button className="btn" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+            {p.view.handoff?.action !== "Plan it" && (<button className="btn" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
               Plan it
-            </button>
+            </button>)}
             <div className="skip-row muted small">
               skip:
               <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
@@ -195,21 +196,16 @@ export function Sidebar(p: SidebarProps) {
             </div>
           </>
         )}
-        {(stage === "planning" || stage === "plan-review") && blockers.length > 0 && <div className="banner">
-          <p>{blockers.length} open blockers. Resolve them or record why you are overriding them.</p>
-          <label>Override reason <input value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label>
-          <button className="btn ghost" type="button" disabled={p.busy || !plan?.exists || !overrideReason.trim()} onClick={() => void p.onStage("approved", overrideReason)}>Approve with recorded override</button>
-        </div>}
         {(stage === "planning" || stage === "plan-review") && (
           <>
-            <button
+            {p.view.handoff?.action !== "Approve plan" && (<button
               className="btn"
               disabled={p.busy || !plan?.exists || blockers.length > 0}
               onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}
               type="button"
             >
               Approve plan
-            </button>
+            </button>)}
             <button className="btn ghost" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
               {plan?.exists ? "Revise with agent" : "Start planning"}
             </button>
@@ -217,9 +213,9 @@ export function Sidebar(p: SidebarProps) {
         )}
         {stage === "approved" && (
           <>
-            <button className="btn" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
+            {p.view.handoff?.action !== "Start implementation" && (<button className="btn" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
               Start implementation
-            </button>
+            </button>)}
             {!plan?.exists && <div className="muted small">No plan: the agent writes the tasks to plan.md first, then works through them.</div>}
           </>
         )}
@@ -261,14 +257,14 @@ export function Sidebar(p: SidebarProps) {
                 ) : null}
               </>
             )}
-            {stage === "implementation-review" && <button
+            {stage === "implementation-review" && p.view.handoff?.action !== "Accept implementation" && (<button
               className="btn"
               disabled={p.busy}
               onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}
               type="button"
             >
               Accept implementation
-            </button>}
+            </button>)}
           </>
         )}
         {activeDoc?.exists && (activeDoc.kind === "research" || activeDoc.kind === "plan") && (
