@@ -209,6 +209,19 @@ pub fn authorize(state: &AppState, req: &Request<Body>) -> Result<Option<Authori
         return Err(denied());
     }
     let tail = &parts[2..];
+    if matches!(tail, ["docs", "research" | "plan"]) {
+        let url = webauthn_rs::prelude::Url::parse(&format!("http://localhost{}", req.uri()))
+            .map_err(|_| denied())?;
+        for (key, value) in url.query_pairs() {
+            // Revision selectors become filenames in the existing store. A run
+            // capability must not use that indirection to read another item.
+            if key == "sha" && (value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(denied());
+            }
+        }
+    }
+
     let allowed = match req.method().as_str() {
         "GET" => match tail {
             []

@@ -159,6 +159,55 @@ async fn run_tokens_are_scoped_fail_closed_and_never_become_human() {
             );
         }
     }
+    let own_session = h.state.registry.get_key(&own).unwrap();
+    std::fs::write(
+        own_session.doc_path(plantool_core::DocKind::Plan),
+        "own plan",
+    )
+    .unwrap();
+    own_session
+        .capture_doc(plantool_core::DocKind::Plan)
+        .unwrap();
+    let sha = own_session.doc(plantool_core::DocKind::Plan).unwrap().sha;
+    assert_eq!(
+        call(
+            &h.app,
+            "GET",
+            &format!("/api/sessions/{own}/docs/plan?sha={sha}"),
+            Value::Null,
+            &secret,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let sibling = h.state.registry.get_key(&other_item).unwrap();
+    std::fs::write(
+        sibling.doc_path(plantool_core::DocKind::Plan),
+        "sibling plan",
+    )
+    .unwrap();
+    for selector in [
+        "../../../two/plan",
+        "..%2F..%2F..%2Ftwo%2Fplan",
+        "%2Ftmp%2Foutside",
+        "invalid",
+    ] {
+        assert_eq!(
+            call(
+                &h.app,
+                "GET",
+                &format!("/api/sessions/{own}/docs/plan?sha={selector}"),
+                Value::Null,
+                &secret,
+                None
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
     let path = format!("/api/sessions/{own}/brief");
     assert_eq!(
         call(
