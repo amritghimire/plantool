@@ -46,14 +46,14 @@ pub fn protected(paths: &Paths) -> Vec<PathBuf> {
                     .ok()
                     .and_then(|s| s.split_once('\n'))
                 {
-                    out.extend(helper_stores(home, value));
+                    out.extend(helper_stores(home, &paths.worktree, value));
                 }
             }
         }
     }
     out
 }
-fn helper_stores(home: &Path, value: &str) -> Vec<PathBuf> {
+fn helper_stores(home: &Path, worktree: &Path, value: &str) -> Vec<PathBuf> {
     let Some(words) = shlex::split(value) else {
         return Vec::new();
     };
@@ -78,7 +78,7 @@ fn helper_stores(home: &Path, value: &str) -> Vec<PathBuf> {
                 if p.is_absolute() {
                     p
                 } else {
-                    home.join(p)
+                    worktree.join(p)
                 }
             });
         }
@@ -161,10 +161,14 @@ mod tests {
         };
         assert!(protected(&paths).contains(&external));
         assert_eq!(
-            helper_stores(&owner, "store --file=~/my-credentials"),
+            helper_stores(&owner, &paths.worktree, "store --file=~/my-credentials"),
             vec![owner.join("my-credentials")]
         );
-        assert!(helper_stores(&owner, "!touch /tmp/never-execute").is_empty());
+        assert!(helper_stores(&owner, &paths.worktree, "!touch /tmp/never-execute").is_empty());
+        assert_eq!(
+            helper_stores(&owner, &paths.worktree, "store --file=credentials.txt"),
+            vec![paths.worktree.join("credentials.txt")]
+        );
     }
     #[test]
     fn daemon_file_reads_enforce_defaults_custom_rules_and_aliases() {
