@@ -160,6 +160,19 @@ git config plantool.worktreeDir '~/worktrees/{repo}/{slug}'             # this r
 
 ## Develop
 
+Nix is optional. Install it with the [Determinate Systems installer](https://github.com/DeterminateSystems/nix-installer)
+(`curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install`),
+then run `nix develop` from the repository root. The shell provides stable Rust
+(via rust-overlay, including rustfmt, clippy and rust-src), Node 22, Python 3.12,
+uv, SQLite, gh and cargo-nextest on Linux and macOS. Run `nix flake check` to
+validate the shell; CI runs the same check. Use `nix develop -c <command>` for
+agent build and test commands on PlanTool itself.
+
+Without Nix, keep using rustup's stable toolchain, Node 22/npm and uv as usual;
+none of the commands below require Nix. Python is not required for Personal mode.
+For dev daemon runs, set `PLANTOOL_HOME=$(mktemp -d) PLANTOOL_PORT=41300` to
+keep development data separate from your installed tool.
+
 ```bash
 (cd web && npm ci && npm run build)   # the daemon embeds web/dist
 cargo build && cargo test
