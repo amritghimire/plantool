@@ -379,21 +379,31 @@ mod tests {
         assert!(execution
             .spawn(0, &mut tokio::process::Command::new("true"))
             .is_err());
-        // A dead child may remain a zombie briefly, but cannot execute or hold a pipe.
-        #[cfg(target_os = "linux")]
-        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{grandchild}/stat")) {
-            assert_eq!(stat.split_whitespace().nth(2), Some("Z"));
-        }
-        #[cfg(target_os = "macos")]
-        {
-            tokio::time::timeout(std::time::Duration::from_secs(3), async {
-                while unsafe { libc::kill(grandchild, 0) } == 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Signal delivery and orphan reaping are asynchronous. A zombie is
+        // terminated and cannot execute or keep a pipe open.
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                #[cfg(target_os = "linux")]
+                let dead = std::fs::read_to_string(format!("/proc/{grandchild}/stat"))
+                    .map(|stat| stat.split_whitespace().nth(2) == Some("Z"))
+                    .unwrap_or(true);
+                #[cfg(not(target_os = "linux"))]
+                let dead = {
+                    let status = std::process::Command::new("ps")
+                        .args(["-o", "stat=", "-p", &grandchild.to_string()])
+                        .output()
+                        .unwrap();
+                    let state = String::from_utf8_lossy(&status.stdout);
+                    state.trim().is_empty() || state.trim().starts_with('Z')
+                };
+                if dead {
+                    break;
                 }
-            })
-            .await
-            .unwrap();
-        }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
 }
 
