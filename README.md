@@ -31,7 +31,7 @@ changes in [difftool](https://github.com/skshetry/difftool) or your `git difftoo
 ```bash
 cd your-repo
 plantool new fix-login-timeout --brief "Sessions expire after 5 minutes; see issue #42"
-                                    # opens http://127.0.0.1:41200/s/<repo>/fix-login-timeout
+                                    # opens http://localhost:41200/s/<repo>/fix-login-timeout
                                     # and prints the research prompt to paste into any agent
 plantool research fix-login-timeout # or start a hosted research run (claude by default)
 plantool plan fix-login-timeout     # then a plan run; comment inline, approve in the browser
@@ -160,6 +160,13 @@ git config plantool.worktreeDir '~/worktrees/{repo}/{slug}'             # this r
 
 ## Develop
 
+Browser login and approvals use passkeys. Run `plantool setup` once and enter its
+one-time code at `http://localhost:41200/setup` (use your `PLANTOOL_PORT` when set).
+The code expires after 10 minutes. Additional passkeys require confirmation with
+an existing passkey through **Add passkey**. Login sessions expire after 12 hours
+of inactivity; approvals and security changes require a fresh passkey confirmation.
+Use the daemon's `localhost` URL for passkey testing, including when running Vite.
+
 Nix is optional. Install it with the [Determinate Systems installer](https://github.com/DeterminateSystems/nix-installer)
 (`curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install`),
 then run `nix develop` from the repository root. The shell provides stable Rust
@@ -169,7 +176,10 @@ validate the shell; CI runs the same check. Use `nix develop -c <command>` for
 agent build and test commands on PlanTool itself.
 
 Without Nix, keep using rustup's stable toolchain, Node 22/npm and uv as usual;
-none of the commands below require Nix. Python is not required for Personal mode.
+none of the commands below require Nix. Native Linux/macOS Rust builds need
+OpenSSL development libraries and pkg-config; the Nix shell supplies them. Windows
+and ARM Linux builds use vendored OpenSSL (requiring Perl and a C build toolchain).
+Python is not required for Personal mode.
 For dev daemon runs, set `PLANTOOL_HOME=$(mktemp -d) PLANTOOL_PORT=41300` to
 keep development data separate from your installed tool.
 
@@ -202,14 +212,13 @@ and other edits show a revision banner. Compare with the approved or last-viewed
 Each named plan phase has its own run and diff window. Choose the next phase in the run
 dialog or `plantool implement <session> --milestone "Phase 2: UI"`. All-at-once proceeds
 through phases without pauses. Checkpoints pause after each milestone or when an agent-judged
-plain-language rule applies. Change the rule between milestones in Where or with
-`plantool session set --session <ref> --pause-rule "Pause before an API change" --confirm`.
+plain-language rule applies. Change the rule between milestones in Where with a fresh passkey confirmation.
 The agent signals a checkpoint with `plantool session pause --session <ref> --reason "…"`.
 
 Where changes workspace, branch, base, and diff tool. Agents use `session propose`; owners
-apply proposals in the browser or use `session set --confirm`. A context switch checks dirty
+apply proposals in the browser with a fresh passkey confirmation. A context switch checks dirty
 files, refs, pending milestone approval, and unanswered requests before stopping and resuming
-a live run. `plantool settings difftool built-in --confirm` sets the global default. A session
+a live run. Settings in the browser set the global diff tool default. A session
 can override it. Missing tools leave the built-in diff available, including code-line comments.
 The drift panel compares changed paths with the plan's affected-files table. It is a heuristic,
 not proof that checked tasks are complete. Difftool comment counts are read-only; resolve those
@@ -229,10 +238,11 @@ summary, and pinned approved and last-viewed revisions. Add `--transcripts` or `
 to include more history, and `--note "…"` for a note in the summary.
 `plantool import session.zip --repo /local/repo [--workspace /local/worktree]` rewrites local
 paths and adds a suffix when the session name already exists. Imported plans need owner review;
-`--confirm` explicitly restores recorded approvals. The browser offers the same zip actions.
+Restoring recorded approvals requires a signed-in browser and a fresh passkey
+confirmation; CLI `--confirm` alone cannot restore them. The browser offers the same zip actions.
 
-Approval controls guard against honest mistakes, not a hostile agent with access to local
-files or the browser's local token. Plantool is a personal, local tool.
+Browser approvals require a verified passkey. Other local agent APIs remain available
+without a browser session; process and filesystem isolation are separate groundwork.
 
 If the daemon cannot bind its port, run `plantool daemon status` and check which process owns
 it, or start plantool with `PLANTOOL_PORT` set to a free local port. The browser reconnects

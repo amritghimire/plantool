@@ -1,3 +1,4 @@
+mod common;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -37,13 +38,13 @@ fn harness() -> Harness {
     let home = tmp.path().join("home");
     let config = Arc::new(Config {
         home: home.clone(),
-        port: 0,
-        token: "tok".into(),
+        port: 41300,
         version: "test".into(),
     });
     let registry = Arc::new(Registry::load(home).unwrap());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let state = AppState {
+        auth: Arc::new(plantool_daemon::auth::Auth::new(&config.home, config.port).unwrap()),
         registry,
         config,
         runs: Arc::new(plantool_daemon::runs::RunManager::default()),
@@ -66,19 +67,21 @@ async fn call(
     human: bool,
     host: &str,
 ) -> (StatusCode, Value) {
-    let mut req = Request::builder()
+    let req = Request::builder()
         .method(method)
         .uri(path)
         .header(header::HOST, host);
-    if human {
-        req = req.header("x-plantool-actor", "tok");
-    }
     let req = match body {
         Some(b) => req
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(b.to_string()))
             .unwrap(),
         None => req.body(Body::empty()).unwrap(),
+    };
+    let req = if human {
+        common::with_human(app, req).await
+    } else {
+        req
     };
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
@@ -108,7 +111,6 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
             .method("POST")
             .uri(&path)
             .header(header::HOST, "127.0.0.1")
-            .header("x-plantool-actor", "tok")
             .header("x-plantool-filename", "notes / plan.txt")
             .body(Body::from(bytes))
             .unwrap()
@@ -141,7 +143,6 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
                 .method("POST")
                 .uri(&path)
                 .header(header::HOST, "127.0.0.1")
-                .header("x-plantool-actor", "tok")
                 .header("x-plantool-filename", format!("{}.png", "x".repeat(150)))
                 .body(Body::from(b"image".to_vec()))
                 .unwrap(),
@@ -160,7 +161,6 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
                 .method("POST")
                 .uri(&path)
                 .header(header::HOST, "127.0.0.1")
-                .header("x-plantool-actor", "tok")
                 .body(Body::from(vec![0; 10 * 1024 * 1024 + 1]))
                 .unwrap(),
         )
@@ -1556,7 +1556,7 @@ async fn scoped_comments_gate_approval_and_record_override() {
 }
 
 #[tokio::test]
-async fn context_changes_require_owner_or_explicit_confirmation_and_check_dirty_tree() {
+async fn context_changes_require_passkey_and_check_dirty_tree() {
     let h = harness();
     let (_, created) = call(
         &h.app,
@@ -1589,6 +1589,20 @@ async fn context_changes_require_owner_or_explicit_confirmation_and_check_dirty_
         Some(json!({"base":"HEAD","confirm":true})),
         false,
         "127.0.0.1",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "confirm alone cannot authorize context changes: {changed}"
+    );
+    let (status, changed) = call(
+        &h.app,
+        "POST",
+        &path,
+        Some(json!({"base":"HEAD"})),
+        true,
+        "localhost:41300",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
@@ -1687,11 +1701,15 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
         .method("POST")
         .uri(format!("/api/import?repo={}", other.display()))
         .header(header::HOST, "127.0.0.1")
-        .header("x-plantool-actor", "tok")
         .header(header::CONTENT_TYPE, "application/zip")
         .body(Body::from(bytes))
         .unwrap();
-    let response = h.app.clone().oneshot(request).await.unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(common::with_human(&h.app, request).await)
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let imported: Value = serde_json::from_slice(&body).unwrap();

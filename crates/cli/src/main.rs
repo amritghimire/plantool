@@ -17,6 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create a one-time code for registering the first browser passkey.
+    Setup,
     /// Read or change global settings.
     Settings(commands::settings::Args),
     /// Export a session as a portable zip.
@@ -56,6 +58,7 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Setup => setup(),
         Command::Settings(a) => commands::settings::run(a),
         Command::Export(a) => commands::archive::export(a),
         Command::Import(a) => commands::archive::import(a),
@@ -78,4 +81,16 @@ fn main() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }
+}
+
+fn setup() -> anyhow::Result<()> {
+    let c = client::Client::bare(plantool_daemon::config::default_port());
+    c.ensure_daemon()?;
+    let _: serde_json::Value = c.get("/api/auth/status").map_err(|_| anyhow::anyhow!("The running daemon does not support passkeys. Run `plantool daemon restart` with this binary first."))?;
+    let code = plantool_daemon::auth::setup_code(&client::home())?;
+    println!("One-time setup code (expires in 10 minutes): {code}");
+    let url = format!("{}/setup", c.base);
+    println!("Open {url} and enter the code to register your passkey.");
+    client::open_browser(&url);
+    Ok(())
 }

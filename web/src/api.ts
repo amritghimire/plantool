@@ -1,11 +1,7 @@
+import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
 export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "assist" | "draft-pr" | "next";
-
-export function token(): string {
-  const t = window.__PLANTOOL_TOKEN__ ?? "";
-  return t === "__PLANTOOL_TOKEN__" ? "" : t;
-}
 
 export class ApiError extends Error {
   status: number;
@@ -16,9 +12,9 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { "x-plantool-actor": token(), "x-plantool-author": authorName() };
+  const headers: Record<string, string> = { "x-plantool-author": authorName() };
   if (body !== undefined) headers["content-type"] = "application/json";
-  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await authenticatedFetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }, body);
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
@@ -111,7 +107,7 @@ export const api = {
   uploadAttachment: async (key: string, file: File): Promise<{ name: string; path: string }> => {
     const res = await fetch(`/api/sessions/${key}/attachments`, {
       method: "POST",
-      headers: { "x-plantool-actor": token(), "x-plantool-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
+      headers: { "x-plantool-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
       body: file,
     });
     const data = await res.json();

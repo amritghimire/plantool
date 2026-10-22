@@ -72,7 +72,7 @@ async fn create(
     Ok((
         status,
         Json(
-            json!({ "created": created, "session": view, "url": format!("http://127.0.0.1:{}{}", state.config.port, view.url_path) }),
+            json!({ "created": created, "session": view, "url": format!("http://localhost:{}{}", state.config.port, view.url_path) }),
         ),
     ))
 }

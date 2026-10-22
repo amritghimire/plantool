@@ -868,7 +868,7 @@ fn watch(
     use tokio_tungstenite::tungstenite::Message;
     let (key, _) = c.resolve_key(reference)?;
     let url = format!(
-        "ws://127.0.0.1:{}/api/sessions/{key}/live{}",
+        "ws://localhost:{}/api/sessions/{key}/live{}",
         c.port,
         since.map(|s| format!("?since={s}")).unwrap_or_default()
     );

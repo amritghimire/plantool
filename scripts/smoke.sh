@@ -40,11 +40,12 @@ WT="$("$BIN" session worktree --session smoke-test)"
 [ -f "$WT/a.txt" ] || { echo "FAIL: worktree missing at $WT"; exit 1; }
 expect "$WT" "$BIN" session get --session smoke-test
 expect smoke-test "$BIN" status
-expect '"session"' "$BIN" session set --session smoke-test --difftool built-in --confirm
+# A CLI confirmation can no longer grant browser identity.
+if "$BIN" session set --session smoke-test --difftool built-in --confirm 2>/dev/null; then echo "FAIL: agent changed owner settings"; exit 1; fi
 "$BIN" export smoke-test -o "$TMP/session.zip"
 [ -s "$TMP/session.zip" ] || { echo "FAIL: export missing"; exit 1; }
 expect smoke-test-import-1 "$BIN" import "$TMP/session.zip" --repo "$TMP/repo"
 expect '"proposed": true' "$BIN" session propose --session smoke-test --base HEAD --reason "Smoke proposal"
 expect '"paused": true' "$BIN" session pause --session smoke-test --reason "Smoke checkpoint"
-expect built-in "$BIN" settings difftool built-in --confirm
+if "$BIN" settings difftool built-in --confirm 2>/dev/null; then echo "FAIL: agent changed global settings"; exit 1; fi
 echo "smoke ok on port $PORT"

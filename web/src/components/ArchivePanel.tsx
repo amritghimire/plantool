@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { token } from "../api";
+import { authenticatedFetch } from "../auth";
 export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: string }) {
   const [transcripts, setTranscripts] = useState(false);
   const [revisions, setRevisions] = useState(false);
@@ -10,7 +10,7 @@ export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: s
   const download = async () => {
     setBusy(true); setError(null);
     try {
-      const response = await fetch(`/api/sessions/${sessionKey}/export?transcripts=${transcripts}&revisions=${revisions}`, { headers: { "x-plantool-actor": token() } });
+      const response = await authenticatedFetch(`/api/sessions/${sessionKey}/export?transcripts=${transcripts}&revisions=${revisions}`);
       if (!response.ok) throw new Error(await response.text());
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a"); link.href = url; link.download = `${sessionKey.split("/").pop()}.zip`; link.click();
@@ -21,7 +21,7 @@ export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: s
     setBusy(true); setError(null);
     try {
       const query = new URLSearchParams({ repo: repository }); if (workspace) query.set("workspace", workspace);
-      const response = await fetch(`/api/import?${query}`, { method: "POST", headers: { "x-plantool-actor": token(), "content-type": "application/zip" }, body: file });
+      const response = await authenticatedFetch(`/api/import?${query}`, { method: "POST", headers: { "content-type": "application/zip" }, body: file });
       if (!response.ok) throw new Error(await response.text());
       const result = await response.json() as { session: { url_path: string } }; window.location.assign(result.session.url_path);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }

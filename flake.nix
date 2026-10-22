@@ -29,6 +29,9 @@
             uv
             sqlite
             gh
+            pkg-config
+            openssl
+            perl
             cargo-nextest
           ];
         };
