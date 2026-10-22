@@ -88,7 +88,10 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
     for expression in policy.absolute_expressions(&root) {
         text.push_str(&format!(
             "(deny file-read* file-write* (regex #{}))\n",
-            quote(&expression)
+            // Seatbelt's #"..." regex reader preserves backslashes. Applying
+            // Scheme string escaping here would turn \. into \\. and match a
+            // literal backslash instead of a dot in newly-created filenames.
+            format!("\"{}\"", expression.replace('"', "\\\""))
         ));
     }
     if role != Role::Agent {
