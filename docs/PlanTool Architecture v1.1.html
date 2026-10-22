@@ -1,0 +1,871 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>PlanTool Architecture v1.1</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap">
+<style>
+/* Layout: single reading column (~72ch) with wide figure blocks; sticky section index on wide screens */
+:root {
+  --bg: #f6f7f5;
+  --surface: #ffffff;
+  --fg: #1d2420;
+  --muted: #5b6660;
+  --line: #d9dfdb;
+  --accent: #1f6f5c;
+  --accent-soft: #e2efe9;
+  --human: #9a5b12;
+  --human-soft: #f6ead9;
+  --auth: #24548a;
+  --auth-soft: #e1eaf5;
+  --sbx: #9b3a4a;
+  --sbx-soft: #f6e3e6;
+  --ext: #5b5b5b;
+  --ext-soft: #ececea;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121614; --surface: #1a201d; --fg: #e3e8e5; --muted: #9aa69f; --line: #2e3833;
+    --accent: #6cc4a8; --accent-soft: #1c3029;
+    --human: #e2a65c; --human-soft: #33281a;
+    --auth: #8ab4e6; --auth-soft: #1b2635;
+    --sbx: #e8919f; --sbx-soft: #35212a;
+    --ext: #b4b4b0; --ext-soft: #262826;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121614; --surface: #1a201d; --fg: #e3e8e5; --muted: #9aa69f; --line: #2e3833;
+  --accent: #6cc4a8; --accent-soft: #1c3029;
+  --human: #e2a65c; --human-soft: #33281a;
+  --auth: #8ab4e6; --auth-soft: #1b2635;
+  --sbx: #e8919f; --sbx-soft: #35212a;
+  --ext: #b4b4b0; --ext-soft: #262826;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 80px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13.5px; }
+nav.toc p { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; counter-reset: s; }
+nav.toc a { color: var(--muted); text-decoration: none; display: block; padding: 2px 0 2px 10px; border-left: 2px solid var(--line); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--fg); border-left-color: var(--accent); outline: none; }
+main { min-width: 0; }
+header.top { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 8px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: clamp(30px, 4.4vw, 44px); line-height: 1.12; margin: 0 0 14px; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-weight: 500; font-size: 26px; line-height: 1.2; margin: 0 0 12px; text-wrap: balance; }
+h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+p, li { max-width: 72ch; }
+.lede { font-size: 18px; color: var(--muted); margin: 0; max-width: 64ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 18px; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+section { padding-top: 44px; scroll-margin-top: 16px; }
+code, .mono { font-family: var(--font-mono); font-size: .88em; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 22px; }
+.principles div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.principles b { display: block; font-size: 14.5px; margin-bottom: 4px; }
+.principles span { color: var(--muted); font-size: 14px; line-height: 1.5; display: block; }
+figure { margin: 18px 0 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+figure pre.mermaid { margin: 0; min-width: 640px; background: transparent; display: flex; justify-content: center; }
+figure.narrow pre.mermaid { min-width: 520px; }
+figcaption { font-size: 13.5px; color: var(--muted); margin-top: 10px; max-width: 80ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; margin: 14px 0 0; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chip { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid; }
+.chip.human { background: var(--human-soft); border-color: var(--human); }
+.chip.auth { background: var(--auth-soft); border-color: var(--auth); }
+.chip.sbx { background: var(--sbx-soft); border-color: var(--sbx); }
+.chip.ext { background: var(--ext-soft); border-color: var(--ext); }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; font-size: 12.5px; letter-spacing: .03em; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 500; }
+.zone { font-family: var(--font-mono); font-size: 11.5px; padding: 1px 7px; border-radius: 99px; border: 1px solid; white-space: nowrap; }
+.zone.human { color: var(--human); background: var(--human-soft); border-color: var(--human); }
+.zone.auth { color: var(--auth); background: var(--auth-soft); border-color: var(--auth); }
+.zone.sbx { color: var(--sbx); background: var(--sbx-soft); border-color: var(--sbx); }
+.zone.ext { color: var(--ext); background: var(--ext-soft); border-color: var(--ext); }
+.yes { color: var(--accent); font-weight: 600; }
+.no { color: var(--muted); }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; max-width: 78ch; }
+.callout p { margin: 0; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.card h3 { margin-top: 0; }
+.card ul { margin: 0; padding-left: 18px; font-size: 14.5px; }
+.card li { margin: 3px 0; }
+.chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 13px; margin: 10px 0; }
+.chain span { background: var(--surface); border: 1px solid var(--line); padding: 4px 9px; border-radius: 6px; }
+.chain i { font-style: normal; color: var(--muted); }
+.phases { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 10px; counter-reset: ph -1; }
+.phases li { counter-increment: ph; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; max-width: none; }
+.phases li::before { content: counter(ph); font-family: var(--font-display); font-size: 26px; line-height: 1; color: var(--accent); }
+.phases b { display: block; }
+.phases .exit { display: block; color: var(--muted); font-size: 14px; margin-top: 3px; }
+.states { font-family: var(--font-mono); font-size: 13px; line-height: 1.9; }
+.states .exc { color: var(--sbx); }
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  nav.toc { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="Sections">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#system">System map</a></li>
+    <li><a href="#modes">Two modes</a></li>
+    <li><a href="#loop">Autonomous loop</a></li>
+    <li><a href="#workitem">Work-item graph</a></li>
+    <li><a href="#team">Agent team</a></li>
+    <li><a href="#models">Models</a></li>
+    <li><a href="#boundary">Rust ↔ LangGraph</a></li>
+    <li><a href="#approvals">Approvals</a></li>
+    <li><a href="#github">GitHub contract</a></li>
+    <li><a href="#trust">Trust &amp; identity</a></li>
+    <li><a href="#data">Data</a></li>
+    <li><a href="#oversight">Oversight presets</a></li>
+    <li><a href="#repo">Repository &amp; Nix</a></li>
+    <li><a href="#deploy">Deployment</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#deferred">Deferred &amp; dropped</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="top">
+  <p class="eyebrow">Target architecture · supersedes v1.0, handoff, and v0.2 blueprint</p>
+  <h1>PlanTool Engineering OS, v1.1</h1>
+  <p class="lede">One product with two ways to work. You drive Personal mode yourself, in Rust, with no Python. Engineering OS runs a continuous agent team on LangGraph that turns GitHub issues into reviewed PRs, asking you twice per item.</p>
+  <div class="meta"><span>22 Oct 2026</span><span>repo: amritghimire/plantool @ v0.0.16</span><span>status: agreed, not implemented</span></div>
+  <div class="principles">
+    <div><b>LangGraph decides what's next</b><span>For Engineering OS it is the only source of workflow position: steps, retries, routing, Supervisor calls.</span></div>
+    <div><b>Rust decides what's allowed</b><span>Approvals, dependencies, capabilities, attempts and audit live in Rust. Every dispatch is re-authorized.</span></div>
+    <div><b>The browser is the human</b><span>Passkey with Touch ID on every approval. The CLI is always an agent.</span></div>
+    <div><b>Two touches per item</b><span>Approve the plan on GitHub, then approve the PR. CI and branch protection enforce the rest.</span></div>
+    <div><b>One model at a time</b><span>A single global lease, cloud included. Each role walks its own fallback chain: Codex, OpenRouter, Ollama Cloud, local.</span></div>
+  </div>
+</header>
+
+<section id="system">
+  <h2>System map</h2>
+  <p>Four trust zones. Only the human zone can approve. Only the daemon holds credentials. Everything that runs model output is sandboxed and holds no secrets.</p>
+  <figure>
+<pre class="mermaid">
+flowchart LR
+  subgraph HUMAN["You · human zone"]
+    BR["Browser UI<br/>passkey + Touch ID"]
+    GHU["Your GitHub account"]
+  end
+  subgraph GH["GitHub · external"]
+    ISS["Issues<br/>sprint tracking issue"]
+    PRS["PRs · reviews · CI<br/>branch protection"]
+    APP["PlanTool GitHub App"]
+  end
+  subgraph CORE["PlanTool daemon · Rust · authority"]
+    API["HTTP + WS API<br/>human session · agent CLI"]
+    PERS["Personal engine<br/>stage machine · milestones"]
+    POL["Policy + approval engine"]
+    DISP["Dispatcher + capability broker<br/>re-authorizes every action"]
+    RUN["Run supervisor<br/>provider adapters · sandbox"]
+    LEASE["Model lease + chain router<br/>one model at a time · budgets"]
+    GHS["GitHub sync<br/>poll + reconcile"]
+    WS["Agent workspace<br/>channels · task threads · mentions"]
+    AUD["Audit log + event outbox"]
+  end
+  subgraph STORE["Local storage · daemon-owned"]
+    DB[("plantool.db")]
+    FILES[("Artifact store<br/>immutable revisions · transcripts")]
+    KC[("macOS Keychain<br/>App private key")]
+  end
+  subgraph SBX["Sandboxed zone · no secrets"]
+    LG["LangGraph worker · Python via uv<br/>project graph + work-item graphs"]
+    CK[("langgraph-checkpoints.db")]
+    AG["Agent runs<br/>Claude Code · Codex · Copilot · OpenCode"]
+    WT["Git worktrees"]
+  end
+  OLL["Ollama · local models"]
+  CLOUD["Cloud models<br/>Codex · OpenRouter · Ollama Cloud · Zen<br/>per-project allowed providers"]
+  PX["Phoenix · optional"]
+
+  BR <--> API
+  GHU --> ISS
+  GHU --> PRS
+  API --> PERS
+  API --> POL
+  PERS --> RUN
+  LG <-->|"start · resume · dispatch requests"| DISP
+  LG --- CK
+  DISP --> POL
+  DISP --> LEASE
+  LEASE --> RUN
+  RUN --> AG
+  AG --> WT
+  AG -->|"CLI = agent identity"| API
+  AG --> OLL
+  AG -.-> CLOUD
+  LG -->|"model calls via lease"| LEASE
+  LG <--> WS
+  GHS <--> APP
+  APP <--> ISS
+  APP <--> PRS
+  GHS --> POL
+  POL --> AUD
+  AUD --> DB
+  WS --> DB
+  RUN --> FILES
+  APP -.- KC
+  LG -.-> PX
+  RUN -.-> PX
+</pre>
+    <figcaption>Dotted lines are optional or opt-in. The worker never talks to GitHub, the database, or the Keychain directly. It only asks the dispatcher.</figcaption>
+  </figure>
+  <div class="legend">
+    <span><i class="chip human"></i>Human zone: can approve</span>
+    <span><i class="chip auth"></i>Daemon: authorizes, holds credentials</span>
+    <span><i class="chip sbx"></i>Sandboxed: runs model output, no secrets</span>
+    <span><i class="chip ext"></i>External services</span>
+  </div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Component</th><th>Zone</th><th>Owns</th><th>Never does</th></tr></thead>
+    <tbody>
+      <tr><td>Browser UI</td><td><span class="zone human">human</span></td><td>Approvals in PlanTool, settings, Personal sessions, read-only mirror of GitHub decisions</td><td>Holds a token readable from page HTML</td></tr>
+      <tr><td>Personal engine</td><td><span class="zone auth">daemon</span></td><td>Today's stage machine, milestones, pause rules (kept from <code>handoff.rs</code>, ported to SQLite)</td><td>Needs Python or the worker</td></tr>
+      <tr><td>Policy + approval engine</td><td><span class="zone auth">daemon</span></td><td>Gates, approval validity, allowlist, plan hashes, PR head SHAs, policy versions</td><td>Accepts chat text or agent output as approval</td></tr>
+      <tr><td>Dispatcher + capability broker</td><td><span class="zone auth">daemon</span></td><td>Attempt records, generation numbers, idempotency keys, capability checks at dispatch</td><td>Trusts that LangGraph already checked</td></tr>
+      <tr><td>Run supervisor</td><td><span class="zone auth">daemon</span></td><td>Launching agent CLIs in sandbox profiles, transcripts, timeouts, Stop All</td><td>Passes credentials into an agent environment</td></tr>
+      <tr><td>Model lease + chain router</td><td><span class="zone auth">daemon</span></td><td>The single model lease, per-role fallback chains, budget windows, provider allowlist per project, unloading Ollama models</td><td>Lets two models run at once, or switches models mid-run</td></tr>
+      <tr><td>GitHub sync</td><td><span class="zone auth">daemon</span></td><td>Polling issues, comments, label events, reviews, checks; posting via the App</td><td>Acts on a webhook payload without re-fetching</td></tr>
+      <tr><td>Agent workspace</td><td><span class="zone auth">daemon</span></td><td>Channels, per-item threads, delivery, wake-ups</td><td>Counts a message as a decision</td></tr>
+      <tr><td>LangGraph worker</td><td><span class="zone sbx">sandboxed</span></td><td>Project graph, work-item graphs, checkpoints, Supervisor and role prompts</td><td>Holds approval credentials or GitHub tokens</td></tr>
+      <tr><td>Agent runs</td><td><span class="zone sbx">sandboxed</span></td><td>Editing a worktree, running tests, writing documents through the CLI</td><td>Reads <code>~/.plantool</code> secrets, <code>gh</code> config, SSH keys, browser profiles, Keychain</td></tr>
+      <tr><td>GitHub App</td><td><span class="zone ext">external</span></td><td>Authoring issues comments and PRs, merging after your approval</td><td>Approves anything; has admin bypass</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="modes">
+  <h2>Two modes, shared foundations</h2>
+  <p>A session's mode is fixed when it is created and never changes, so the Rust engine and LangGraph can never both continue the same run. Switching modes means a new session.</p>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>Personal</th><th>Engineering OS</th></tr></thead>
+    <tbody>
+      <tr><td>Who drives</td><td>You, step by step</td><td>Agents, between your gates</td></tr>
+      <tr><td>Workflow engine</td><td>Rust stage machine</td><td>LangGraph</td></tr>
+      <tr><td>Python required</td><td class="no">No</td><td class="yes">Yes, installed by uv</td></tr>
+      <tr><td>Oversight</td><td>Always human-driven</td><td>Minimal (default) / Standard / Strict</td></tr>
+      <tr><td>Approval surface</td><td>PlanTool</td><td>GitHub, mirrored in PlanTool</td></tr>
+      <tr><td>Terminal agents</td><td class="yes">Yes, as the external executor</td><td class="yes">Yes, as the external executor</td></tr>
+      <tr><td>Agent sandbox</td><td>Opt-in per run</td><td>Always on</td></tr>
+      <tr><td>If the worker is broken</td><td>Unaffected</td><td>Shown as unavailable; nothing crashes</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Shared by both:</b> SQLite storage, immutable approved revisions, passkey identity, provider adapters, worktrees, sandbox profiles, audit log, difftool and inline comments.</p>
+</section>
+
+<section id="loop">
+  <h2>The autonomous loop</h2>
+  <p>A long-running <b>project graph</b> in LangGraph feeds a <b>work-item graph</b> per issue. You appear twice per item.</p>
+  <figure>
+<pre class="mermaid">
+flowchart TD
+  subgraph IN["Intake"]
+    I1["Issues by allowlisted authors"]
+    I2["Issues others filed<br/>after you add plantool:accept"]
+    I3["Weekly scan<br/>CI failures · advisories · test gaps · TODOs"]
+    I4["Out-of-scope findings<br/>from any review step"]
+  end
+  I3 --> R{"Agent routes each finding"}
+  I4 --> R
+  R -->|"needs your accept"| PROP["plantool:proposed issue"]
+  R -->|"direct"| CAND
+  R -->|"routine"| BL
+  PROP -->|"you accept"| TR
+  I1 --> TR
+  I2 --> TR
+  TR{"Triage<br/>fits the project?"}
+  TR -->|"no"| DEC["Label plantool:declined + reason<br/>auto-close after 30 days"]
+  TR -->|"duplicate"| DUP["Comment linking the original issue<br/>same 30-day close"]
+  TR -->|"yes"| BL["Backlog"]
+  BL --> CAND["Sprint candidates"]
+  CAND --> SP["Monday sprint planning<br/>PM sizes · discussed in sprint channel and item threads"]
+  SP --> PUB["Plan vN + hash posted on each issue<br/>sprint tracking issue lists them"]
+  PUB --> G1{{"YOU approve on GitHub<br/>per item or whole sprint"}}
+  G1 -->|"unapproved items"| BL
+  G1 -->|"approved"| WI["Work-item graph<br/>build · test · AI review loops"]
+  WI --> G2{{"YOU approve the PR<br/>with the review guide"}}
+  G2 --> MG["You or the App merge<br/>repo default method · CI + branch protection"]
+  URG["plantool:urgent from you<br/>or /plantool urgent after an agent's urgent-requested"] --> FAST["Immediate triage, discussion, plan"]
+  FAST --> G1
+</pre>
+    <figcaption>Hexagons are human gates. Every route an agent picks still passes both gates. Agent route choices are logged with a reason and shown on the sprint tracking issue.</figcaption>
+  </figure>
+  <div class="cols">
+    <div class="card"><h3>Weekly rhythm</h3><ul>
+      <li>Before Monday: scan runs, findings routed</li>
+      <li>Monday: PM drafts the sprint, agents discuss in the workspace, plans posted</li>
+      <li>You approve or trim on the tracking issue</li>
+      <li>Rest of week: build, review, PRs arrive as they finish</li>
+    </ul></div>
+    <div class="card"><h3>Sprint sizing</h3><ul>
+      <li>PM sizes freely, no hard cap</li>
+      <li>Tracking issue shows estimate next to recent actual throughput</li>
+      <li>You trim by approving only some items</li>
+    </ul></div>
+    <div class="card"><h3>Discussion</h3><ul>
+      <li>Happens in PlanTool's workspace, visible to you</li>
+      <li>GitHub gets the plan, its hash, and a short discussion summary with a link</li>
+      <li>No agent chatter on GitHub</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="workitem">
+  <h2>Work-item graph</h2>
+  <p>Fixed transitions are plain code, and roles run in a fixed order, one at a time. The Supervisor is called only when the next step is unclear or stuck.</p>
+  <figure>
+<pre class="mermaid">
+flowchart TD
+  P0["CTO research"] --> P1["PM plan + tasks tagged by area"]
+  P1 --> P2["CTO reviews the plan"]
+  P2 --> GP{{"YOU approve plan hash H"}}
+  GP --> BE["Backend<br/>API contract first, then code + tests"]
+  BE --> FE["Frontend<br/>against Backend's contract"]
+  FE --> DO{"CI or infra changed?"}
+  DO -->|"yes"| DV["DevOps"]
+  DO -->|"no"| QA
+  DV --> QA["QA<br/>runs tests, checks each acceptance criterion"]
+  QA -->|"in-scope defect, budget left"| BE
+  QA -->|"pass"| RV["Reviewer<br/>correctness · design · plan match · security pass"]
+  RV -->|"in-scope defect, budget left"| BE
+  RV -->|"out-of-scope finding"| F["File proposal now<br/>never fixed in this PR"]
+  RV -->|"clean"| DC["Docs<br/>review guide + README/CHANGELOG"]
+  DC --> E["App opens PR<br/>+ plantool/policy check"]
+  E --> G{{"YOU approve latest commit"}}
+  G -->|"changes requested"| BE
+  G -->|"approved"| M["Merge eligible"]
+  QA -->|"budget exhausted"| S["Supervisor"]
+  RV -->|"budget exhausted or severe finding"| S
+  S -->|"retry strategy"| BE
+  S -->|"replan needed"| RP["New plan revision<br/>back to plan approval"]
+  S -->|"stuck or unsafe"| X["Escalate to you<br/>freeze side effects"]
+</pre>
+    <figcaption>Backend or Frontend is skipped when the plan has no tasks for that area. Defects route back to whichever role owns the failing task. Retries are bounded per task, and a scope change always produces a new plan revision.</figcaption>
+  </figure>
+  <h3>Review guide attached to every PR</h3>
+  <ul>
+    <li>What changed and why, linked to the approved plan revision and hash</li>
+    <li>Where to look first, and the riskiest parts</li>
+    <li>How to test it yourself</li>
+    <li>What the AI reviewers found and how each was fixed, round by round</li>
+    <li>Found during review, filed as separate issues</li>
+    <li>Test and CI evidence for the head commit</li>
+  </ul>
+  <h3>Work-item states</h3>
+  <p class="states">backlog → ready → leased → running → verifying → review_ready → awaiting_pr_approval → merged → done<br/>
+  <span class="exc">blocked · retry_wait · changes_requested · cancelled · failed · stale · recovery_needed</span></p>
+</section>
+
+<section id="team">
+  <h2>Agent team</h2>
+  <p>Eight roles plus the Supervisor. Security is a required pass inside the Reviewer, not a separate role, so it doesn't add another sequential turn to every PR.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Role</th><th>Responsible for</th><th>Runs as</th><th>Skills</th></tr></thead>
+    <tbody>
+      <tr><td>Supervisor</td><td>Unclear or stuck steps, escalations; moderates discussions and picks the next speaker</td><td>LangGraph call</td><td><code>supervise</code> <code>escalate</code> <code>moderate</code></td></tr>
+      <tr><td>CTO</td><td>Research, architecture, ADRs, reviewing the PM's plan, design escalations</td><td>LangGraph call, read-only repo tools</td><td><code>research</code> <code>architecture</code> <code>plan-review</code></td></tr>
+      <tr><td>PM</td><td>Triage, duplicates, sprint planning and sizing, plan and task breakdown, acceptance criteria; leads discussions</td><td>LangGraph call</td><td><code>triage</code> <code>sprint-plan</code> <code>plan</code> <code>discuss</code></td></tr>
+      <tr><td>Backend</td><td>Backend tasks; defines API contracts first</td><td>Coding CLI in worktree</td><td><code>implement</code> <code>test-first</code> <code>api-contract</code> <code>report-progress</code></td></tr>
+      <tr><td>Frontend</td><td>Frontend tasks against Backend's contract</td><td>Coding CLI in worktree</td><td><code>implement</code> <code>test-first</code> <code>ui-check</code> <code>report-progress</code></td></tr>
+      <tr><td>DevOps</td><td>CI, build, dependency updates, release prep; CI failures and advisories in the weekly scan</td><td>Coding CLI in worktree</td><td><code>ci</code> <code>deps</code> <code>scan</code></td></tr>
+      <tr><td>QA</td><td>Writing and running tests; checking every acceptance criterion by running it</td><td>Coding CLI, tests only</td><td><code>qa</code> <code>acceptance-check</code></td></tr>
+      <tr><td>Reviewer</td><td>Correctness, design, match to the plan, and a security pass that goes deeper on auth, dependencies, CI, secrets and sandbox changes</td><td>Coding CLI, read-only</td><td><code>code-review</code> <code>security-review</code></td></tr>
+      <tr><td>Docs</td><td>The PR's review guide; README and CHANGELOG updates within the PR's scope</td><td>LangGraph call or coding CLI</td><td><code>review-guide</code> <code>docs-update</code></td></tr>
+    </tbody>
+  </table></div>
+  <div class="cols">
+    <div class="card"><h3>Discussion</h3><ul>
+      <li>Turn-based, since only one agent runs at a time</li>
+      <li>Mentions decide who speaks next: <code>@Backend can the API return X?</code></li>
+      <li>At most 3 rounds per topic, then the PM or Supervisor decides</li>
+      <li>No DMs: every exchange stays in a thread you can read</li>
+    </ul></div>
+    <div class="card"><h3>Instruction layers</h3><ul>
+      <li><b>Base rules</b> <code>agents/base.md</code>: authority, untrusted input, output contract, CLI use</li>
+      <li><b>Role file</b> <code>agents/roles/&lt;role&gt;.md</code>: duties, limits, definition of done</li>
+      <li><b>Skills</b> <code>agents/skills/&lt;name&gt;/SKILL.md</code>: the standard skill format Codex, Claude Code and OpenCode read</li>
+      <li><b>Project conventions</b>: the target repo's <code>AGENTS.md</code> / <code>CLAUDE.md</code>, read from the default branch</li>
+      <li><b>Task context</b>: issue, approved plan, thread summary</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="models">
+  <h2>Models</h2>
+  <h3>One model at a time</h3>
+  <p>A single global model lease covers cloud and local models alike, so exactly one agent works at any moment and cloud quotas last longer. A LangGraph call holds the lease for one call; a coding run holds it for the whole run, up to a time limit. Ollama models are unloaded (<code>keep_alive: 0</code>) before the next one loads. Urgent work goes first, then sprint order, and work is grouped by model to reduce reloads.</p>
+
+  <h3>Fallback chain per role</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Role</th><th>1st</th><th>2nd</th><th>3rd</th><th>4th</th><th>Last resort · local</th></tr></thead>
+    <tbody>
+      <tr><td>Backend, Frontend</td><td>Codex · GPT‑6.1 Sol</td><td>OpenRouter · MiniMax M3</td><td>OpenRouter · GLM 5.2</td><td>Ollama Cloud free</td><td>Devstral Small 2</td></tr>
+      <tr><td>Reviewer</td><td>Codex · GPT‑6.1 Sol</td><td>OpenRouter · GLM 5.2</td><td>OpenRouter · MiniMax M3</td><td>Ollama Cloud free</td><td>Qwen 3.8 27B</td></tr>
+      <tr><td>CTO</td><td>OpenRouter · GLM 5.2</td><td>Ollama Cloud free</td><td>–</td><td>–</td><td>Qwen 3.8 27B</td></tr>
+      <tr><td>DevOps, QA</td><td>OpenRouter · Laguna XS 2.1</td><td>Ollama Cloud free</td><td>–</td><td>–</td><td>Devstral Small 2</td></tr>
+      <tr><td>PM, Supervisor</td><td>OpenRouter · Gemma 4 31B</td><td>Ollama Cloud free</td><td>–</td><td>–</td><td>Qwen 3.6‑35B‑A3B</td></tr>
+      <tr><td>Docs</td><td>OpenRouter · Nemotron 3 Super</td><td>OpenCode Zen free</td><td>–</td><td>–</td><td>Qwen 3.6‑35B‑A3B</td></tr>
+    </tbody>
+  </table></div>
+  <p>On ChatGPT Plus, Codex is kept for Backend, Frontend and the Reviewer so the 5-hour window lasts. Backend prefers MiniMax and the Reviewer prefers GLM, so the writer and reviewer stay in different families when Codex is used up.</p>
+
+  <div class="cols">
+    <div class="card"><h3>Chain rules</h3><ul>
+      <li>Move down on: your budget used up, a provider quota or rate-limit error, or a provider outage after one retry</li>
+      <li>Move back up when a budget window resets</li>
+      <li>Never switch mid-run: checkpoint the attempt, commit work in progress, start the next attempt on the next model with a handoff summary</li>
+      <li>QA and Reviewer skip entries from the family that wrote the code; if none is left, the review guide flags it</li>
+      <li>Every attempt records its model, and the review guide lists them</li>
+    </ul></div>
+    <div class="card"><h3>Allowed providers per project</h3><ul>
+      <li>Repo visibility is detected from GitHub at setup and re-checked on every sync, and recorded in the audit log</li>
+      <li>Public and private repos both default to all providers, so every cloud tier is tried before local</li>
+      <li>You can restrict any project; changes need Touch ID and are logged</li>
+      <li>Chain entries for providers that aren't allowed are skipped</li>
+    </ul></div>
+    <div class="card"><h3>Privacy safeguards</h3><ul>
+      <li>OpenRouter set to exclude providers that train on prompts</li>
+      <li>Files models never see: <code>.env*</code>, <code>*.pem</code>, <code>*.key</code>, <code>secrets/</code> plus a per-project list; the sandbox blocks reading them</li>
+      <li>ChatGPT "Improve the model for everyone" reviewed for Codex sessions</li>
+    </ul></div>
+  </div>
+
+  <h3>Providers</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Provider</th><th>Plan</th><th>Budget</th><th>Through</th></tr></thead>
+    <tbody>
+      <tr><td>Codex</td><td>ChatGPT Plus</td><td>Roughly 15–160 GPT‑6.1 Sol messages per 5-hour window; detected from Codex's usage-limit message</td><td>Codex CLI only</td></tr>
+      <tr><td>OpenRouter</td><td>Free models, after a one-time $10 credit</td><td>1,000 requests a day, shared; code roles get first claim</td><td>OpenCode, or direct API from LangGraph</td></tr>
+      <tr><td>Ollama Cloud</td><td>Free</td><td>Small monthly allowance on starter models; the best available starter model is detected at startup</td><td>OpenCode, or direct API from LangGraph</td></tr>
+      <tr><td>OpenCode Zen</td><td>Free</td><td>Promotional models that may disappear</td><td>OpenCode</td></tr>
+      <tr><td>Local Ollama</td><td>–</td><td>Unlimited; one model loaded at a time on 32GB</td><td>OpenCode, or direct API from LangGraph</td></tr>
+    </tbody>
+  </table></div>
+  <p>Model choices come from October 2026 listings, and most scores are vendor-reported. The <code>evals/</code> task bank decides the final chains in Phase 3.</p>
+  <p>Each role's route has five separate settings: role → execution adapter → inference provider → model endpoint, plus its capability policy. Moving inference to a Mac Studio later changes only the endpoint.</p>
+</section>
+
+<section id="boundary">
+  <h2>Rust ↔ LangGraph boundary</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>LangGraph owns</th><th>Rust owns</th></tr></thead>
+    <tbody>
+      <tr><td>Current step of each workflow</td><td>Approval validity, plan hashes, PR head SHAs</td></tr>
+      <tr><td>Routing, retries, budgets in flight</td><td>Task dependencies and work-item records</td></tr>
+      <tr><td>Supervisor and role decisions</td><td>Capabilities, attempts, generation numbers</td></tr>
+      <tr><td>Checkpoints, pauses, resumes</td><td>Audit log, external bindings, GitHub effects</td></tr>
+    </tbody>
+  </table></div>
+  <p>The Rust work-item state is a read-only projection of graph events, plus the facts above. Long agent runs never block a worker. The node asks for a dispatch, pauses, and is resumed when the run ends.</p>
+  <figure class="narrow">
+<pre class="mermaid">
+sequenceDiagram
+  participant N as LangGraph node
+  participant D as Dispatcher
+  participant DB as plantool.db
+  participant R as Run supervisor
+  participant A as Sandboxed agent
+  N->>D: request_dispatch(item, role, generation)
+  D->>DB: check approval, policy, capability, generation
+  D->>DB: persist attempt + intent + idempotency key
+  D->>R: start run in worktree
+  D-->>N: attempt_id
+  N->>N: interrupt, waits durably
+  R->>A: launch with sandbox profile
+  A-->>R: events, result, evidence
+  R->>DB: record outcome
+  D->>N: resume(attempt_id, result) via outbox
+  Note over D,N: After a restart, each attempt is reconciled as completed, failed, or recovery_needed. A live process is not assumed to survive.
+</pre>
+  </figure>
+  <h3>Worker contract</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Direction</th><th>Calls</th></tr></thead>
+    <tbody>
+      <tr><td>Daemon → worker</td><td><code>start</code> · <code>resume(gate | attempt, ref)</code> · <code>cancel</code> · <code>status</code> · <code>health</code></td></tr>
+      <tr><td>Worker → daemon</td><td><code>request_dispatch</code> · <code>request_gate</code> · <code>read_artifact</code> · <code>read_task</code> · <code>post_message</code> · <code>report_result</code> · <code>file_proposal</code></td></tr>
+      <tr><td>Compatibility</td><td>Daemon rejects a worker with a different contract version. Worker refuses to resume a checkpoint from an older graph version without a migration.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="approvals">
+  <h2>Approvals</h2>
+  <figure class="narrow">
+<pre class="mermaid">
+sequenceDiagram
+  participant LG as Work-item graph
+  participant P as Policy engine
+  participant GH as GitHub
+  participant You
+  LG->>P: request_gate(plan, hash H)
+  P->>GH: App posts plan vN comment with hash H
+  You->>GH: /plantool approve-plan H
+  P->>GH: poll comments and events
+  P->>P: user ID allowlisted? H current? comment unedited? not consumed?
+  P->>P: record decision + audit
+  P->>LG: resume(gate, decision_ref)
+</pre>
+  </figure>
+  <div class="cols">
+    <div class="card"><h3>Plan</h3><ul>
+      <li>Approved revisions are immutable files with a SHA-256 hash</li>
+      <li>Task progress lives in SQLite, so ticking work off never invalidates approval</li>
+      <li>Agents report progress with a CLI command against stable task IDs, not by editing checkboxes</li>
+      <li>Adding, removing or rewording tasks creates a new revision and needs approval</li>
+    </ul></div>
+    <div class="card"><h3>PR</h3><ul>
+      <li>The App authors the PR so you can review it natively</li>
+      <li>Your approval must be on the current head commit</li>
+      <li>A new commit after approval cancels it</li>
+      <li>PlanTool surface uses a required <code>plantool/policy</code> check instead of a faked review</li>
+    </ul></div>
+    <div class="card"><h3>Always separate</h3><ul>
+      <li>Production deploys and high-risk actions</li>
+      <li>Safety stops: retries exhausted, severe findings, privilege escalation, stale approval</li>
+      <li>Agents can never approve, even their own work</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="github">
+  <h2>GitHub contract</h2>
+  <p>Polling and reconciliation come first; webhooks are an optional speed-up later. Every decision is re-fetched from the API and checked against GitHub user IDs, never usernames.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Signal</th><th>Who can use it</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>plantool:accept</code></td><td>Allowlisted user (checked via label event author)</td><td>Issue from a non-allowlisted author enters triage</td></tr>
+      <tr><td><code>plantool:proposed</code></td><td>App</td><td>Agent-filed finding waiting for your accept</td></tr>
+      <tr><td><code>plantool:declined</code></td><td>App</td><td>Doesn't fit; reason in a comment; closed after 30 days. Clock resets on allowlisted activity or your override</td></tr>
+      <tr><td><code>plantool:urgent</code> or <code>/plantool urgent</code></td><td>Allowlisted user</td><td>Skips the weekly sprint: immediate triage, discussion, plan</td></tr>
+      <tr><td><code>plantool:urgent-requested</code></td><td>App</td><td>An agent asks you to promote it; you get notified</td></tr>
+      <tr><td><code>/plantool approve-plan &lt;hash&gt;</code></td><td>Allowlisted user, on the issue</td><td>Approves that plan revision</td></tr>
+      <tr><td><code>/plantool approve-sprint</code></td><td>Allowlisted user, on the tracking issue</td><td>Approves every listed plan at its listed hash</td></tr>
+      <tr><td><code>/plantool approve TASK-n</code></td><td>Allowlisted user, on the tracking issue</td><td>Approves one item from the sprint</td></tr>
+      <tr><td><code>/plantool request-changes &lt;reason&gt;</code></td><td>Allowlisted user</td><td>Sends the plan back for revision</td></tr>
+      <tr><td><code>/plantool continue</code></td><td>Allowlisted user, on a draft PR</td><td>Approves a Standard or Strict milestone at its commit</td></tr>
+      <tr><td>Native PR review: Approve</td><td>You</td><td>Satisfies the PR gate for that head commit</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>Plan revisions are new App comments, never edits. The issue body is only an index.</li>
+    <li>Comments from people outside the allowlist are left out of agent context or marked untrusted, even on accepted issues.</li>
+    <li>The App's merge goes through GitHub's API, so branch protection and required checks decide. Setup warns if <code>main</code> lacks protection, required checks, or stale-review dismissal.</li>
+    <li>The release workflow opens a PR for the Homebrew formula instead of pushing to <code>main</code>.</li>
+  </ul>
+</section>
+
+<section id="trust">
+  <h2>Trust and identity</h2>
+  <p>No system-level changes. No separate macOS user, no VM.</p>
+  <div class="cols">
+    <div class="card"><h3><span class="zone human">human</span> You</h3><ul>
+      <li>Browser signs in with a passkey on localhost</li>
+      <li>Every approval in PlanTool asks for a fresh Touch ID</li>
+      <li>Session cookie is HttpOnly and SameSite strict; no token in the HTML</li>
+      <li>On GitHub you act as your own account</li>
+      <li>One allowlist, managed in PlanTool settings by GitHub username and stored by numeric user ID; anyone on it can approve. Initial member: <code>amritghimire</code></li>
+    </ul></div>
+    <div class="card"><h3><span class="zone auth">daemon</span> Authority</h3><ul>
+      <li>Holds the App private key in the Keychain</li>
+      <li>Issues short-lived, scope-bound tokens for authorized effects</li>
+      <li>Stop All revokes every in-flight capability</li>
+    </ul></div>
+    <div class="card"><h3><span class="zone sbx">sandboxed</span> Agents and worker</h3><ul>
+      <li>CLI calls always carry agent identity; there are no human CLI commands</li>
+      <li>macOS sandbox profile on every Engineering OS run, all four providers</li>
+      <li>Denied: PlanTool's DB and secrets, <code>gh</code> and git credentials, SSH keys, browser profiles, Keychain</li>
+      <li>Allowed: worktree, session documents, model API network, each CLI's own model sign-in files, read access to <code>/nix/store</code></li>
+      <li>The worker has its own identity, which cannot approve</li>
+    </ul></div>
+  </div>
+  <div class="callout"><p>Remaining risk: an agent you run in Personal mode without the sandbox can still do anything you can. Linux and Windows need their own sandbox backends later.</p></div>
+</section>
+
+<section id="data">
+  <h2>Data</h2>
+  <p>Clean break. Old <code>~/.plantool</code> is moved to a backup on first start; no migration.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Store</th><th>Owner</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td><code>plantool.db</code></td><td>Daemon only</td><td>Projects, sessions as work items, dependencies, policies, approvals, attempts, audit, messages, outbox/inbox, external bindings, task progress, run metrics</td></tr>
+      <tr><td>Artifact store</td><td>Daemon only</td><td>Immutable revisions by content hash, live drafts, transcripts, evidence</td></tr>
+      <tr><td><code>langgraph-checkpoints.db</code></td><td>Worker only</td><td>Graph checkpoints and paused workflows</td></tr>
+      <tr><td><code>phoenix.db</code></td><td>Phoenix only</td><td>Optional traces and evaluations</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Consistency rules</h3>
+  <ul>
+    <li>No transactions across databases: outbox, idempotent inbox, reconciliation on startup.</li>
+    <li>File writes and their database rows are reconciled, since they can't share a transaction: write the file by hash first, then the row; sweep orphans.</li>
+    <li>Every external effect gets an idempotency key and a recorded intent before it runs.</li>
+    <li>Unique constraints: webhook delivery IDs, <code>(provider, external_id)</code> bindings, plan revision numbers per item, <code>(gate, source_event)</code> decisions, one active lease per item.</li>
+    <li>Generation numbers reject reports from cancelled or superseded attempts.</li>
+  </ul>
+  <h3>Retention</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Data</th><th>Kept</th></tr></thead>
+    <tbody>
+      <tr><td>Approvals, audit log, approved plan revisions, workspace threads, run summaries</td><td>Forever</td></tr>
+      <tr><td>Transcripts and traces</td><td>30 days after the item closes</td></tr>
+      <tr><td>Local evidence (agent test runs, QA checks, internal review rounds, attempt details)</td><td>90 days after merge; forever for <code>failed</code> or <code>recovery_needed</code> items</td></tr>
+      <tr><td>Evidence already on GitHub (review guide, comments, check results)</td><td>Stored as links only</td></tr>
+      <tr><td>Worktrees and local branches</td><td>Deleted when the PR merges or the item is declined</td></tr>
+      <tr><td>Pinned runs</td><td>Forever</td></tr>
+    </tbody>
+  </table></div>
+  <p>A disk cap on <code>~/.plantool</code> deletes the oldest transcripts first and never touches permanent records.</p>
+</section>
+
+<section id="oversight">
+  <h2>Oversight presets</h2>
+  <p>One setting per Engineering OS project. Presets only add gates; the first five rows can't be switched off.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Gate</th><th>Minimal</th><th>Standard</th><th>Strict</th></tr></thead>
+    <tbody>
+      <tr><td>Plan approval</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>PR approval on head commit</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Production / high-risk action</td><td class="yes">separate</td><td class="yes">separate</td><td class="yes">separate</td></tr>
+      <tr><td>Scope change → re-approval</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Safety stops</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Research approval</td><td class="no">–</td><td class="no">–</td><td class="yes">✓</td></tr>
+      <tr><td>Milestone review</td><td class="no">–</td><td>Selected</td><td>Every milestone</td></tr>
+    </tbody>
+  </table></div>
+  <p>Minimal is the default and matches the loop above. Custom gate editing is deferred until real use of Standard or Strict shows a gap.</p>
+  <h3>Milestone reviews in Standard</h3>
+  <ul>
+    <li>A project rule (for example migrations, auth, public APIs, CI) suggests <code>[review]</code> tags; the PM drafts them into the plan; you adjust them when you approve the plan</li>
+    <li>At the first milestone stop the App opens a <b>draft PR</b>; each milestone is a comment pointing to its commit, with a compare link from the previous milestone</li>
+    <li>You reply <code>/plantool continue</code> or <code>/plantool request-changes &lt;reason&gt;</code>; approval is tied to that commit</li>
+    <li>CI runs on every milestone commit; after the last milestone the same PR leaves draft for the final PR gate</li>
+  </ul>
+</section>
+
+<section id="repo">
+  <h2>Repository and Nix</h2>
+  <p>Everything is developed in one repository, <code>plantool</code>. A second, disposable repo, <code>plantool-playground</code>, is where the GitHub App runs end-to-end tests.</p>
+  <figure class="narrow" style="overflow-x:auto">
+<pre style="margin:0;font-family:var(--font-mono);font-size:13px;line-height:1.55">plantool/
+├── crates/
+│   ├── core/        models, state machines, passkey identity
+│   ├── daemon/      API, policy, dispatcher, lease, runners, GitHub sync,
+│   │                workspace, sandbox profiles, migrations
+│   ├── cli/         agent-only CLI
+│   └── contract/    daemon↔worker types → JSON Schema → Python models
+├── worker/          LangGraph worker (uv project, uv.lock), embedded in the binary
+├── agents/          base rules, role files, skills (embedded)
+├── web/             React UI for both modes
+├── evals/           task bank for comparing models and chains
+├── flake.nix        dev shell + Nix package
+├── Formula/, scripts/, .github/workflows/</pre>
+  </figure>
+  <div class="cols">
+    <div class="card"><h3>Releases</h3><ul>
+      <li>One tag ships the binary with the worker inside</li>
+      <li>On first use the worker unpacks to <code>~/.plantool/worker/&lt;version&gt;/</code> and runs <code>uv sync --frozen</code></li>
+      <li>CI fails if the generated contract files are out of date</li>
+      <li>Phases are tracked as GitHub milestones and issues, so the loop can take over its own backlog after Phase 5</li>
+    </ul></div>
+    <div class="card"><h3>Nix</h3><ul>
+      <li><b>Dev shell:</b> Rust, Node, Python, uv, SQLite, <code>gh</code> for people and agents working on PlanTool</li>
+      <li><b>Package:</b> <code>nix run</code> builds everything, with the worker built from the same <code>uv.lock</code> via uv2nix</li>
+      <li><b>Agent environments:</b> opt-in per project; if the target repo has a <code>flake.nix</code>, agents build and test inside it</li>
+      <li>Nix is never required for users and is not a security sandbox; the macOS sandbox profile is</li>
+      <li><code>nix flake check</code> runs in CI</li>
+    </ul></div>
+    <div class="card"><h3>Working on it</h3><ul>
+      <li>Keep the installed v0.0.16 as your everyday tool</li>
+      <li>Develop in a checkout with a separate <code>PLANTOOL_HOME</code> and port</li>
+      <li>Install Nix with the Determinate Systems installer; plain rustup, npm and uv still work without it</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="deploy">
+  <h2>Deployment on the M1 Max</h2>
+  <figure class="narrow">
+<pre class="mermaid">
+flowchart TB
+  subgraph MAC["MacBook Pro M1 Max · 32GB"]
+    D["plantool daemon · Rust<br/>starts alone; UI, settings, artifacts, worker repair"]
+    W["LangGraph worker · Python<br/>managed by uv, pinned deps · Engineering OS only"]
+    L["Model lease<br/>one model at a time, cloud included"]
+    O["Ollama · one model loaded"]
+    T["Agent CLIs in sandbox profiles<br/>Codex · OpenCode"]
+    P["Phoenix · optional"]
+  end
+  TS["Tailscale · optional remote access"]
+  GHX["GitHub · App polling"]
+  CL["Codex · OpenRouter · Ollama Cloud · Zen"]
+  D --> W
+  D --> L
+  W --> L
+  L --> T
+  L --> O
+  T --> O
+  T -.-> CL
+  D <--> GHX
+  TS -.-> D
+  W -.-> P
+</pre>
+    <figcaption>If worker setup fails, the UI still works and Engineering OS shows as unavailable with a repair action. Inference can move to a Mac Studio later by changing model endpoints only.</figcaption>
+  </figure>
+  <p>Releases are <code>v0.1.0-alpha.N</code> until Personal mode is back to today's level, then <code>v0.1.0</code>. Homebrew and the curl installer fetch a pinned uv on first worker setup.</p>
+</section>
+
+<section id="roadmap">
+  <h2>Roadmap</h2>
+  <ol class="phases">
+    <li><div><b>Security and identity</b>Passkey login and Touch ID approvals, token removed from HTML, agent-only CLI, sandbox profiles for all providers, Stop All, release workflow via PR, Nix dev shell.<span class="exit">Exit: an agent can't read the human session or approve; sandboxed run can't read credentials.</span></div></li>
+    <li><div><b>SQLite and approvals</b>Fresh schema, immutable revisions, progress in SQLite, task IDs, Personal engine ported, backup of old data.<span class="exit">Exit: Personal mode matches today's flow end to end.</span></div></li>
+    <li><div><b>Worker bridge and model lease</b>Embedded uv-managed worker, contract crate and schema checks, dispatch with attempts and generations, outbox, reconciliation, global model lease, chain router with budgets and allowed providers, Nix package.<span class="exit">Exit: restart mid-run reconciles without duplicate effects; two models never run at once; LangGraph decision reviewed against this phase's measurements.</span></div></li>
+    <li><div><b>GitHub App, one issue to PR</b>App setup and branch-protection preflight, plan comments, approval commands, all eight roles in fixed order, App-authored PR with review guide, merge, first eval runs to tune chains.<span class="exit">Exit: one allowlisted issue goes to a merged PR with two approvals on GitHub.</span></div></li>
+    <li><div><b>Workspace and weekly sprints</b>Channels, item threads and mentions, turn-based discussion, sprint planning, tracking issue, batch approval.<span class="exit">Exit: a full sprint runs from planning to PRs.</span></div></li>
+    <li><div><b>Triage, scan, urgent path</b>Fit decisions, decline and 30-day close, duplicates, weekly scan, routed findings, urgent promotion, Nix agent environments.<span class="exit">Exit: the loop runs a week unattended except for your gates.</span></div></li>
+    <li><div><b>Depth</b>Phoenix and the full eval suite, Standard and Strict presets, richer workspace UI.<span class="exit">Exit: completion rates compared across models and chains.</span></div></li>
+  </ol>
+  <h3>Tests that must stay green</h3>
+  <ul>
+    <li>Personal flow without Python, worker down, Phoenix down</li>
+    <li>Forged, bot, edited, stale and replayed approvals rejected; bot-applied labels ignored</li>
+    <li>Approval bound to current plan hash and PR head; new commit cancels it</li>
+    <li>Duplicate dispatch after replay creates no second PR or push</li>
+    <li>Sandboxed agent cannot read secrets; Stop All revokes capabilities</li>
+    <li>Plain "approved" in chat or an issue never opens a gate</li>
+    <li>Two models never hold the lease at once; quota errors move the chain down, window resets move it back up</li>
+    <li>Disallowed providers are never called for a project</li>
+  </ul>
+</section>
+
+<section id="deferred">
+  <h2>Deferred and dropped</h2>
+  <div class="cols">
+    <div class="card"><h3>Deferred</h3><ul>
+      <li>Rich workspace UI: search, reactions, presence, unread markers</li>
+      <li>Nix system install (nix-darwin, home-manager)</li>
+      <li>Webhooks (polling first)</li>
+      <li>Custom gate editor</li>
+      <li>Linux and Windows sandboxes</li>
+      <li>Shared database across machines, multi-tenant use</li>
+      <li>Autonomous production release</li>
+    </ul></div>
+    <div class="card"><h3>Dropped</h3><ul>
+      <li>Agent DMs: every exchange stays in a visible thread</li>
+      <li>Separate Security role: folded into the Reviewer</li>
+      <li>Separate macOS user or VM for agents</li>
+      <li>Ollama Cloud Pro</li>
+    </ul></div>
+  </div>
+</section>
+
+<footer>PlanTool governs and authorizes. LangGraph orchestrates Engineering OS. Agents work inside a sandbox. You approve plans and PRs.</footer>
+</main>
+</div>
+
+<!--claude-mermaid-runtime-begin:3477-->
+<style>.mermaid-diagram{margin-block:4px}.mermaid-diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}</style>
+<script src="/_runtime/mermaid-11.16.1.min.js"></script>
+<script>(function(){
+var CFG={"palettes":{"light":{"surface":"#f4efe4","text":"#42392e","line":"#8a7f6d","border":"#7a6c52","bg":"#fffdf8"},"dark":{"surface":"#262b34","text":"#f2f3f5","line":"#a8adb8","border":"#9aa4b8","bg":"#1f232b"}}};
+if(typeof mermaid==='undefined')return;
+var pres=Array.prototype.slice.call(document.querySelectorAll('pre.mermaid')).filter(function(p){if(p.hasAttribute('data-claude-mermaid-claimed'))return false;p.setAttribute('data-claude-mermaid-claimed','1');return true;});
+if(!pres.length)return;
+var mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+var root=document.documentElement;
+var items=pres.map(function(pre){
+var mount=document.createElement('div');mount.className='mermaid-diagram';
+return {pre:pre,mount:mount,src:pre.textContent||''};
+});
+var seq=0;
+var renderGen=0;
+var lastKey='';
+function pageBg(fallback){
+var els=[document.body,document.documentElement];
+for(var i=0;i<els.length;i++){
+var c=els[i]&&getComputedStyle(els[i]).backgroundColor;
+if(c&&c!=='transparent'&&c!=='rgba(0, 0, 0, 0)')return c;
+}
+return fallback;
+}
+function render(){
+var theme=root.getAttribute('data-theme');
+var dark=theme==='dark'||(!!(mq&&mq.matches)&&theme!=='light');
+var pal=dark?CFG.palettes.dark:CFG.palettes.light;
+var bg=pageBg(pal.bg);
+var key=(dark?'d':'l')+'|'+bg;
+if(key===lastKey)return;
+lastKey=key;
+var gen=++renderGen;
+var font=getComputedStyle(document.body).fontFamily||'sans-serif';
+var nat={useMaxWidth:false};
+mermaid.initialize({
+startOnLoad:false,securityLevel:'strict',theme:'base',
+flowchart:nat,sequence:nat,er:nat,state:nat,class:nat,pie:nat,
+gantt:nat,journey:nat,timeline:nat,gitGraph:nat,mindmap:nat,xyChart:nat,
+quadrantChart:nat,sankey:nat,c4:nat,requirement:nat,block:nat,
+packet:nat,kanban:nat,architecture:nat,radar:nat,
+themeVariables:{background:bg,mainBkg:pal.surface,primaryColor:pal.surface,
+primaryTextColor:pal.text,lineColor:pal.line,primaryBorderColor:pal.border,
+nodeBorder:pal.border,clusterBorder:pal.border,edgeLabelBackground:bg,
+clusterBkg:'rgba(127,127,127,0.07)',titleColor:pal.text,
+darkMode:dark,rowOdd:bg,rowEven:'rgba(127,127,127,0.07)',
+attributeBackgroundColorOdd:bg,attributeBackgroundColorEven:'rgba(127,127,127,0.07)',
+fontSize:'16px',fontFamily:font},
+themeCSS:'.node rect, .node circle, .node polygon, .node path, .cluster rect { stroke-width: 2px; }'
+});
+items.forEach(function(it){
+var id='claude-mermaid-'+seq++;
+mermaid.render(id,it.src).then(function(r){
+if(gen!==renderGen)return;
+var prev=it.pre.previousElementSibling;
+if(prev&&prev.className==='mermaid-diagram'&&prev!==it.mount)return;
+it.mount.innerHTML=r.svg;
+if(!it.mount.parentNode)it.pre.parentNode.insertBefore(it.mount,it.pre);
+it.pre.style.display='none';
+},function(){
+var scratch=document.getElementById(id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+scratch=document.getElementById('d'+id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+if(gen!==renderGen)return;
+if(it.mount.parentNode)it.mount.parentNode.removeChild(it.mount);
+it.pre.style.display='';
+});
+});
+}
+render();
+if(mq&&mq.addEventListener)mq.addEventListener('change',render);
+if(typeof MutationObserver!=='undefined')new MutationObserver(render).observe(root,{attributes:true,attributeFilter:['data-theme']});
+})();</script>
+<!--claude-mermaid-runtime-end-->
+
+</body></html>
