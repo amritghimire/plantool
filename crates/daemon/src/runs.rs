@@ -11,12 +11,16 @@ use tokio::sync::mpsc;
 struct Handle {
     activity: std::time::Instant,
     input: mpsc::Sender<RunInput>,
+    policy: crate::sandbox::NeverSent,
+    roots: Vec<std::path::PathBuf>,
+    generation: u64,
 }
 
 #[derive(Default)]
 pub struct RunManager {
     handles: Mutex<HashMap<String, Handle>>,
     pub tokens: Arc<crate::identities::RunTokens>,
+    pub execution: Arc<crate::execution::Execution>,
 }
 
 fn short_id() -> String {
@@ -40,6 +44,25 @@ pub fn next_milestone_context(run: &Run) -> Run {
 }
 
 impl RunManager {
+    pub fn load(home: &std::path::Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            execution: Arc::new(crate::execution::Execution::load(home)?),
+            ..Default::default()
+        })
+    }
+    pub async fn stop_inputs(&self) {
+        let inputs: Vec<_> = self
+            .handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|h| h.input.clone())
+            .collect();
+        for input in inputs {
+            let _ = input.try_send(RunInput::Stop);
+        }
+    }
+
     pub fn is_live(&self, id: &str) -> bool {
         self.handles
             .lock()
@@ -94,6 +117,51 @@ impl RunManager {
         previous_run: Option<&Run>,
         pause_rule: Option<plantool_core::PauseRule>,
     ) -> anyhow::Result<Run> {
+        self.start_with_security(
+            session,
+            provider,
+            stage,
+            stage_name,
+            prompt,
+            model,
+            effort,
+            resume,
+            permission_mode,
+            implementation_mode,
+            previous_run,
+            pause_rule,
+            None,
+            previous_run.map(|r| r.execution_generation),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_security(
+        self: &Arc<Self>,
+        session: Arc<LiveSession>,
+        provider: Provider,
+        stage: Stage,
+        stage_name: &str,
+        prompt: String,
+        model: Option<String>,
+        effort: Option<String>,
+        resume: Option<String>,
+        permission_mode: PermissionMode,
+        implementation_mode: ImplementationMode,
+        previous_run: Option<&Run>,
+        pause_rule: Option<plantool_core::PauseRule>,
+        sandbox: Option<bool>,
+        expected_generation: Option<u64>,
+    ) -> anyhow::Result<Run> {
+        let version = self.execution.status();
+        anyhow::ensure!(
+            expected_generation.is_none_or(|g| g == version.generation),
+            "Stop All invalidated this continuation; start a new run explicitly"
+        );
+        anyhow::ensure!(
+            !version.stopped,
+            "Stop All is active. Resume execution in the browser."
+        );
+
         if session.state().plan_revision_pending
             && (stage_name == "implement" || previous_run.is_some_and(implementation_run))
         {
@@ -164,7 +232,10 @@ impl RunManager {
         } else {
             None
         };
+        let sandboxed = sandbox.unwrap_or_else(|| previous_run.is_some_and(|r| r.sandboxed));
         let run = Run {
+            sandboxed,
+            execution_generation: version.generation,
             milestone_key,
             plan_sha: plan.as_ref().map(|p| p.sha.clone()),
             idle_stopped: false,
@@ -193,6 +264,48 @@ impl RunManager {
             error: None,
             seq: 0,
         };
+        let daemon_home = session
+            .store
+            .dir
+            .ancestors()
+            .nth(3)
+            .ok_or_else(|| anyhow::anyhow!("invalid session directory"))?
+            .canonicalize()?;
+        let repo = crate::git::main_root(&sess.repo.root);
+        let policy = crate::sandbox::NeverSent::new(&self.execution.rules(&repo))?;
+        crate::providers::attachments::check_policy(
+            &prompt,
+            &[session.store.dir.clone()],
+            &policy,
+        )?;
+        let isolation = if sandboxed {
+            Some(crate::sandbox::Sandbox::required(
+                crate::sandbox::Paths {
+                    owner_home: std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .map(std::path::PathBuf::from)
+                        .ok_or_else(|| anyhow::anyhow!("owner home is unavailable"))?,
+                    daemon_home: daemon_home.clone(),
+                    worktree: sess.cwd().clone(),
+                    docs: session.store.dir.clone(),
+                },
+                if stage_name == "critique" {
+                    crate::sandbox::Role::Reviewer
+                } else {
+                    crate::sandbox::Role::Agent
+                },
+                policy.clone(),
+            )?)
+        } else {
+            None
+        };
+        let launch = crate::sandbox::launch::Launch::new(
+            self.execution.clone(),
+            version.generation,
+            isolation,
+            policy.clone(),
+        )?;
+        let admission = self.execution.admit_version(&version)?;
         let credential = self.tokens.issue(crate::identities::RunScope {
             session: session.key.clone(),
             attempt: run.id.clone(),
@@ -220,10 +333,14 @@ impl RunManager {
                 run.id.clone(),
                 Handle {
                     input: in_tx,
+                    generation: version.generation,
+                    policy: policy.clone(),
+                    roots: vec![session.store.dir.clone()],
                     activity: std::time::Instant::now(),
                 },
             );
         let opts = RunOptions {
+            launch: Some(launch),
             environment: Some(credential.environment(home, port)),
             cwd: run.cwd.clone(),
             prompt,
@@ -430,6 +547,7 @@ impl RunManager {
             }
             tracing::info!("{stage_label} run {run_id} ended");
         });
+        drop(admission);
         Ok(run)
     }
 
@@ -505,6 +623,33 @@ impl RunManager {
     }
 
     pub async fn send(&self, id: &str, input: RunInput) -> anyhow::Result<()> {
+        let generation = self.execution.status().generation;
+        if !matches!(input, RunInput::Stop) {
+            let _ = self.execution.admit()?;
+        }
+        if !matches!(input, RunInput::Stop) {
+            if let Some(handle) = self
+                .handles
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(id)
+            {
+                anyhow::ensure!(
+                    handle.generation == generation,
+                    "Stop All invalidated this run"
+                );
+            }
+        }
+        if let RunInput::Text(text) = &input {
+            if let Some(handle) = self
+                .handles
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(id)
+            {
+                crate::providers::attachments::check_policy(text, &handle.roots, &handle.policy)?;
+            }
+        }
         let tx = self
             .handles
             .lock()

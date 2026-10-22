@@ -17,6 +17,8 @@ use std::collections::BTreeMap;
 #[derive(Deserialize)]
 pub struct StartBody {
     #[serde(default)]
+    pub sandbox: Option<bool>,
+    #[serde(default)]
     pub pause_rule: Option<plantool_core::PauseRule>,
     #[serde(default)]
     pub milestone: Option<String>,
@@ -53,6 +55,11 @@ async fn start(
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<StartBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let _ = state
+        .runs
+        .execution
+        .admit()
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let provider = Provider::parse(&body.provider)
         .ok_or_else(|| bad_request(format!("unknown provider {}", body.provider)))?;
@@ -251,7 +258,7 @@ async fn start(
     {
         return Err(bad_request("Ollama stage runs need Auto or Allow all permissions so OpenCode can use plantool commands"));
     }
-    let run = state.runs.start_with_pause(
+    let run = state.runs.start_with_security(
         s.clone(),
         provider,
         target,
@@ -264,6 +271,9 @@ async fn start(
         implementation_mode,
         previous_milestone.as_ref(),
         rule.clone(),
+        body.sandbox
+            .or_else(|| resume_from.as_ref().map(|r| r.sandboxed)),
+        None,
     )?;
     if let Some(rule) = rule {
         s.apply_context(&super::where_context::Update {
@@ -698,6 +708,12 @@ async fn upload_attachment(
     } else {
         safe
     };
+    let root = crate::git::main_root(&s.session().repo.root);
+    let policy = crate::sandbox::NeverSent::new(&state.runs.execution.rules(&root))
+        .map_err(|e| bad_request(e.to_string()))?;
+    if policy.matches(std::path::Path::new(&safe)) {
+        return Err(bad_request("This upload is excluded by never-sent rules"));
+    }
     let name = format!(
         "{}-{}",
         uuid::Uuid::new_v4().simple(),

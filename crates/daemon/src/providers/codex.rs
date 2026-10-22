@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command};
+use tokio::process::ChildStdin;
 use tokio::sync::{mpsc, oneshot};
 
 const COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
@@ -142,8 +142,8 @@ pub async fn run(
     sink: EventSink,
 ) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "codex".into());
-    let mut cmd = Command::new(&exe);
-    opts.apply_environment(&mut cmd);
+    let mut cmd = opts.command(&exe)?;
+    opts.apply_environment(&mut cmd, plantool_core::Provider::Codex);
     cmd.arg("app-server").arg("--stdio");
     if let Some(effort) = &opts.effort {
         cmd.arg("-c")
@@ -154,8 +154,8 @@ pub async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
+    let mut child = opts
+        .spawn(&mut cmd)
         .with_context(|| format!("failed to start {}", exe.display()))?;
     let stdin = child.stdin.take().context("no stdin")?;
     let stdout = child.stdout.take().context("no stdout")?;

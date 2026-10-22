@@ -84,11 +84,31 @@ impl Client {
 
     pub fn shutdown(&self) -> anyhow::Result<()> {
         ensure_owner_process()?;
-        if self
-            .post::<serde_json::Value>("/shutdown", &serde_json::json!({}))
-            .is_ok()
-        {
-            return Ok(());
+        let secret = std::fs::read_to_string(home().join("security/lifecycle-token"));
+        let mut header = secret
+            .as_ref()
+            .ok()
+            .and_then(|s| reqwest::header::HeaderValue::from_str(s).ok());
+        if let Some(value) = &mut header {
+            value.set_sensitive(true);
+        }
+        if let Some(value) = &header {
+            if self
+                .with_headers(self.http.post(self.url("/shutdown")))
+                .header("x-plantool-lifecycle", value.clone())
+                .send()?
+                .error_for_status()
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        let protocol = self
+            .health()
+            .and_then(|v| v["protocol"].as_u64())
+            .unwrap_or(0);
+        if protocol >= 4 {
+            bail!("The daemon lifecycle credential is missing or inaccessible");
         }
         reqwest::blocking::Client::builder()
             .no_proxy()
@@ -292,6 +312,7 @@ pub fn absolute(p: &Path) -> PathBuf {
 /// Lifecycle/bootstrap commands cannot be used from a hosted or sandboxed run.
 pub fn ensure_owner_process() -> anyhow::Result<()> {
     if std::env::var_os("PLANTOOL_RUN_TOKEN").is_some()
+        || std::env::var_os("PLANTOOL_WORKER_TOKEN_FD").is_some()
         || std::env::var("PLANTOOL_SANDBOXED").is_ok_and(|v| v == "1")
     {
         bail!("daemon lifecycle and owner setup are unavailable to agent/sandboxed runs");

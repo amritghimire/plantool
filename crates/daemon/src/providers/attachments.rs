@@ -23,6 +23,9 @@ pub fn parse(text: &str, roots: &[PathBuf]) -> anyhow::Result<Vec<Attachment>> {
         if !path.is_absolute() {
             bail!("Attachment paths must be absolute session upload paths");
         }
+        if crate::sandbox::NeverSent::new(&[])?.matches(path) {
+            bail!("Attachment is excluded by never-sent rules");
+        }
         let path = path
             .canonicalize()
             .with_context(|| format!("Attachment is missing: {}", path.display()))?;
@@ -35,6 +38,9 @@ pub fn parse(text: &str, roots: &[PathBuf]) -> anyhow::Result<Vec<Attachment>> {
             };
             dir.starts_with(&root) && path.starts_with(&dir)
         });
+        if crate::sandbox::NeverSent::new(&[])?.matches(&path) {
+            bail!("Attachment is excluded by never-sent rules");
+        }
         if !allowed {
             bail!(
                 "Attachment is outside this session's attachment directory: {}",
@@ -61,6 +67,27 @@ pub fn parse(text: &str, roots: &[PathBuf]) -> anyhow::Result<Vec<Attachment>> {
         }
     }
     Ok(files)
+}
+
+pub fn check_policy(
+    text: &str,
+    roots: &[PathBuf],
+    policy: &crate::sandbox::NeverSent,
+) -> anyhow::Result<()> {
+    for file in parse(text, roots)? {
+        let relative = roots
+            .iter()
+            .find_map(|root| {
+                root.canonicalize()
+                    .ok()
+                    .and_then(|r| file.path.strip_prefix(r).ok().map(Path::to_path_buf))
+            })
+            .ok_or_else(|| anyhow::anyhow!("attachment is outside its session"))?;
+        if policy.matches(&relative) {
+            bail!("Attachment is excluded by the project's never-sent rules");
+        }
+    }
+    Ok(())
 }
 
 fn image_mime(extension: &str) -> Option<&'static str> {

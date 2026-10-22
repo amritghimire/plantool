@@ -275,3 +275,28 @@ it or daemon lifecycle commands. The actual sandbox is a separate Phase 0 task.
 The worker identity primitive passes a random token through inherited fd 0, never a token
 environment variable or command-line argument. Worker credentials have no Personal or
 browser authority; only socket health is available until the Phase 2 contract API exists.
+
+### Sandboxed runs and Stop All
+
+On macOS, enable **Sandbox this run** when starting a Personal run. The daemon
+launches the provider through `sandbox-exec`, with a separate temporary directory
+and a stripped environment. Linux and Windows return an explicit unsupported
+error for isolated runs; ordinary Personal runs remain available.
+
+Sandboxed agents cannot read SSH/GitHub credentials, browser cookies, Keychain,
+daemon secrets, or never-sent files (`.env*`, `*.pem`, `*.key`, `secrets/` at any
+depth). Reviewers also cannot write the worktree. Provider state is temporary;
+known model-auth files are copied into the attempt, while Keychain-based provider
+login is unavailable inside the sandbox. Use a provider's supported file/API-key
+login. Network access remains enabled; the later LLM proxy is outside this phase.
+
+Use **Stop All** in the browser to revoke run tokens, kill supervised process
+groups and latch execution off, including across daemon restarts. **Resume
+execution with passkey** requires a fresh assertion and never restarts old runs.
+In Settings → Never-sent files, add project-relative globs (`*`, `**`, `?`);
+stop execution before saving, then approve the change with your passkey.
+These owner-only rules live outside the repository. Defaults cannot be removed.
+
+`cargo test -p plantool-daemon --test sandbox` executes the section 19 sandbox
+acceptance tests on macOS, including actual file denials and Keychain Mach-service
+denials; CI runs them on macOS. The test file is excluded on other platforms.

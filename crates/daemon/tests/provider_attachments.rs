@@ -91,6 +91,7 @@ for line in sys.stdin:
         .to_string_lossy()
         .into_owned();
     let opts = RunOptions {
+        launch: None,
         environment: Some(environment),
         cwd: root.path().to_path_buf(),
         prompt: prompt.clone(),
@@ -224,6 +225,7 @@ print('{}',flush=True)
         .to_string_lossy()
         .into_owned();
     let opts = RunOptions {
+        launch: None,
         environment: Some(environment),
         cwd: root.path().to_path_buf(),
         prompt: prompt.clone(),
