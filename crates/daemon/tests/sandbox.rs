@@ -259,3 +259,46 @@ async fn symlink_and_hardlink_aliases_cannot_bypass_never_sent_rules() {
         .status
         .success());
 }
+
+#[tokio::test]
+async fn sandbox_can_connect_to_the_daemon_unix_socket() {
+    let f = Fixture::new();
+    let run = f.paths.daemon_home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let socket = run.join("daemon.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let sandbox = f.sandbox(Role::Agent);
+    let output = f.command(
+        &sandbox,
+        "/usr/bin/curl",
+        &[
+            "--silent",
+            "--max-time",
+            "3",
+            "--unix-socket",
+            socket.to_str().unwrap(),
+            "http://localhost/",
+        ],
+    );
+    let server = async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut connection, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 4096];
+        connection.read(&mut buffer).await.unwrap();
+        connection
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await
+            .unwrap();
+    };
+    let (output, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(output, server)
+    })
+    .await
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok");
+}

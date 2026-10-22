@@ -140,6 +140,33 @@ pub fn session_check(
 mod tests {
     use super::*;
     #[test]
+    fn configured_credential_store_paths_are_protected_without_running_helpers() {
+        let t = tempfile::tempdir().unwrap();
+        let owner = t.path().join("owner");
+        std::fs::create_dir_all(&owner).unwrap();
+        let external = t.path().join("external credentials");
+        std::fs::write(
+            owner.join(".gitconfig"),
+            format!(
+                "[credential]\n helper = store --file '{}'\n",
+                external.display()
+            ),
+        )
+        .unwrap();
+        let paths = Paths {
+            owner_home: owner.clone(),
+            daemon_home: t.path().join("daemon"),
+            worktree: t.path().join("repo"),
+            docs: t.path().join("docs"),
+        };
+        assert!(protected(&paths).contains(&external));
+        assert_eq!(
+            helper_stores(&owner, "store --file=~/my-credentials"),
+            vec![owner.join("my-credentials")]
+        );
+        assert!(helper_stores(&owner, "!touch /tmp/never-execute").is_empty());
+    }
+    #[test]
     fn daemon_file_reads_enforce_defaults_custom_rules_and_aliases() {
         let t = tempfile::tempdir().unwrap();
         let paths = Paths {
