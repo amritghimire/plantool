@@ -533,3 +533,332 @@ async fn expired_setup_code_and_anonymous_confirm_cannot_grant_authority() {
         );
     }
 }
+
+#[tokio::test]
+async fn deletion_aliases_cannot_bypass_passkey_confirmation() {
+    let h = harness();
+    let key = session(&h, "aliases").await;
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    let comments = format!("/api/sessions/{key}/comments");
+    let created = value(
+        raw(
+            &h.app,
+            "POST",
+            &comments,
+            json!({"doc":"plan","line":1,"body":"Owner blocker","type":"blocker"}),
+            Some(&browser.cookie),
+            None,
+        )
+        .await,
+    )
+    .await;
+    let id = created["comments"][0]["id"].clone();
+    let body = json!({"ids":[id]});
+    assert_eq!(
+        raw(&h.app, "DELETE", &comments, body.clone(), None, None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        raw(
+            &h.app,
+            "DELETE",
+            &comments,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser
+        .proof(&h.app, "DELETE", &comments, body.clone())
+        .await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "DELETE",
+            &comments,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let remove = format!("/api/sessions/{key}/remove?worktree=true");
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            &remove,
+            Value::Null,
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    assert!(h.state.registry.get_key(&key).is_some());
+    let proof = browser.proof(&h.app, "POST", &remove, Value::Null).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            &remove,
+            Value::Null,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn run_policy_changes_require_passkeys_and_failed_starts_do_not_change_pause_rules() {
+    let h = harness();
+    let key = session(&h, "policy").await;
+    let route = format!("/api/sessions/{key}/runs");
+    let s = h.state.registry.get_key(&key).unwrap();
+    s.set_stage(plantool_core::Stage::Approved, plantool_core::Actor::Human)
+        .unwrap();
+    for policy in [
+        json!({"permission_mode":"allow-all"}),
+        json!({"pause_rule":{"mode":"no-pauses"}}),
+        json!({"permission_mode":"auto","resume_run":"missing"}),
+    ] {
+        let mut body = json!({"provider":"codex","stage":"implement","worktree":false});
+        body.as_object_mut()
+            .unwrap()
+            .extend(policy.as_object().unwrap().clone());
+        assert_eq!(
+            raw(&h.app, "POST", &route, body, None, None).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    let safe = json!({"provider":"codex","stage":"implement","permission_mode":"ask","resume_run":"missing","worktree":false});
+    assert_eq!(
+        raw(&h.app, "POST", &route, safe, None, None).await.status(),
+        StatusCode::BAD_REQUEST,
+        "ordinary safe starts reach request validation"
+    );
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    let body = json!({"provider":"codex","stage":"implement","pause_rule":{"mode":"every-milestone"},"resume_run":"missing","worktree":false});
+    let before = serde_json::to_value(s.session().pause_rule).unwrap();
+    let proof = browser.proof(&h.app, "POST", &route, body.clone()).await;
+    let response = raw(
+        &h.app,
+        "POST",
+        &route,
+        body,
+        Some(&browser.cookie),
+        Some(&proof),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(s.session().pause_rule).unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn query_strings_and_untracked_name_boundaries_cannot_weaken_workspace_binding() {
+    let h = harness();
+    let key = session(&h, "workspace").await;
+    let s = h.state.registry.get_key(&key).unwrap();
+    let cwd = s.session().cwd().clone();
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    for endpoint in ["pr?x=1", "pr/commit?x=1"] {
+        let route = format!("/api/sessions/{key}/{endpoint}");
+        let body = json!({"message":"commit","head":"workspace","repository":"owner/repo","title":"title","body":"body","draft":true});
+        std::fs::write(cwd.join("a"), "bc").unwrap();
+        let proof = browser.proof(&h.app, "POST", &route, body.clone()).await;
+        std::fs::remove_file(cwd.join("a")).unwrap();
+        std::fs::write(cwd.join("ab"), "c").unwrap();
+        assert_eq!(
+            raw(
+                &h.app,
+                "POST",
+                &route,
+                body,
+                Some(&browser.cookie),
+                Some(&proof)
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        std::fs::remove_file(cwd.join("ab")).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlink_targets_are_signed_without_following_links() {
+    use std::os::unix::fs::symlink;
+    let h = harness();
+    let key = session(&h, "symlinks").await;
+    let s = h.state.registry.get_key(&key).unwrap();
+    let cwd = s.session().cwd().clone();
+    symlink("missing-file", cwd.join("dangling")).unwrap();
+    symlink(".", cwd.join("directory-link")).unwrap();
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    let route = format!("/api/sessions/{key}/pr/commit?query=yes");
+    let body = json!({"message":"links"});
+    let proof = browser.proof(&h.app, "POST", &route, body.clone()).await;
+    std::fs::remove_file(cwd.join("dangling")).unwrap();
+    symlink("different-missing-file", cwd.join("dangling")).unwrap();
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            &route,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn provider_output_does_not_invalidate_unrelated_confirmations() {
+    let h = harness();
+    let key = session(&h, "output").await;
+    let s = h.state.registry.get_key(&key).unwrap();
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    let route = format!("/api/sessions/{key}/where");
+    let body = json!({"difftool":"built-in"});
+    let proof = browser.proof(&h.app, "POST", &route, body.clone()).await;
+    s.append_run_event(
+        "background",
+        1,
+        json!({"type":"text","text":"ordinary output"}),
+    )
+    .unwrap();
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            &route,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pr_publication_rechecks_after_preflight_and_pushes_the_signed_sha() {
+    use std::os::unix::fs::PermissionsExt;
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().into()
+    }
+    struct Restore(Option<std::ffi::OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("PLANTOOL_GH_BIN", value),
+                None => std::env::remove_var("PLANTOOL_GH_BIN"),
+            }
+        }
+    }
+    let _restore = Restore(std::env::var_os("PLANTOOL_GH_BIN"));
+    for during_preflight in [true, false] {
+        let h = harness();
+        let key = session(&h, "publish").await;
+        let live = h.state.registry.get_key(&key).unwrap();
+        let cwd = live.session().cwd().clone();
+        git(&cwd, &["switch", "-qc", "feature"]);
+        git(&cwd, &["commit", "--allow-empty", "-qm", "approved"]);
+        let approved = git(&cwd, &["rev-parse", "HEAD"]);
+        live.set_stage(
+            plantool_core::Stage::ImplementationReview,
+            plantool_core::Actor::Human,
+        )
+        .unwrap();
+        let bare = h.tmp.path().join("remote.git");
+        std::fs::create_dir(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare"]);
+        git(&cwd, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        let marker = h.tmp.path().join("created");
+        let script = h.tmp.path().join("gh-stub");
+        let race = if during_preflight {
+            "git -c core.hooksPath=/dev/null commit --allow-empty -qm concurrent"
+        } else {
+            ":"
+        };
+        std::fs::write(&script, format!(r#"#!/bin/sh
+if [ "$1 $2" = "repo view" ]; then {race}; echo owner/repo; exit 0; fi
+if [ "$1 $2" = "pr list" ]; then
+if [ -e '{}' ]; then echo '[{{"number":23,"url":"https://github.com/owner/repo/pull/23","state":"OPEN","isDraft":true,"headRefName":"feature","baseRefName":"main"}}]'; else echo '[]'; fi
+exit 0
+fi
+if [ "$1 $2" = "pr create" ]; then touch '{}'; exit 0; fi
+exit 1
+"#, marker.display(), marker.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("PLANTOOL_GH_BIN", &script);
+        if !during_preflight {
+            let hook = cwd.join(".git/hooks/pre-push");
+            std::fs::write(
+                &hook,
+                "#!/bin/sh\ngit -c core.hooksPath=/dev/null commit --allow-empty -qm concurrent\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+        let path = format!("/api/sessions/{key}/pr");
+        let body = json!({"head":"feature","repository":"owner/repo","title":"Approved","body":"Reviewed","draft":true});
+        let proof = browser.proof(&h.app, "POST", &path, body.clone()).await;
+        let response = raw(
+            &h.app,
+            "POST",
+            &path,
+            body,
+            Some(&browser.cookie),
+            Some(&proof),
+        )
+        .await;
+        let status = response.status();
+        let result = value(response).await;
+        assert_ne!(git(&cwd, &["rev-parse", "HEAD"]), approved);
+        if during_preflight {
+            assert_eq!(status, StatusCode::CONFLICT, "{result}");
+            assert!(!marker.exists());
+            let output = std::process::Command::new("git")
+                .args(["show-ref", "--verify", "refs/heads/feature"])
+                .current_dir(&bare)
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+        } else {
+            assert_eq!(status, StatusCode::OK, "{result}");
+            assert_eq!(git(&bare, &["rev-parse", "refs/heads/feature"]), approved);
+        }
+    }
+}

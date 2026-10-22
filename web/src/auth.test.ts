@@ -20,3 +20,12 @@ test("a guarded action obtains a fresh WebAuthn signature and retries the exact 
   expect(fetch.mock.calls[3][1].headers.get("x-plantool-assertion")).toBe("single-use-proof");
   expect(fetch.mock.calls[3][1].body).toBe(JSON.stringify(body));
 });
+
+test("a forbidden action triggers session revalidation without replaying the mutation", async () => {
+  const listener=vi.fn();window.addEventListener("plantool:session-changed",listener);
+  const fetch=vi.fn().mockResolvedValue(new Response("{}",{status:403}));vi.stubGlobal("fetch",fetch);
+  try {
+    const response=await authenticatedFetch("/api/sessions/repo/item/stage",{method:"POST",body:'{"to":"approved"}'});
+    expect(response.status).toBe(403);expect(fetch).toHaveBeenCalledTimes(1);expect(listener).toHaveBeenCalledTimes(1);
+  } finally {window.removeEventListener("plantool:session-changed",listener);}
+});

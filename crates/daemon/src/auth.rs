@@ -100,6 +100,9 @@ struct Binding {
     action: String,
     target_id: String,
     target_digest: String,
+    policy_digest: String,
+    workspace: Option<crate::git::WorkspaceSnapshot>,
+    request_body: String,
 }
 struct Pending<T> {
     state: T,
@@ -201,6 +204,13 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
     {
         return true;
     }
+    if path.ends_with("/runs") {
+        return body["permission_mode"].as_str().is_some_and(|m| m != "ask")
+            || !body["pause_rule"].is_null()
+            || !body["milestone"].is_null()
+            || body["implementation_mode"] == "step-by-step"
+            || matches!(body["provider"].as_str(), Some("copilot" | "ollama"));
+    }
     if path.ends_with("/where") {
         return human || body["confirm"] == true;
     }
@@ -210,64 +220,141 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
         || path.ends_with("/commit/cancel")
         || path.ends_with("/comments/resolve")
         || path.ends_with("/comments/remove")
+        || (method == "DELETE" && path.ends_with("/comments"))
+        || (method == "POST" && path.ends_with("/remove"))
         || path.ends_with("/promote")
         || path.ends_with("/pr")
         || path.ends_with("/pr/commit")
         || (method == "DELETE" && path.split('/').count() == 5)
 }
-fn binding(state: &AppState, method: &str, path: &str, body: &Value) -> Result<Binding, ApiError> {
-    if !path.starts_with("/api/") || path.contains('#') {
+#[derive(Clone)]
+pub struct ApprovedAction {
+    binding: Binding,
+}
+impl ApprovedAction {
+    pub fn workspace(&self) -> Result<&crate::git::WorkspaceSnapshot, ApiError> {
+        self.binding.workspace.as_ref().ok_or_else(denied)
+    }
+    pub fn recheck(&self, state: &AppState) -> Result<(), ApiError> {
+        if binding(
+            state,
+            &self.binding.action,
+            &self.binding.target_id,
+            &self.body()?,
+        )? != self.binding
+        {
+            return Err(stale());
+        }
+        Ok(())
+    }
+    pub fn recheck_policy(&self, state: &AppState) -> Result<(), ApiError> {
+        let current = make_binding(
+            state,
+            &self.binding.action,
+            &self.binding.target_id,
+            &self.body()?,
+            false,
+        )?;
+        if current.policy_digest != self.binding.policy_digest {
+            return Err(stale());
+        }
+        Ok(())
+    }
+    fn body(&self) -> Result<Value, ApiError> {
+        Ok(serde_json::from_str(&self.binding.request_body).map_err(anyhow::Error::from)?)
+    }
+}
+fn stale() -> ApiError {
+    ApiError(
+        StatusCode::CONFLICT,
+        "The approved target changed; review it and confirm again".into(),
+    )
+}
+fn binding(state: &AppState, method: &str, uri: &str, body: &Value) -> Result<Binding, ApiError> {
+    make_binding(state, method, uri, body, true)
+}
+fn make_binding(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    body: &Value,
+    capture_workspace: bool,
+) -> Result<Binding, ApiError> {
+    if !uri.starts_with("/api/") || uri.contains('#') {
         return Err(denied());
     }
-    let mut data = json!({"body":body});
-    let decoded = percent_encoding::percent_decode_str(path.split('?').next().unwrap_or(path))
+    let path = uri.split('?').next().unwrap_or(uri);
+    let decoded = percent_encoding::percent_decode_str(path)
         .decode_utf8()
         .map_err(|_| denied())?;
-    let parts: Vec<_> = decoded
-        .split('?')
-        .next()
-        .unwrap_or(path)
-        .split('/')
-        .collect();
+    let parts: Vec<_> = decoded.split('/').collect();
+    let mut data = json!({"body": body});
+    let mut workspace = None;
     if parts.get(2) == Some(&"sessions") && parts.len() >= 5 {
         if let Some(s) = state
             .registry
             .get_key(&format!("{}/{}", parts[3], parts[4]))
         {
-            data["session"] = serde_json::to_value(s.session()).map_err(anyhow::Error::from)?;
-            data["state"] = serde_json::to_value(s.state()).map_err(anyhow::Error::from)?;
-            // Capture the file itself, not just the watcher's last revision.
-            data["plan"] = json!(std::fs::read(s.doc_path(plantool_core::DocKind::Plan))
-                .ok()
-                .map(|b| digest(&b)));
-            if path.contains("/milestone/approve")
+            let session = s.session();
+            data["context"] = json!({"repo":session.repo,"worktree":session.worktree,"base":session.base,"pause_rule":session.pause_rule,"difftool":session.difftool});
+            let saved = s.state();
+            let approval = path.ends_with("/stage")
+                || path.ends_with("/milestone/approve")
                 || path.ends_with("/pr")
-                || path.ends_with("/pr/commit")
-            {
-                data["runs"] = serde_json::to_value(s.runs()).map_err(anyhow::Error::from)?;
-                let session = s.session();
-                let cwd = session.cwd();
-                data["head"] = json!(crate::git::git(cwd, &["rev-parse", "HEAD"]).ok());
-                data["diff"] = json!(digest_str(
-                    &crate::git::git(cwd, &["diff", "--binary", "HEAD"])
-                        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?
-                ));
-                let untracked =
-                    crate::git::git(cwd, &["ls-files", "--others", "--exclude-standard", "-z"])
-                        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
-                let mut hash = Sha256::new();
-                for file in untracked.split('\0').filter(|s| !s.is_empty()) {
-                    hash.update(file.as_bytes());
-                    hash.update(std::fs::read(cwd.join(file)).map_err(anyhow::Error::from)?);
+                || path.ends_with("/pr/commit");
+            if approval {
+                data["approval"] = json!({"stage":saved.stage,"approved":saved.approved,"pending":saved.plan_revision_pending,"milestones":saved.milestones,"selected":saved.selected_milestone,"comments":saved.comments});
+                data["plan"] = json!(std::fs::read(s.doc_path(plantool_core::DocKind::Plan))
+                    .ok()
+                    .map(|b| digest(&b)));
+            } else if path.contains("/comments") || path.ends_with("/promote") {
+                data["comments"] = json!(saved.comments);
+            } else if path.ends_with("/proposals") {
+                data["proposal"] = json!(saved
+                    .proposals
+                    .iter()
+                    .find(|p| Some(p.id.as_str()) == body["id"].as_str()));
+            }
+            if path.contains("/runs/") {
+                if let Some(id) = parts.get(6) {
+                    if let Some(run) = s.run(id) {
+                        data["run"] = json!({"id":run.id,"cwd":run.cwd,"provider":run.provider,"permission_mode":run.permission_mode,"milestone_pending":run.milestone_pending,"milestones_approved":run.milestones_approved,"plan_sha":run.plan_sha,"milestone_key":run.milestone_key,"milestone_base":run.milestone_base,"milestone_commit":run.milestone_commit,"milestone_review":run.milestone_review});
+                    }
                 }
-                data["untracked"] = json!(format!("{:x}", hash.finalize()));
+            }
+            if path.ends_with("/runs") {
+                data["resume"] = json!(body["resume_run"].as_str().and_then(|id|s.run(id)).map(|r|json!({"id":r.id,"provider":r.provider,"permission_mode":r.permission_mode,"implementation_mode":r.implementation_mode})));
+            }
+            if capture_workspace
+                && (path.ends_with("/milestone/approve")
+                    || path.ends_with("/pr")
+                    || path.ends_with("/pr/commit"))
+            {
+                let cwd = if path.ends_with("/milestone/approve") {
+                    parts
+                        .get(6)
+                        .and_then(|id| s.run(id))
+                        .map(|r| r.cwd)
+                        .unwrap_or_else(|| session.cwd().clone())
+                } else {
+                    session.cwd().clone()
+                };
+                workspace = Some(
+                    crate::git::workspace_snapshot(&cwd)
+                        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?,
+                );
             }
         }
     }
+    let policy_digest = digest_str(&data.to_string());
+    data["workspace"] = json!(workspace);
     Ok(Binding {
         action: method.into(),
-        target_id: path.into(),
+        target_id: uri.into(),
         target_digest: digest_str(&data.to_string()),
+        policy_digest,
+        workspace,
+        request_body: body.to_string(),
     })
 }
 
@@ -329,7 +416,7 @@ async fn guard_inner(state: AppState, req: Request<Body>, next: Next) -> Respons
     if matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS") || path.starts_with("/api/auth/") {
         return next.run(req).await;
     }
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
     let bytes = match to_bytes(body, crate::security::MAX_BODY_BYTES).await {
         Ok(b) => b,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
@@ -356,11 +443,16 @@ async fn guard_inner(state: AppState, req: Request<Body>, next: Next) -> Respons
             )
                 .into_response();
         }
-        let result = binding(&state, &method, &path, &value)
-            .and_then(|b| state.auth.grant(&parts.headers, &b));
-        if let Err(e) = result {
+        let approved = match binding(&state, &method, &path, &value) {
+            Ok(b) => b,
+            Err(e) => return e.into_response(),
+        };
+        if let Err(e) = state.auth.grant(&parts.headers, &approved) {
             return e.into_response();
         }
+        parts
+            .extensions
+            .insert(ApprovedAction { binding: approved });
     }
     next.run(Request::from_parts(parts, Body::from(bytes)))
         .await
@@ -706,6 +798,9 @@ mod tests {
             action: "POST".into(),
             target_id: "/api/settings/difftool".into(),
             target_digest: "digest".into(),
+            policy_digest: "digest".into(),
+            workspace: None,
+            request_body: "null".into(),
         };
         headers.insert("x-plantool-assertion", "proof".parse().unwrap());
         auth.memory.lock().unwrap().grants.insert(

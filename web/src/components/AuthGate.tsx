@@ -1,13 +1,37 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { authenticate, authRequest, registerPasskey } from "../auth";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { authenticate, authRequest, registerPasskey, SESSION_CHANGED_EVENT } from "../auth";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<{ registered: boolean; authenticated: boolean } | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const refresh = () => authRequest<{ registered: boolean; authenticated: boolean }>("status").then(setStatus).catch((e: Error) => setError(e.message));
-  useEffect(() => { void refresh(); }, []);
+  const refreshVersion = useRef(0);
+  const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
+    try {
+      const next = await authRequest<{ registered: boolean; authenticated: boolean }>("status");
+      if (version === refreshVersion.current) setStatus(next);
+    } catch (e) {
+      if (version === refreshVersion.current) { setStatus(null); setError((e as Error).message); }
+    }
+  }, []);
+  useEffect(() => {
+    const recheck = () => { void refresh(); };
+    const visible = () => { if (document.visibilityState === "visible") recheck(); };
+    recheck();
+    window.addEventListener("focus", recheck);
+    window.addEventListener("online", recheck);
+    window.addEventListener(SESSION_CHANGED_EVENT, recheck);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      ++refreshVersion.current;
+      window.removeEventListener("focus", recheck);
+      window.removeEventListener("online", recheck);
+      window.removeEventListener(SESSION_CHANGED_EVENT, recheck);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [refresh]);
   const run = async (operation: () => Promise<unknown>) => {
     setBusy(true); setError("");
     try { await operation(); setCode(""); await refresh(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }

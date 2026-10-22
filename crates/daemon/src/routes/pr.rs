@@ -4,7 +4,7 @@ use crate::{git, AppState};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use plantool_core::{Actor, CommitScope, PullRequest, RunStatus, Session, Stage};
 use serde::{Deserialize, Serialize};
 use std::path::Path as FsPath;
@@ -303,6 +303,7 @@ struct CommitBody {
 async fn commit(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<CommitBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -322,9 +323,17 @@ async fn commit(
         ));
     }
     let cwd = session.cwd().clone();
-    let outcome = crate::commits::run_commit(s.clone(), CommitScope::Pr, cwd, message, false)
-        .await
-        .map_err(|e| ApiError(StatusCode::CONFLICT, e.message("could not commit")))?;
+    let outcome = crate::commits::run_commit(
+        s.clone(),
+        CommitScope::Pr,
+        cwd,
+        message,
+        false,
+        approval,
+        state.clone(),
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::CONFLICT, e.message("could not commit")))?;
     let (sha, rewritten) = match outcome {
         git::CommitOutcome::Committed(sha) => (sha, Vec::new()),
         git::CommitOutcome::HookRewrote {
@@ -366,6 +375,7 @@ struct CreateBody {
 async fn create(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -388,11 +398,13 @@ async fn create(
             "there are no commits ahead of base; uncommitted changes cannot appear in a PR",
         ));
     }
+    approval.recheck(&state)?;
     let pr = if let Some(existing) = info.existing {
         existing
     } else {
         let cwd = session.cwd();
-        let refspec = format!("HEAD:refs/heads/{}", info.head);
+        approval.recheck(&state)?;
+        let refspec = format!("{}:refs/heads/{}", approval.workspace()?.head, info.head);
         git::git(cwd, &["push", "-u", &info.push_remote, &refspec])
             .map_err(|e| bad_request(format!("push failed: {e}")))?;
         let body_path = s.store.dir.join("pr-body.md");

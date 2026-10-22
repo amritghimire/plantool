@@ -1,3 +1,7 @@
+export const SESSION_CHANGED_EVENT = "plantool:session-changed";
+function reportSessionFailure(response: Response) {
+  if (response.status === 401 || response.status === 403) window.dispatchEvent(new Event(SESSION_CHANGED_EVENT));
+}
 // WebAuthn's binary fields use base64url on the wire and ArrayBuffer in the browser.
 function decode(s: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
@@ -7,6 +11,7 @@ function encode(buffer: ArrayBuffer): string {
 }
 export async function authRequest<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/auth/${path}`, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  reportSessionFailure(res);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "Passkey authentication failed");
   return data as T;
@@ -34,6 +39,7 @@ export async function registerPasskey(code: string | null) {
   const proof = code === null ? await authenticate({ method: "POST", path: "/api/auth/register/start", body }) : undefined;
   const res = await fetch("/api/auth/register/start", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", ...(proof ? { "x-plantool-assertion": proof } : {}) }, body: JSON.stringify(body) });
   const start = await res.json() as Ceremony & { error?: string };
+  reportSessionFailure(res);
   if (!res.ok) throw new Error(start.error ?? "Could not start passkey registration");
   const p = start.options.publicKey;
   const publicKey = { ...p, challenge: decode(p.challenge as string), user: { ...(p.user as PublicKeyCredentialUserEntity), id: decode((p.user as { id: string }).id) }, excludeCredentials: (p.excludeCredentials as { id: string; type: PublicKeyCredentialType }[] | undefined)?.map((c) => ({ ...c, id: decode(c.id) })) } as unknown as PublicKeyCredentialCreationOptions;
@@ -43,6 +49,7 @@ export async function registerPasskey(code: string | null) {
 }
 export async function authenticatedFetch(path: string, init: RequestInit = {}, bodyValue?: unknown): Promise<Response> {
   const response = await fetch(path, { ...init, credentials: "same-origin" });
+  reportSessionFailure(response);
   if (response.status !== 428) return response;
   let boundBody = bodyValue ?? null;
   if (init.body instanceof Blob) {
@@ -52,5 +59,7 @@ export async function authenticatedFetch(path: string, init: RequestInit = {}, b
   const proof = await authenticate({ method: init.method ?? "GET", path, body: boundBody });
   const headers = new Headers(init.headers);
   if (proof) headers.set("x-plantool-assertion", proof);
-  return fetch(path, { ...init, credentials: "same-origin", headers });
+  const retried = await fetch(path, { ...init, credentials: "same-origin", headers });
+  reportSessionFailure(retried);
+  return retried;
 }

@@ -4,7 +4,7 @@ use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use plantool_core::Actor;
 use plantool_core::{DocKind, Stage};
 use serde::Deserialize;
@@ -108,6 +108,7 @@ pub struct RemoveQuery {
 
 async fn remove(
     State(state): State<AppState>,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
     headers: HeaderMap,
     Path((repo, slug)): Path<(String, String)>,
     Query(q): Query<RemoveQuery>,
@@ -127,9 +128,12 @@ async fn remove(
     }
     let key = s.key.clone();
     let reg = state.registry.clone();
-    let session = tokio::task::spawn_blocking(move || reg.remove(&key, q.worktree))
-        .await
-        .map_err(|e| anyhow::anyhow!(e))??;
+    let session = tokio::task::spawn_blocking(move || {
+        approval.recheck(&state)?;
+        reg.remove(&key, q.worktree).map_err(ApiError::from)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!(e))??;
     Ok(Json(
         json!({ "removed": session.key(), "worktree_removed": q.worktree && session.worktree.is_some() }),
     ))
