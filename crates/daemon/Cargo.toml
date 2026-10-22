@@ -10,6 +10,8 @@ webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"]
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2.workspace = true
 percent-encoding = "2"
+# Keep the standalone release binary independent of a system OpenSSL installation.
+openssl = { version = "0.10", features = ["vendored"] }
 plantool-core = { path = "../core" }
 serde.workspace = true
 serde_json.workspace = true
@@ -35,7 +37,3 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tempfile = "3"
 http-body-util = "0.1"
 webauthn-authenticator-rs = { version = "0.5", default-features = false, features = ["softpasskey"] }
-
-# Cross/Windows builds cannot rely on a host OpenSSL installation.
-[target.'cfg(any(windows, all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
-openssl = { version = "0.10", features = ["vendored"] }

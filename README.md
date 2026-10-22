@@ -176,9 +176,9 @@ validate the shell; CI runs the same check. Use `nix develop -c <command>` for
 agent build and test commands on PlanTool itself.
 
 Without Nix, keep using rustup's stable toolchain, Node 22/npm and uv as usual;
-none of the commands below require Nix. Native Linux/macOS Rust builds need
-OpenSSL development libraries and pkg-config; the Nix shell supplies them. Windows
-and ARM Linux builds use vendored OpenSSL (requiring Perl and a C build toolchain).
+none of the commands below require Nix. Rust builds use vendored OpenSSL for
+portable binaries and need Perl plus a C build toolchain; the Nix shell supplies
+these build tools.
 Python is not required for Personal mode.
 For dev daemon runs, set `PLANTOOL_HOME=$(mktemp -d) PLANTOOL_PORT=41300` to
 keep development data separate from your installed tool.
