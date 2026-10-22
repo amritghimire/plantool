@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use plantool_core::{Actor, ProposalKind, RunStatus};
 use serde::Deserialize;
@@ -38,6 +38,7 @@ async fn describe(
 
 async fn update(
     State(state): State<AppState>,
+    approval: Option<Extension<crate::auth::ApprovedAction>>,
     headers: HeaderMap,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<Update>,
@@ -100,6 +101,9 @@ async fn update(
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+    if let Some(Extension(approval)) = &approval {
+        approval.recheck(&state)?;
     }
     if moving {
         let mut blockers = git::context_precheck(
@@ -177,6 +181,7 @@ struct ProposalAction {
 }
 async fn proposal(
     State(state): State<AppState>,
+    approval: Extension<crate::auth::ApprovedAction>,
     headers: HeaderMap,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<ProposalAction>,
@@ -207,6 +212,7 @@ async fn proposal(
         }
         let _ = update(
             State(state.clone()),
+            Some(approval),
             headers,
             Path((repo, slug)),
             Json(change),

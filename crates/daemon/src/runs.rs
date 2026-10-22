@@ -61,12 +61,47 @@ impl RunManager {
         implementation_mode: ImplementationMode,
         previous_run: Option<&Run>,
     ) -> anyhow::Result<Run> {
+        self.start_with_pause(
+            session,
+            provider,
+            stage,
+            stage_name,
+            prompt,
+            model,
+            effort,
+            resume,
+            permission_mode,
+            implementation_mode,
+            previous_run,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_pause(
+        self: &Arc<Self>,
+        session: Arc<LiveSession>,
+        provider: Provider,
+        stage: Stage,
+        stage_name: &str,
+        prompt: String,
+        model: Option<String>,
+        effort: Option<String>,
+        resume: Option<String>,
+        permission_mode: PermissionMode,
+        implementation_mode: ImplementationMode,
+        previous_run: Option<&Run>,
+        pause_rule: Option<plantool_core::PauseRule>,
+    ) -> anyhow::Result<Run> {
         if session.state().plan_revision_pending
             && (stage_name == "implement" || previous_run.is_some_and(implementation_run))
         {
             anyhow::bail!("accept the plan revision before continuing implementation");
         }
-        let sess = session.session();
+        let mut sess = session.session();
+        if let Some(rule) = pause_rule {
+            sess.pause_rule = rule;
+        }
         let prompt = if prompt.contains("Current session context:") {
             prompt
         } else {

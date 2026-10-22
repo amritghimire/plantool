@@ -56,12 +56,10 @@ pub fn bad_request(msg: impl Into<String>) -> ApiError {
 }
 
 pub fn actor_from(headers: &HeaderMap, state: &AppState) -> Actor {
-    match headers
-        .get("x-plantool-actor")
-        .and_then(|v| v.to_str().ok())
-    {
-        Some(t) if t == state.config.token => Actor::Human,
-        _ => Actor::Agent,
+    if state.auth.authenticated(headers) {
+        Actor::Human
+    } else {
+        Actor::Agent
     }
 }
 
@@ -97,14 +95,15 @@ async fn shutdown(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "ok": true }))
 }
 
-async fn spa(State(state): State<AppState>, uri: Uri) -> Response {
-    crate::assets::serve(&uri, &state.config.token)
+async fn spa(uri: Uri) -> Response {
+    crate::assets::serve(&uri)
 }
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/shutdown", post(shutdown))
+        .merge(crate::auth::routes())
         .merge(sessions::routes())
         .merge(comments::routes())
         .merge(changes::routes())
@@ -119,6 +118,10 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/shutdown", post(shutdown))
         .fallback(spa)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::guard,
+        ))
         .layer(DefaultBodyLimit::max(crate::security::MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(crate::security::guard))
         .with_state(state)

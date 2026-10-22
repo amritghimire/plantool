@@ -83,6 +83,15 @@ jobs:
         shell: bash
       - if: matrix.cross
         run: cargo install cross --locked
+      - name: Select native Perl for vendored OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Git Bash's Perl lacks modules required by OpenSSL's Configure script.
+          $perl = 'C:\Strawberry\perl\bin\perl.exe'
+          & $perl -MLocale::Maketext::Simple -MIPC::Cmd -e 'print "$^X\n"'
+          if ($LASTEXITCODE -ne 0) { throw 'Native Perl is missing required OpenSSL build modules' }
+          "PERL=$perl" >> $env:GITHUB_ENV
       - name: Package
         shell: bash
         env:

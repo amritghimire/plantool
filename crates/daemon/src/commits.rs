@@ -23,7 +23,24 @@ pub async fn run_commit(
     cwd: PathBuf,
     message: String,
     amend: bool,
+    approval: crate::auth::ApprovedAction,
+    state: crate::AppState,
 ) -> Result<CommitOutcome, RunCommitError> {
+    approval.recheck(&state).map_err(|e| {
+        CommitError::Git(git::GitError::Failed {
+            args: "authorization".into(),
+            stderr: e.1,
+        })
+    })?;
+    let snapshot = approval
+        .workspace()
+        .map_err(|e| {
+            CommitError::Git(git::GitError::Failed {
+                args: "authorization".into(),
+                stderr: e.1,
+            })
+        })?
+        .clone();
     let (id, cancel) = session.begin_commit(scope).ok_or(RunCommitError::Busy)?;
     let task = tokio::spawn(async move {
         let dirty = Arc::new(AtomicBool::new(false));
@@ -39,15 +56,30 @@ pub async fn run_commit(
                 }
             }
         });
-        let outcome = git::commit_streaming(&cwd, &message, amend, cancel, |step| match step {
-            CommitStep::Committing => {
-                session.update_commit(&id, true, |job| job.phase = CommitPhase::Hooks)
-            }
-            CommitStep::Line(line) => {
-                session.update_commit(&id, false, |job| job.lines.push(line));
-                dirty.store(true, Ordering::Relaxed);
-            }
-        })
+        let outcome = git::commit_streaming_bound(
+            &cwd,
+            &message,
+            amend,
+            cancel,
+            |step| match step {
+                CommitStep::Committing => {
+                    session.update_commit(&id, true, |job| job.phase = CommitPhase::Hooks)
+                }
+                CommitStep::Line(line) => {
+                    session.update_commit(&id, false, |job| job.lines.push(line));
+                    dirty.store(true, Ordering::Relaxed);
+                }
+            },
+            snapshot,
+            || {
+                approval
+                    .recheck_policy(&state)
+                    .map_err(|e| git::GitError::Failed {
+                        args: "authorization".into(),
+                        stderr: e.1,
+                    })
+            },
+        )
         .await;
         flusher.abort();
         let (phase, error) = match &outcome {

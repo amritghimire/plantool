@@ -29,6 +29,7 @@
             uv
             sqlite
             gh
+            perl
             cargo-nextest
           ];
         };

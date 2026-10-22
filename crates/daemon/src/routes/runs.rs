@@ -6,7 +6,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use plantool_core::{
     Actor, CommitScope, DocKind, ImplementationMode, PermissionMode, Provider, Stage,
 };
@@ -49,6 +49,7 @@ fn parse_mode(s: &str) -> Result<PermissionMode, ApiError> {
 
 async fn start(
     State(state): State<AppState>,
+    approval: Option<Extension<crate::auth::ApprovedAction>>,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<StartBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
@@ -130,19 +131,16 @@ async fn start(
         }
         s.select_milestone(key)?;
     }
-    if stage_name == "implement" {
+    let rule = if stage_name == "implement" {
         let rule = body.pause_rule.clone().or_else(|| {
             (body.implementation_mode == ImplementationMode::StepByStep
                 && s.session().pause_rule == plantool_core::PauseRule::NoPauses)
                 .then_some(plantool_core::PauseRule::EveryMilestone)
         });
-        if let Some(rule) = rule {
-            s.apply_context(&super::where_context::Update {
-                pause_rule: Some(rule),
-                ..Default::default()
-            })?;
-        }
-    }
+        rule
+    } else {
+        None
+    };
     let resume_from = body.resume_run.as_deref().and_then(|rid| s.run(rid));
     if body.resume_run.is_some() && resume_from.is_none() {
         return Err(bad_request("unknown run to resume"));
@@ -168,6 +166,9 @@ async fn start(
             ));
         }
     }
+    if let Some(Extension(approval)) = &approval {
+        approval.recheck(&state)?;
+    }
     if stage_name == "implement" && body.worktree.unwrap_or(true) {
         let ws = s.clone();
         tokio::task::spawn_blocking(move || ws.ensure_worktree(None))
@@ -178,7 +179,10 @@ async fn start(
     if target.index() > current.index() {
         s.set_stage(target, Actor::Agent)?;
     }
-    let sess = s.session();
+    let mut sess = s.session();
+    if let Some(rule) = &rule {
+        sess.pause_rule = rule.clone();
+    }
     let extra = body.prompt.as_deref().filter(|p| !p.trim().is_empty());
     let implementation_mode = if stage_name == "implement" {
         resume_from
@@ -247,7 +251,7 @@ async fn start(
     {
         return Err(bad_request("Ollama stage runs need Auto or Allow all permissions so OpenCode can use plantool commands"));
     }
-    let run = state.runs.start(
+    let run = state.runs.start_with_pause(
         s.clone(),
         provider,
         target,
@@ -259,7 +263,14 @@ async fn start(
         mode,
         implementation_mode,
         previous_milestone.as_ref(),
+        rule.clone(),
     )?;
+    if let Some(rule) = rule {
+        s.apply_context(&super::where_context::Update {
+            pause_rule: Some(rule),
+            ..Default::default()
+        })?;
+    }
     Ok((
         StatusCode::CREATED,
         Json(json!({ "run": run, "prompt": prompt })),
@@ -413,6 +424,7 @@ async fn milestone(
 async fn approve_milestone(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
     Path((repo, slug, id)): Path<(String, String, String)>,
     body: Option<Json<ApproveBody>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -505,6 +517,8 @@ async fn approve_milestone(
                 cwd,
                 subject,
                 amend,
+                approval.clone(),
+                state.clone(),
             )
             .await
             .map_err(|e| {
@@ -517,10 +531,10 @@ async fn approve_milestone(
         None => None,
     };
     let (sha, committed) = match outcome {
-        None => (
-            crate::git::head_sha(&run.cwd).map_err(|e| anyhow::anyhow!(e))?,
-            false,
-        ),
+        None => {
+            approval.recheck(&state)?;
+            (approval.workspace()?.head.clone(), false)
+        }
         Some(crate::git::CommitOutcome::Committed(sha)) => (sha, true),
         Some(crate::git::CommitOutcome::HookRewrote { sha, files }) => {
             if sha.is_some() && run.milestone_commit != sha {
@@ -536,6 +550,7 @@ async fn approve_milestone(
             return Err(ApiError(StatusCode::CONFLICT, format!("git hooks rewrote {} file(s): {}{more}. The rewritten files are staged; review them in the Changes tab and approve again to include them in the milestone commit.", files.len(), shown.join(", "))));
         }
     };
+    approval.recheck_policy(&state)?;
     let previous = run.clone();
     run.milestone_pending = false;
     run.milestone_review = None;

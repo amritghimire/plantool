@@ -26,7 +26,7 @@ impl Client {
 
     pub fn bare(port: u16) -> Client {
         Client {
-            base: format!("http://127.0.0.1:{port}"),
+            base: format!("http://localhost:{port}"),
             port,
             http: reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(120))

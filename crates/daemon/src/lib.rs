@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod assets;
+pub mod auth;
 pub mod changes;
 pub mod commits;
 pub mod config;
@@ -31,6 +32,7 @@ pub fn init_tracing() {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub auth: Arc<auth::Auth>,
     pub registry: Arc<Registry>,
     pub config: Arc<Config>,
     pub runs: Arc<runs::RunManager>,
@@ -46,6 +48,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         runs.mark_orphans(&s);
     }
     let state = AppState {
+        auth: Arc::new(auth::Auth::new(&config.home, config.port)?),
         registry: registry.clone(),
         config: config.clone(),
         runs,
@@ -84,7 +87,10 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             version: config.version.clone(),
         },
     )?;
-    tracing::info!("plantool daemon listening on http://{addr}");
+    tracing::info!(
+        "plantool daemon listening on http://localhost:{}",
+        config.port
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = shutdown_rx.recv().await;
