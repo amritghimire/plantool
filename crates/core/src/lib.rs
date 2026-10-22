@@ -8,7 +8,7 @@ pub mod stage;
 pub use model::*;
 pub use stage::{transition, Actor, StageError};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const DEFAULT_PORT: u16 = 41200;
 
 pub fn now() -> String {

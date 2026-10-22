@@ -44,7 +44,9 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 fn agent(headers: &HeaderMap) -> bool {
-    headers.contains_key("authorization") || headers.contains_key("x-plantool-run-token")
+    headers.contains_key("authorization")
+        || headers.contains_key("x-plantool-run-token")
+        || headers.contains_key("x-plantool-cli")
 }
 fn cookie(headers: &HeaderMap) -> Option<String> {
     if agent(headers) {
@@ -358,7 +360,14 @@ fn make_binding(
     })
 }
 
-pub async fn guard(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+pub async fn guard(State(state): State<AppState>, mut req: Request<Body>, next: Next) -> Response {
+    match crate::identities::authorize(&state, &req) {
+        Ok(Some(authorized)) => {
+            req.extensions_mut().insert(authorized);
+        }
+        Ok(None) => {}
+        Err(error) => return error.into_response(),
+    }
     let expected_origin = format!("http://localhost:{}", state.config.port);
     let browser =
         req.headers().contains_key("cookie") || req.uri().path().starts_with("/api/auth/");

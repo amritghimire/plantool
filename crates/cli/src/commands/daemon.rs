@@ -31,6 +31,9 @@ pub struct ServeArgs {
 }
 
 pub fn run(a: Args) -> anyhow::Result<()> {
+    if !matches!(a.cmd, DaemonCmd::Status) {
+        crate::client::ensure_owner_process()?;
+    }
     let c = Client::bare(default_port());
     match a.cmd {
         DaemonCmd::Start => {
@@ -42,7 +45,7 @@ pub fn run(a: Args) -> anyhow::Result<()> {
                 println!("no daemon on {}", c.base);
                 return Ok(());
             }
-            let _: serde_json::Value = c.post("/shutdown", &serde_json::json!({}))?;
+            c.shutdown()?;
             println!("stopping daemon on {}", c.base);
         }
         DaemonCmd::Restart { force } => {
@@ -63,7 +66,7 @@ pub fn run(a: Args) -> anyhow::Result<()> {
                 if running > 0 && !force {
                     anyhow::bail!("{running} hosted run(s) are live and would be stopped; finish them or pass --force");
                 }
-                let _: serde_json::Value = c.post("/shutdown", &serde_json::json!({}))?;
+                c.shutdown()?;
                 println!(
                     "stopping daemon {} on {}",
                     h["version"].as_str().unwrap_or(""),
@@ -93,6 +96,7 @@ pub fn run(a: Args) -> anyhow::Result<()> {
 }
 
 pub fn serve(a: ServeArgs) -> anyhow::Result<()> {
+    crate::client::ensure_owner_process()?;
     let mut config = Config::from_env(crate::VERSION);
     if let Some(p) = a.port {
         config.port = p;

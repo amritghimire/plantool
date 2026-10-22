@@ -143,6 +143,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "codex".into());
     let mut cmd = Command::new(&exe);
+    opts.apply_environment(&mut cmd);
     cmd.arg("app-server").arg("--stdio");
     if let Some(effort) = &opts.effort {
         cmd.arg("-c")

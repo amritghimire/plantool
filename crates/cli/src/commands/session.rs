@@ -27,7 +27,7 @@ pub enum Cmd {
         #[arg(long)]
         reason: String,
     },
-    /// Change session context; without --confirm this proposes the change.
+    /// Propose a context change; the owner applies it in the browser.
     Set(ContextArgs),
     /// Propose a context change to the owner.
     Propose(ContextArgs),
@@ -150,10 +150,6 @@ pub struct ContextArgs {
     workspace: Option<PathBuf>,
     #[arg(long)]
     difftool: Option<String>,
-    #[arg(long)]
-    pause_rule: Option<String>,
-    #[arg(long)]
-    confirm: bool,
     #[arg(long, default_value = "")]
     reason: String,
 }
@@ -285,25 +281,6 @@ pub enum CommentCmd {
         #[arg(long)]
         json: bool,
     },
-    Resolve {
-        #[command(flatten)]
-        target: Target,
-        #[arg(long, value_delimiter = ',')]
-        id: Vec<String>,
-        /// Reopen instead of resolving.
-        #[arg(long)]
-        reopen: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    Rm {
-        #[command(flatten)]
-        target: Target,
-        #[arg(long, value_delimiter = ',')]
-        id: Vec<String>,
-        #[arg(long)]
-        json: bool,
-    },
     Context {
         #[command(flatten)]
         target: Target,
@@ -385,8 +362,8 @@ pub fn run(a: Args) -> anyhow::Result<()> {
             )?;
             print_json(&result)
         }
-        Cmd::Set(args) => set_context(&c, args, false),
-        Cmd::Propose(args) => set_context(&c, args, true),
+        Cmd::Set(args) => set_context(&c, args),
+        Cmd::Propose(args) => set_context(&c, args),
         Cmd::Plan {
             cmd: PlanCmd::ProposeRevision { target, reason },
         } => {
@@ -803,39 +780,6 @@ fn comment(c: &Client, cmd: CommentCmd) -> anyhow::Result<()> {
             println!("edited {id}");
             Ok(())
         }
-        CommentCmd::Resolve {
-            target,
-            id,
-            reopen,
-            json,
-        } => {
-            let (key, _) = c.resolve_key(&target.session)?;
-            let v: Value = c.post(
-                &format!("/api/sessions/{key}/comments/resolve"),
-                &json!({ "ids": id, "resolved": !reopen }),
-            )?;
-            if json {
-                return print_json(&v);
-            }
-            println!(
-                "{} {} comment(s)",
-                if reopen { "reopened" } else { "resolved" },
-                v["comments"].as_array().map(|a| a.len()).unwrap_or(0)
-            );
-            Ok(())
-        }
-        CommentCmd::Rm { target, id, json } => {
-            let (key, _) = c.resolve_key(&target.session)?;
-            let v: Value = c.delete(
-                &format!("/api/sessions/{key}/comments"),
-                &json!({ "ids": id }),
-            )?;
-            if json {
-                return print_json(&v);
-            }
-            println!("removed {}", v["removed"]);
-            Ok(())
-        }
         CommentCmd::Context {
             target,
             id,
@@ -876,10 +820,10 @@ fn watch(
         .enable_all()
         .build()?;
     let code = rt.block_on(async move {
-        let (ws, _) = tokio_tungstenite::connect_async(&url)
+        let mut read = c
+            .watch_stream(&url)
             .await
             .context("connecting to the live socket")?;
-        let (_, mut read) = ws.split();
         let deadline =
             timeout.map(|t| tokio::time::Instant::now() + std::time::Duration::from_secs(t));
         loop {
@@ -922,16 +866,8 @@ pub fn open_session(c: &Client, key: &str) {
     open_browser(&c.session_url(key));
 }
 
-fn set_context(c: &Client, args: ContextArgs, propose: bool) -> anyhow::Result<()> {
+fn set_context(c: &Client, args: ContextArgs) -> anyhow::Result<()> {
     let (key, _) = c.resolve_key(&args.target.session)?;
-    let pause_rule = args.pause_rule.map(|s| match s.as_str() {
-        "every-milestone" => json!({"mode":"every-milestone"}),
-        "no-pauses" => json!({"mode":"no-pauses"}),
-        _ => json!({"mode":"plain-language","rule":s}),
-    });
-    if pause_rule.is_some() && (!args.confirm || propose) {
-        bail!("changing the pause rule requires --confirm");
-    }
-    let v: Value = c.post(&format!("/api/sessions/{key}/where"), &json!({"base":args.base,"branch":args.branch,"workspace":args.workspace.map(|p| absolute(&p)),"difftool":args.difftool,"pause_rule":pause_rule,"confirm":args.confirm && !propose,"reason":args.reason}))?;
+    let v: Value = c.post(&format!("/api/sessions/{key}/where"), &json!({"base":args.base,"branch":args.branch,"workspace":args.workspace.map(|p| absolute(&p)),"difftool":args.difftool,"confirm":false,"reason":args.reason}))?;
     print_json(&v)
 }

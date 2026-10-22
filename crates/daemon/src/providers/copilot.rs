@@ -56,6 +56,7 @@ pub async fn run(
         .await;
         let exe = opts.executable.clone().unwrap_or_else(|| "copilot".into());
         let mut cmd = Command::new(&exe);
+        opts.apply_environment(&mut cmd);
         cmd.arg("-p")
             .arg(&prompt)
             .arg("--silent")

@@ -35,5 +35,6 @@ rust-embed.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+tokio-tungstenite.workspace = true
 http-body-util = "0.1"
 webauthn-authenticator-rs = { version = "0.5", default-features = false, features = ["softpasskey"] }

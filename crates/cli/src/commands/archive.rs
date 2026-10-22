@@ -21,9 +21,6 @@ pub struct ImportArgs {
     pub repo: PathBuf,
     #[arg(long)]
     pub workspace: Option<PathBuf>,
-    /// Restore archived approvals; without this the imported plan needs owner review.
-    #[arg(long)]
-    pub confirm: bool,
 }
 pub fn export(args: ExportArgs) -> anyhow::Result<()> {
     let client = Client::connect()?;
@@ -43,9 +40,8 @@ pub fn export(args: ExportArgs) -> anyhow::Result<()> {
 pub fn import(args: ImportArgs) -> anyhow::Result<()> {
     let client = Client::connect()?;
     let mut url = format!(
-        "/api/import?repo={}&confirm={}",
-        urlencode(&absolute(&args.repo).to_string_lossy()),
-        args.confirm
+        "/api/import?repo={}",
+        urlencode(&absolute(&args.repo).to_string_lossy())
     );
     if let Some(workspace) = args.workspace {
         url.push_str(&format!(

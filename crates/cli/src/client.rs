@@ -9,6 +9,7 @@ pub struct Client {
     pub port: u16,
     http: reqwest::blocking::Client,
     author: Option<String>,
+    token: Option<reqwest::header::HeaderValue>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -25,13 +26,25 @@ impl Client {
     }
 
     pub fn bare(port: u16) -> Client {
+        let builder = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(120));
+        #[cfg(unix)]
+        let builder = builder.unix_socket(plantool_daemon::socket::path(&home()));
+        let token = std::env::var_os("PLANTOOL_RUN_TOKEN").map(|value| {
+            // Malformed values still count as credentials and must fail closed.
+            let mut header =
+                reqwest::header::HeaderValue::from_bytes(value.to_string_lossy().as_bytes())
+                    .unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("invalid"));
+            header.set_sensitive(true);
+            header
+        });
         Client {
+            token,
             base: format!("http://localhost:{port}"),
             port,
-            http: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("http client"),
+            http: builder.build().expect("http client"),
             author: std::env::var("PLANTOOL_AUTHOR")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -43,13 +56,49 @@ impl Client {
     }
 
     pub fn health(&self) -> Option<serde_json::Value> {
-        self.http
-            .get(self.url("/health"))
+        let response = self
+            .with_headers(self.http.get(self.url("/health")))
             .timeout(Duration::from_millis(800))
+            .send();
+        if let Ok(response) = response {
+            return response.error_for_status().ok()?.json().ok();
+        }
+        // Owner lifecycle compatibility only: an old TCP-only daemon must still
+        // be discoverable/stoppable during the transport upgrade.
+        if ensure_owner_process().is_err() {
+            return None;
+        }
+        reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(800))
+            .build()
+            .ok()?
+            .get(self.url("/health"))
             .send()
+            .ok()?
+            .error_for_status()
             .ok()?
             .json()
             .ok()
+    }
+
+    pub fn shutdown(&self) -> anyhow::Result<()> {
+        ensure_owner_process()?;
+        if self
+            .post::<serde_json::Value>("/shutdown", &serde_json::json!({}))
+            .is_ok()
+        {
+            return Ok(());
+        }
+        reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()?
+            .post(self.url("/shutdown"))
+            .header("x-plantool-cli", "1")
+            .send()?
+            .error_for_status()?;
+        Ok(())
     }
 
     pub fn ensure_daemon(&self) -> anyhow::Result<()> {
@@ -58,16 +107,18 @@ impl Client {
             if protocol == plantool_core::PROTOCOL_VERSION as u64 {
                 return Ok(());
             }
+            ensure_owner_process()?;
             eprintln!(
                 "plantool: replacing a daemon with protocol {protocol} (need {})",
                 plantool_core::PROTOCOL_VERSION
             );
-            let _ = self.http.post(self.url("/shutdown")).send();
+            self.shutdown()?;
             let start = Instant::now();
             while self.health().is_some() && start.elapsed() < Duration::from_secs(5) {
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
+        ensure_owner_process()?;
         spawn_daemon(self.port)?;
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(15) {
@@ -99,6 +150,10 @@ impl Client {
         &self,
         r: reqwest::blocking::RequestBuilder,
     ) -> reqwest::blocking::RequestBuilder {
+        let mut r = r.header("x-plantool-cli", "1");
+        if let Some(token) = &self.token {
+            r = r.header("x-plantool-run-token", token.clone());
+        }
         match &self.author {
             Some(a) => r.header("x-plantool-author", a),
             None => r,
@@ -117,17 +172,6 @@ impl Client {
     ) -> anyhow::Result<T> {
         let r = self
             .with_headers(self.http.post(self.url(path)).json(body))
-            .send()?;
-        self.check(r)
-    }
-
-    pub fn delete<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &serde_json::Value,
-    ) -> anyhow::Result<T> {
-        let r = self
-            .with_headers(self.http.delete(self.url(path)).json(body))
             .send()?;
         self.check(r)
     }
@@ -189,6 +233,7 @@ pub fn urlencode(s: &str) -> String {
 }
 
 pub fn spawn_daemon(port: u16) -> anyhow::Result<()> {
+    ensure_owner_process()?;
     let exe = std::env::current_exe().context("cannot locate the plantool binary")?;
     let home = default_home();
     std::fs::create_dir_all(&home)?;
@@ -241,5 +286,53 @@ pub fn absolute(p: &Path) -> PathBuf {
         p.to_path_buf()
     } else {
         cwd().join(p)
+    }
+}
+
+/// Lifecycle/bootstrap commands cannot be used from a hosted or sandboxed run.
+pub fn ensure_owner_process() -> anyhow::Result<()> {
+    if std::env::var_os("PLANTOOL_RUN_TOKEN").is_some()
+        || std::env::var("PLANTOOL_SANDBOXED").is_ok_and(|v| v == "1")
+    {
+        bail!("daemon lifecycle and owner setup are unavailable to agent/sandboxed runs");
+    }
+    Ok(())
+}
+
+type WatchStream = std::pin::Pin<
+    Box<
+        dyn futures::Stream<
+                Item = Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            > + Send,
+    >,
+>;
+
+impl Client {
+    pub async fn watch_stream(&self, url: &str) -> anyhow::Result<WatchStream> {
+        use futures::StreamExt;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = url.into_client_request()?;
+        request.headers_mut().insert("x-plantool-cli", "1".parse()?);
+        if let Some(token) = &self.token {
+            // tungstenite and reqwest use compatible http header values.
+            request
+                .headers_mut()
+                .insert("x-plantool-run-token", token.clone());
+        }
+        #[cfg(unix)]
+        {
+            let socket =
+                tokio::net::UnixStream::connect(plantool_daemon::socket::path(&home())).await?;
+            let (ws, _) = tokio_tungstenite::client_async(request, socket).await?;
+            Ok(Box::pin(ws.split().1))
+        }
+        #[cfg(not(unix))]
+        {
+            let (ws, _) = tokio_tungstenite::connect_async(request).await?;
+            Ok(Box::pin(ws.split().1))
+        }
     }
 }
