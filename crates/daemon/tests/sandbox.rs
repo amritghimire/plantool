@@ -268,18 +268,15 @@ async fn sandbox_can_connect_to_the_daemon_unix_socket() {
     let socket = run.join("daemon.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let sandbox = f.sandbox(Role::Agent);
-    let output = f.command(
-        &sandbox,
-        "/usr/bin/curl",
-        &[
-            "--silent",
-            "--max-time",
-            "3",
-            "--unix-socket",
-            socket.to_str().unwrap(),
-            "http://localhost/",
-        ],
-    );
+    let args = [
+        "--silent",
+        "--max-time",
+        "3",
+        "--unix-socket",
+        socket.to_str().unwrap(),
+        "http://localhost/",
+    ];
+    let output = f.command(&sandbox, "/usr/bin/curl", &args);
     let server = async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (mut connection, _) = listener.accept().await.unwrap();
