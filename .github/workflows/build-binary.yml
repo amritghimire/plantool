@@ -92,6 +92,12 @@ jobs:
           & $perl -MLocale::Maketext::Simple -MIPC::Cmd -e 'print "$^X\n"'
           if ($LASTEXITCODE -ne 0) { throw 'Native Perl is missing required OpenSSL build modules' }
           "PERL=$perl" >> $env:GITHUB_ENV
+      - name: Test Unix identities on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo test -p plantool-daemon identities::tests
+          cargo test -p plantool-daemon --test identities --test provider_attachments
+          cargo test -p plantool --test agent_cli
       - name: Package
         shell: bash
         env:

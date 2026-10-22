@@ -36,7 +36,6 @@ plantool new fix-login-timeout --brief "Sessions expire after 5 minutes; see iss
 plantool research fix-login-timeout # or start a hosted research run (claude by default)
 plantool plan fix-login-timeout     # then a plan run; comment inline, approve in the browser
 plantool implement fix-login-timeout
-plantool implement fix-login-timeout --step-by-step
 plantool changes fix-login-timeout  # difftool if installed, else git difftool
 ```
 
@@ -44,8 +43,7 @@ At implementation start, choose **All at once** or **Step by step**. Step by ste
 plan phase and opens the current uncommitted changes for review. With difftool, new human comments
 go to the same agent run so it can fix the current milestone. Resolve the comments in difftool,
 commit the milestone in the session checkout if you want a separate commit, then choose
-**Approve milestone and continue** in the sidebar. The CLI offers the same mode with
-`plantool implement <ref> --step-by-step`.
+**Approve milestone and continue** in the sidebar. Choose elevated permissions, milestone scope and Step by step in the browser with passkey confirmation; CLI run starts use Ask permissions.
 
 ## Install
 
@@ -104,7 +102,7 @@ approve straight away. In that case the agent first writes a task list to
 | `plantool new <slug> [--brief <text> \| --brief-file <path>] [--repo <path>] [--worktree] [--base <branch>] [--mirror]` | Create or reopen a session for the git checkout containing the current directory, and print the prompt for the next stage |
 | `plantool list [--repo .] [--stage <s>]` | The inbox. The browser's list page has a **New session** button with your recent repositories to pick from |
 | `plantool open <ref>` | Open a session in the browser |
-| `plantool research\|plan\|implement <ref> [--provider claude\|codex\|copilot\|ollama] [--model <m>] [--permission ask\|accept-edits\|auto\|allow-all] [--no-worktree] [--resume <run\|last>] [--step-by-step]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context. Ollama requires `--model`. |
+| `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--no-worktree] [--resume <run\|last>]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context. Other providers and elevated permissions are started in the browser. |
 | `plantool critique <ref>` | Have an agent critically review the research or plan and post findings as anchored comments (also the "Review with agent" button) |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
 | `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |
@@ -140,6 +138,7 @@ plantool session stage --session <ref> --set planning
 | `PLANTOOL_AUTHOR` | author name on agent CLI comments | `agent` |
 | `PLANTOOL_PROVIDER` | default hosted-run provider | `claude` |
 | `PLANTOOL_DIFFTOOL_PATH`, `PLANTOOL_CLAUDE_PATH`, `PLANTOOL_CODEX_PATH` | explicit executables | found on `PATH` |
+| `PLANTOOL_RUN_TOKEN` | per-attempt hosted-agent credential (injected by daemon; never a human login) | unset for external Personal executors |
 | `PLANTOOL_LOG` | daemon log filter | `info` |
 
 Hosted-run prompts can be overridden per stage in `~/.plantool/prompts/{research,plan,implement}.md`.
@@ -239,7 +238,7 @@ to include more history, and `--note "…"` for a note in the summary.
 `plantool import session.zip --repo /local/repo [--workspace /local/worktree]` rewrites local
 paths and adds a suffix when the session name already exists. Imported plans need owner review;
 Restoring recorded approvals requires a signed-in browser and a fresh passkey
-confirmation; CLI `--confirm` alone cannot restore them. The browser offers the same zip actions.
+confirmation using **Restore recorded approvals** in the browser import panel. CLI imports always require a new plan review; `--confirm` is no longer accepted.
 
 Browser approvals require a verified passkey. Other local agent APIs remain available
 without a browser session; process and filesystem isolation are separate groundwork.
@@ -249,3 +248,30 @@ it, or start plantool with `PLANTOOL_PORT` set to a free local port. The browser
 and reloads state after a dropped connection. After a restart, stopped agent runs offer Resume.
 Copilot does not expose a sign-in status command: setup reports that sign-in is unverified
 and offers `copilot login`. Claude and Codex use their CLI status commands with bounded checks.
+
+### Agent identity and local transport
+
+The CLI always acts as an agent. On Unix it connects to `$PLANTOOL_HOME/run/daemon.sock`
+(default `~/.plantool/run/daemon.sock`), with a private `0700` run directory and `0600`
+socket. The browser continues using the loopback HTTP port. Windows uses loopback HTTP
+for the CLI; Unix-socket code is compiled only on Unix.
+
+Hosted providers receive a fresh `PLANTOOL_RUN_TOKEN` and the daemon's home/port on each
+run, including resumes. Tokens live only in memory, are scoped to that repo/session/run,
+and are revoked on provider exit, launch failure, cancellation, or daemon restart.
+They cannot access another session or run, approve, change owner policy, create nested
+runs, or stop/restart the daemon. Existing watch streams close when their token is revoked.
+A supplied invalid token is rejected rather than treated as anonymous. The token is sent
+in a header, never in a URL or prompt.
+
+External Personal executors without a token retain agent actions such as writing documents,
+posting comments, proposing context changes, and advancing stages. `session set` and
+`session propose` only propose; apply changes in **Where**. Change global diff settings
+in browser **Settings** and restore archived approvals in the browser import panel.
+There are no CLI approval/confirmation commands. `export` stays available. Owner-terminal
+`setup` remains the one-time passkey bootstrap; hosted/sandbox-marked processes cannot run
+it or daemon lifecycle commands. The actual sandbox is a separate Phase 0 task.
+
+The worker identity primitive passes a random token through inherited fd 0, never a token
+environment variable or command-line argument. Worker credentials have no Personal or
+browser authority; only socket health is available until the Phase 2 contract API exists.

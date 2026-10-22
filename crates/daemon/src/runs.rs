@@ -16,6 +16,7 @@ struct Handle {
 #[derive(Default)]
 pub struct RunManager {
     handles: Mutex<HashMap<String, Handle>>,
+    pub tokens: Arc<crate::identities::RunTokens>,
 }
 
 fn short_id() -> String {
@@ -192,6 +193,20 @@ impl RunManager {
             error: None,
             seq: 0,
         };
+        let credential = self.tokens.issue(crate::identities::RunScope {
+            session: session.key.clone(),
+            attempt: run.id.clone(),
+        });
+        let home = session
+            .store
+            .dir
+            .ancestors()
+            .nth(3)
+            .ok_or_else(|| anyhow::anyhow!("invalid session directory"))?
+            .canonicalize()?;
+        let port = crate::store::read_daemon_info(&home)?
+            .map(|info| info.port)
+            .unwrap_or_else(crate::config::default_port);
         session.upsert_run(run.clone(), |r| LiveEvent::RunStarted { run: r })?;
         if let Some(key) = &run.milestone_key {
             session.milestone_status(key, "building", &run)?;
@@ -209,6 +224,7 @@ impl RunManager {
                 },
             );
         let opts = RunOptions {
+            environment: Some(credential.environment(home, port)),
             cwd: run.cwd.clone(),
             prompt,
             model,
@@ -367,6 +383,7 @@ impl RunManager {
 
         tokio::spawn(async move {
             let result = providers::run_provider(provider, opts, in_rx, ev_tx).await;
+            drop(credential);
             let _ = consumer.await;
             manager
                 .handles

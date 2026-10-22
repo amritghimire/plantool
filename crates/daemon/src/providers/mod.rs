@@ -109,6 +109,7 @@ pub enum RunInput {
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    pub environment: Option<crate::identities::RunEnvironment>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub model: Option<String>,
@@ -117,6 +118,16 @@ pub struct RunOptions {
     pub executable: Option<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
     pub permission_mode: PermissionMode,
+}
+
+impl RunOptions {
+    pub fn apply_environment(&self, command: &mut tokio::process::Command) {
+        // Never inherit the caller's attempt credential in probes or direct tests.
+        command.env_remove("PLANTOOL_RUN_TOKEN");
+        if let Some(environment) = &self.environment {
+            environment.apply(command);
+        }
+    }
 }
 
 pub type EventSink = mpsc::Sender<ProviderEvent>;

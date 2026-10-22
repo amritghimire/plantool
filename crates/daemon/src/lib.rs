@@ -6,12 +6,14 @@ pub mod commits;
 pub mod config;
 pub mod events;
 pub mod git;
+pub mod identities;
 pub mod prompts;
 pub mod providers;
 pub mod registry;
 pub mod routes;
 pub mod runs;
 pub mod security;
+pub mod socket;
 pub mod store;
 pub mod watcher;
 
@@ -78,6 +80,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let app = routes::router(state.clone());
     let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|error| anyhow::anyhow!("Could not start plantool on {addr}: {error}. Run `plantool daemon status` to check the existing daemon, or choose a free port with PLANTOOL_PORT."))?;
+    #[cfg(unix)]
+    let (unix_listener, _socket_file) = socket::bind(&config.home).await?;
     store::write_daemon_info(
         &config.home,
         &store::DaemonInfo {
@@ -91,12 +95,50 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         "plantool daemon listening on http://localhost:{}",
         config.port
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.recv().await;
-            tracing::info!("shutdown requested");
-        })
-        .await?;
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let mut http_stop = stop_rx.clone();
+    let http = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = http_stop.changed().await;
+            })
+            .await
+    });
+    #[cfg(unix)]
+    let unix = {
+        let listener = unix_listener;
+        let app = socket::router(state.clone());
+        let mut stop = stop_rx;
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = stop.changed().await;
+                })
+                .await
+        });
+        task
+    };
+    let _ = shutdown_rx.recv().await;
+    state.runs.tokens.revoke_all();
+    let _ = stop_tx.send(true);
+    // A watch client must not hold the daemon open during a restart.
+    let http_abort = http.abort_handle();
+    if tokio::time::timeout(std::time::Duration::from_secs(2), http)
+        .await
+        .is_err()
+    {
+        http_abort.abort();
+    }
+    #[cfg(unix)]
+    {
+        let abort = unix.abort_handle();
+        if tokio::time::timeout(std::time::Duration::from_secs(2), unix)
+            .await
+            .is_err()
+        {
+            abort.abort();
+        }
+    }
     idle_sweep.abort();
     let _ = store::remove_daemon_info(&config.home);
     Ok(())

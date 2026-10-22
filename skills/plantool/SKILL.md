@@ -7,7 +7,7 @@ description: Drive a plantool session (research → plan → implement) from the
 
 plantool shows your research and plan documents in the user's **browser** with inline comments,
 a stage stepper, and a live view of your run. You drive it through the `plantool session …` CLI
-against a local daemon (`127.0.0.1:41200`, override `PLANTOOL_PORT`). Everything you write shows
+against a local daemon (Unix socket `~/.plantool/run/daemon.sock`, override `PLANTOOL_HOME`; browser `http://localhost:41200`). Everything you write shows
 up in the user's tab as you write it. **Do not drive the browser.**
 
 **The stage skills.** `plantool skill research`, `plantool skill plan` and `plantool skill implement`
@@ -52,7 +52,6 @@ plantool session doc path --session <ref> --kind plan                # where to 
 plantool session comment list --session <ref> --kind human --unresolved --context --json
 plantool session comment add --session <ref> --kind plan --match "<line text>" --body "…"
 plantool session comment apply --session <ref> --input batch.json    # many comments in one write
-plantool session comment resolve --session <ref> --id a,b
 plantool session watch --session <ref> --since <seq> --timeout 600   # block until the human acts
 plantool session goto --session <ref> --kind plan --match "<line text>"   # scroll their tab
 plantool session stage --session <ref> --set planning
@@ -128,4 +127,11 @@ revision state, milestones, completed-task history, and pending context proposal
 and pinned revisions. `--transcripts` and `--revisions` opt in to extra history.
 `plantool import session.zip --repo <path> [--workspace <path>]` rewrites local paths
 and chooses a collision-safe session name. Imported plans need review unless the
-owner explicitly confirms restoring their recorded approvals.
+owner explicitly confirms restoring their recorded approvals in the browser. CLI imports never restore approvals.
+
+Hosted runs inherit `PLANTOOL_RUN_TOKEN`, `PLANTOOL_HOME`, and `PLANTOOL_PORT`.
+Keep them for CLI calls: the token authorizes only your session and run, and expires when
+the run ends. Never print it or put it in a URL. Invalid credentials do not become anonymous.
+The CLI has no human confirmation, thread resolution/removal, or owner settings commands.
+Propose context changes; the owner applies them in the browser. Do not stop or restart
+PlanTool from a hosted/sandboxed run.

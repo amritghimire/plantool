@@ -51,6 +51,7 @@ pub async fn run(
     let exe = opts.executable.clone().unwrap_or_else(|| "claude".into());
     let mut mode = opts.permission_mode;
     let mut cmd = Command::new(&exe);
+    opts.apply_environment(&mut cmd);
     cmd.arg("-p")
         .arg("--input-format")
         .arg("stream-json")

@@ -90,6 +90,7 @@ pub async fn run(
         .await;
         let exe = opts.executable.clone().unwrap_or_else(|| "opencode".into());
         let mut cmd = Command::new(&exe);
+        opts.apply_environment(&mut cmd);
         cmd.arg("run")
             .arg("--format")
             .arg("json")
@@ -225,6 +226,7 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"step_start\",\"sessionID\":\"ses_test\"}' '{\"type\":\"text\",\"sessionID\":\"ses_test\",\"part\":{\"text\":\"Done\"}}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let opts = RunOptions {
+            environment: None,
             cwd: dir.path().into(),
             prompt: "hello".into(),
             model: Some("qwen3:8b".into()),

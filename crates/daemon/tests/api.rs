@@ -1699,7 +1699,7 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
     git(&other, &["init", "-q", "-b", "main"]);
     let request = Request::builder()
         .method("POST")
-        .uri(format!("/api/import?repo={}", other.display()))
+        .uri(format!("/api/import?repo={}&confirm=true", other.display()))
         .header(header::HOST, "127.0.0.1")
         .header(header::CONTENT_TYPE, "application/zip")
         .body(Body::from(bytes))

@@ -32,7 +32,8 @@ async fn native_turns(provider: Provider, reject_steer: bool) {
     let source = match provider {
         Provider::Codex => {
             r#"#!/usr/bin/env python3
-import sys,json
+import sys,json,os
+with open('runenv','w') as f: json.dump({k:os.environ.get(k) for k in ['PLANTOOL_RUN_TOKEN','PLANTOOL_HOME','PLANTOOL_PORT']},f)
 turn=0
 for line in sys.stdin:
  v=json.loads(line); method=v.get('method'); rid=v.get('id')
@@ -51,7 +52,8 @@ for line in sys.stdin:
         }
         Provider::Claude => {
             r#"#!/usr/bin/env python3
-import sys,json
+import sys,json,os
+with open('runenv','w') as f: json.dump({k:os.environ.get(k) for k in ['PLANTOOL_RUN_TOKEN','PLANTOOL_HOME','PLANTOOL_PORT']},f)
 count=0
 for line in sys.stdin:
  v=json.loads(line)
@@ -71,7 +73,25 @@ for line in sys.stdin:
     };
     std::fs::write(&script, source).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let tokens = std::sync::Arc::new(plantool_daemon::identities::RunTokens::default());
+    let lease = tokens.issue(plantool_daemon::identities::RunScope {
+        session: "repo/item".into(),
+        attempt: "attempt".into(),
+    });
+    let environment = lease.environment(root.path().to_path_buf(), 41300);
+    let mut expected = tokio::process::Command::new("unused");
+    environment.apply(&mut expected);
+    let expected_token = expected
+        .as_std()
+        .get_envs()
+        .find(|(key, _)| *key == "PLANTOOL_RUN_TOKEN")
+        .unwrap()
+        .1
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let opts = RunOptions {
+        environment: Some(environment),
         cwd: root.path().to_path_buf(),
         prompt: prompt.clone(),
         model: Some("fixture-model".into()),
@@ -99,6 +119,7 @@ for line in sys.stdin:
             .unwrap()
             .unwrap()
             .unwrap();
+        assert_run_environment(root.path(), &expected_token);
         return;
     }
     next_event(&mut events, |e| {
@@ -118,6 +139,7 @@ for line in sys.stdin:
         .unwrap()
         .unwrap()
         .unwrap();
+    assert_run_environment(root.path(), &expected_token);
     let records: Vec<Value> = std::fs::read_to_string(root.path().join("payloads"))
         .unwrap()
         .lines()
@@ -175,7 +197,8 @@ async fn file_flag_turns(provider: Provider, flag: &str) {
     std::fs::write(
         &script,
         r#"#!/usr/bin/env python3
-import sys,json,time
+import sys,json,time,os
+with open('runenv','w') as f: json.dump({k:os.environ.get(k) for k in ['PLANTOOL_RUN_TOKEN','PLANTOOL_HOME','PLANTOOL_PORT']},f)
 with open('payloads','a') as f: f.write(json.dumps(sys.argv[1:])+'\n')
 time.sleep(0.3)
 print('{}',flush=True)
@@ -183,7 +206,25 @@ print('{}',flush=True)
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let tokens = std::sync::Arc::new(plantool_daemon::identities::RunTokens::default());
+    let lease = tokens.issue(plantool_daemon::identities::RunScope {
+        session: "repo/item".into(),
+        attempt: "attempt".into(),
+    });
+    let environment = lease.environment(root.path().to_path_buf(), 41300);
+    let mut expected = tokio::process::Command::new("unused");
+    environment.apply(&mut expected);
+    let expected_token = expected
+        .as_std()
+        .get_envs()
+        .find(|(key, _)| *key == "PLANTOOL_RUN_TOKEN")
+        .unwrap()
+        .1
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let opts = RunOptions {
+        environment: Some(environment),
         cwd: root.path().to_path_buf(),
         prompt: prompt.clone(),
         model: Some("fixture-model".into()),
@@ -224,6 +265,7 @@ print('{}',flush=True)
         .unwrap()
         .unwrap()
         .unwrap();
+    assert_run_environment(root.path(), &expected_token);
     let records: Vec<Vec<String>> = std::fs::read_to_string(root.path().join("payloads"))
         .unwrap()
         .lines()
@@ -253,4 +295,12 @@ async fn opencode_initial_queued_and_idle_keep_file_flags() {
 #[tokio::test]
 async fn codex_reports_native_image_followup_rejection() {
     native_turns(Provider::Codex, true).await;
+}
+
+fn assert_run_environment(root: &std::path::Path, token: &str) {
+    let value: Value =
+        serde_json::from_slice(&std::fs::read(root.join("runenv")).unwrap()).unwrap();
+    assert!(value["PLANTOOL_RUN_TOKEN"].as_str() == Some(token));
+    assert_eq!(value["PLANTOOL_HOME"].as_str(), root.to_str());
+    assert_eq!(value["PLANTOOL_PORT"], "41300");
 }

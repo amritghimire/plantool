@@ -20,6 +20,9 @@ expect() {
 }
 
 expect "created repo/smoke-test" "$BIN" new smoke-test --title "Smoke" --brief "Make it smoke" --no-open
+case "$(uname -s)" in
+  Linux|Darwin) [ -S "$PLANTOOL_HOME/run/daemon.sock" ] || { echo "FAIL: daemon socket missing"; exit 1; } ;;
+esac
 expect "plantool skill research" "$BIN" session prompt --session smoke-test
 expect "Make it smoke" "$BIN" session prompt --session smoke-test --stage plan
 expect "Make it smoke" "$BIN" session brief --session smoke-test
@@ -40,7 +43,7 @@ WT="$("$BIN" session worktree --session smoke-test)"
 [ -f "$WT/a.txt" ] || { echo "FAIL: worktree missing at $WT"; exit 1; }
 expect "$WT" "$BIN" session get --session smoke-test
 expect smoke-test "$BIN" status
-# A CLI confirmation can no longer grant browser identity.
+# Human confirmation flags are absent from the agent-only CLI.
 if "$BIN" session set --session smoke-test --difftool built-in --confirm 2>/dev/null; then echo "FAIL: agent changed owner settings"; exit 1; fi
 "$BIN" export smoke-test -o "$TMP/session.zip"
 [ -s "$TMP/session.zip" ] || { echo "FAIL: export missing"; exit 1; }
