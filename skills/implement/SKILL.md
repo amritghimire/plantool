@@ -107,5 +107,4 @@ A plain-language pause rule is an agent-judged checkpoint. When it applies, run
 Do not hold a live process while the owner reads slowly; provider context is saved for resume.
 
 To change workspace, branch, base or diff tool, use `plantool session propose` with the
-relevant flag and `--reason`. The owner applies it in the browser or through an explicit
-`session set --confirm`. After a switch, re-read state and the scoped plan before work.
+relevant flag and `--reason`. The owner applies it in the browser with passkey confirmation. After a switch, re-read state and the scoped plan before work.

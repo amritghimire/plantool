@@ -100,5 +100,5 @@ Stop when the human moves on or asks you to stop.
 State assumptions, risks and decisions needed in named sections so they are easy to review.
 Use document or section comments when feedback is broader than a source line.
 To propose changing workspace, branch, base or diff tool, use `plantool session propose`
-with a reason. The owner applies it through the browser or an explicit confirmed CLI command.
+with a reason. The owner applies it through the browser with passkey confirmation.
 Approval guards against honest mistakes, not a hostile agent with local filesystem access.
