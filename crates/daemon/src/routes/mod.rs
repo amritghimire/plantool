@@ -5,6 +5,7 @@ pub mod execution;
 pub mod live;
 pub mod notices;
 pub mod pr;
+pub mod retention;
 pub mod runs;
 pub mod sessions;
 pub mod settings;
@@ -125,6 +126,7 @@ pub fn router(state: AppState) -> Router {
         .merge(archive::routes())
         .merge(live::routes())
         .merge(runs::routes())
+        .merge(retention::routes())
         .merge(settings::routes())
         .merge(where_context::routes())
         .merge(pr::routes());

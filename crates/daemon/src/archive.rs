@@ -158,7 +158,11 @@ pub fn decode(bytes: &[u8]) -> anyhow::Result<Bundle> {
     if content.len() > 64 * 1024 * 1024 {
         anyhow::bail!("archive is too large");
     }
-    let bundle: Bundle = serde_json::from_str(&content)?;
+    let value: serde_json::Value = serde_json::from_str(&content)?;
+    if value["version"].as_u64() != Some(2) {
+        anyhow::bail!("Unsupported archive version; v0 archives cannot be imported into the clean-break database");
+    }
+    let bundle: Bundle = serde_json::from_value(value)?;
     if bundle.version != 2 {
         anyhow::bail!("unsupported archive version");
     }

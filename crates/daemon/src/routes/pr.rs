@@ -405,8 +405,19 @@ async fn create(
         let cwd = session.cwd();
         approval.recheck(&state)?;
         let refspec = format!("{}:refs/heads/{}", approval.workspace()?.head, info.head);
+        let push_intent = crate::database::record_intent(
+            s.store.home(),
+            &s.key,
+            "personal.push",
+            &serde_json::json!({"refspec":refspec,"remote":info.push_remote,"cwd":cwd}),
+        )?;
         git::git(cwd, &["push", "-u", &info.push_remote, &refspec])
             .map_err(|e| bad_request(format!("push failed: {e}")))?;
+        crate::database::finish_intent(
+            s.store.home(),
+            &push_intent,
+            &serde_json::json!({"head":approval.workspace()?.head}),
+        )?;
         let body_path = s.store.dir.join("pr-body.md");
         crate::store::write_atomic(&body_path, body.body.trim().as_bytes())
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -428,7 +439,13 @@ async fn create(
         if body.draft {
             args.push("--draft");
         }
-        if let Err(error) = gh(cwd, &args).await {
+        let intent = crate::database::record_intent(
+            s.store.home(),
+            &s.key,
+            "personal.pr.create",
+            &serde_json::json!({"repository":info.repository,"head":info.head,"base":info.base,"title":body.title,"body":body.body,"draft":body.draft}),
+        )?;
+        let published = if let Err(error) = gh(cwd, &args).await {
             if let Some(found) = lookup(cwd, &info.repository, &info.head, &info.base).await? {
                 found
             } else {
@@ -443,7 +460,13 @@ async fn create(
                         "PR was created but could not be read back; refresh before retrying".into(),
                     )
                 })?
-        }
+        };
+        crate::database::finish_intent(
+            s.store.home(),
+            &intent,
+            &serde_json::to_value(&published).map_err(anyhow::Error::from)?,
+        )?;
+        published
     };
     let session = s.set_pull_request(pr.clone())?;
     Ok(Json(

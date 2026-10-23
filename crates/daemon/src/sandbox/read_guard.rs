@@ -27,6 +27,26 @@ pub fn protected(paths: &Paths) -> Vec<PathBuf> {
             out.push(daemon.join(name));
         }
     }
+    // A clean-break backup contains the same daemon secrets as the active home.
+    for daemon in [home.join(".plantool"), paths.daemon_home.clone()] {
+        if let (Some(parent), Some(name)) = (daemon.parent(), daemon.file_name()) {
+            let prefix = format!("{}.v0-backup-", name.to_string_lossy());
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if name
+                        .to_string_lossy()
+                        .strip_prefix(&prefix)
+                        .is_some_and(|suffix| {
+                            !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                        })
+                    {
+                        out.push(entry.path());
+                    }
+                }
+            }
+        }
+    }
     // Query config only: never invoke a credential helper or evaluate a shell.
     // Includes are resolved by Git, including credential.<url>.helper sections.
     for config in [home.join(".gitconfig"), home.join(".config/git/config")] {

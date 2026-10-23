@@ -39,7 +39,7 @@ One or two lines: what "done" looks like, from the brief.
 ## Tasks
 ### Phase 1: <name>
 - [ ] T1: <task: one concrete, verifiable step>
-- [ ] …
+- [ ] T2: <next concrete step>
 ```
 
 Tasks are checklist items: no architecture essay, no alternatives. Each task is a step
@@ -51,8 +51,7 @@ list and can comment. Give each task a unique stable T<n> key and wait for the o
 
 Before changing task scope during implementation, stop at a safe boundary and run
 `plantool session plan propose-revision --session <ref> --reason "…"`.
-Then edit `plan.md`. The approval pins the previous revision. Added, removed, reworded or
-tasks and renamed phases need the owner's acceptance before another build run.
+Then edit `plan.md`. The approval pins the previous revision. Added, removed or reworded tasks and renamed phases need the owner's acceptance before another build run.
 Checkbox-only draft edits are ignored. Task progress is stored separately from the approved plan.
 
 Use `--scope document` for whole-plan feedback or `--scope section --match "## Heading"`

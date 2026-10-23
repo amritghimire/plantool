@@ -238,6 +238,7 @@ impl RunManager {
         };
         let sandboxed = sandbox.unwrap_or_else(|| previous_run.is_some_and(|r| r.sandboxed));
         let run = Run {
+            pinned: false,
             sandboxed,
             execution_generation: version.generation,
             milestone_key,

@@ -169,6 +169,88 @@ async fn personal_approvals_pin_immutable_content_and_progress_survives_restart(
         StatusCode::OK
     );
     assert_eq!(live.store.task_progress().unwrap().get("T1"), Some(&false));
+    let mut run: plantool_core::Run =
+        serde_json::from_str(include_str!("../../core/tests/fixtures/v0.0.14/run.json")).unwrap();
+    run.id = "pin-fixture".into();
+    live.upsert_run(run.clone(), |run| {
+        plantool_daemon::events::LiveEvent::RunStarted { run }
+    })
+    .unwrap();
+    let pin = format!("/api/sessions/{key}/runs/pin-fixture/pin");
+    let body = json!({"pinned":true});
+    assert_eq!(
+        raw(&app, "POST", &pin, body.clone(), None, None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        raw(
+            &app,
+            "POST",
+            &pin,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&app, "POST", &pin, body.clone()).await;
+    assert_eq!(
+        raw(
+            &app,
+            "POST",
+            &pin,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    live.upsert_run(run, |run| plantool_daemon::events::LiveEvent::RunUpdated {
+        run,
+    })
+    .unwrap();
+    assert!(live.run("pin-fixture").unwrap().pinned);
+    let retention = "/api/settings/retention";
+    let body = json!({"transcript_days":45,"evidence_days":90,"disk_cap_bytes":21474836480u64});
+    assert_eq!(
+        raw(
+            &app,
+            "POST",
+            retention,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&app, "POST", retention, body.clone()).await;
+    assert_eq!(
+        raw(
+            &app,
+            "POST",
+            retention,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        plantool_daemon::retention::policy(&home)
+            .unwrap()
+            .transcript_days,
+        45
+    );
     let db = database::open(&home).unwrap();
     assert_eq!(
         db.query_row("SELECT count(*) FROM plan_tasks", [], |r| r

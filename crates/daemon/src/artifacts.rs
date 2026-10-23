@@ -140,3 +140,37 @@ mod tests {
         assert!(!path(t.path(), &sha).unwrap().exists());
     }
 }
+#[cfg(test)]
+mod consistency_tests {
+    use super::*;
+    #[test]
+    fn failed_revision_commit_leaves_a_sweepable_orphan_but_published_revisions_survive() {
+        let t = tempfile::tempdir().unwrap();
+        let store = crate::store::SessionStore::new(t.path().join("sessions/repo/item"));
+        let text = "# Plan\n";
+        let rev = plantool_core::DocRevision {
+            kind: plantool_core::DocKind::Plan,
+            sha: plantool_core::sha256_hex(text),
+            content: text.into(),
+            captured_at: plantool_core::now(),
+        };
+        assert!(store.save_revision(&rev).is_err());
+        assert!(path(t.path(), &rev.sha).unwrap().is_file());
+        assert_eq!(
+            sweep_orphans(t.path(), crate::database::unix_now() + 3601).unwrap(),
+            1
+        );
+        let mut session: plantool_core::Session =
+            serde_json::from_str(include_str!("../../core/tests/fixtures/v0.0.14/meta.json"))
+                .unwrap();
+        session.repo_slug = "repo".into();
+        session.slug = "item".into();
+        store.save_meta(&session).unwrap();
+        store.save_revision(&rev).unwrap();
+        assert_eq!(
+            sweep_orphans(t.path(), crate::database::unix_now() + 3601).unwrap(),
+            0
+        );
+        assert_eq!(read(t.path(), &rev.sha).unwrap(), text.as_bytes());
+    }
+}

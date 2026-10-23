@@ -96,6 +96,14 @@ async fn sandbox_denies_secret_files_never_sent_files_and_outside_writes() {
     ] {
         denied.push(f.write(f.paths.worktree.join(name)));
     }
+    denied.push(
+        f.write(
+            f.paths
+                .daemon_home
+                .with_file_name("daemon.v0-backup-123")
+                .join("auth/old-secret"),
+        ),
+    );
     let ordinary = f.write(f.paths.worktree.join("ordinary.txt"));
     let sandbox = f.sandbox(Role::Agent);
     let good = f

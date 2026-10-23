@@ -45,6 +45,9 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  retentionPolicy: () => request<{transcript_days:number;evidence_days:number;disk_cap_bytes:number}>("GET","/api/settings/retention"),
+  saveRetentionPolicy: (policy:{transcript_days:number;evidence_days:number;disk_cap_bytes:number}) => request<{ok:boolean}>("POST","/api/settings/retention",policy),
+  pinRun: (key:string,id:string,pinned:boolean) => request<{ok:boolean;pinned:boolean}>("POST",`/api/sessions/${key}/runs/${id}/pin`,{pinned}),
   cleanBreakNotice: () => request<{backup:string|null}>("GET","/api/notices/clean-break"),
   dismissCleanBreakNotice: () => request<{ok:boolean}>("POST","/api/notices/clean-break",{}),
   executionStatus: () => request<{ execution: { stopped: boolean; generation: number }; sandbox_supported: boolean }>("GET", "/api/execution/status"),

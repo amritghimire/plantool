@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum LiveEvent {
+    TaskProgress {
+        task_key: String,
+    },
     CommentAdded {
         comment: Comment,
     },

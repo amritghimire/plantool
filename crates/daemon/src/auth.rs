@@ -175,7 +175,7 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
         return false;
     }
     let path = path.split('?').next().unwrap_or(path);
-    if path == "/api/execution/resume" {
+    if path == "/api/execution/resume" || path.ends_with("/pin") {
         return true;
     }
     if path.starts_with("/api/settings/") {
@@ -292,6 +292,18 @@ fn make_binding(
     };
     if let Some(execution) = &execution {
         data["execution"] = json!(execution);
+    }
+    if path == "/api/settings/retention" {
+        data["retention"] = serde_json::to_value(
+            crate::retention::policy(&state.config.home).map_err(|_| denied())?,
+        )
+        .map_err(|_| denied())?;
+    }
+    if path.ends_with("/pin") {
+        if let Some(id) = parts.get(6) {
+            data["pinned"] =
+                json!(crate::retention::pinned(&state.config.home, id).map_err(|_| denied())?);
+        }
     }
     let mut workspace = None;
     if parts.get(2) == Some(&"sessions") && parts.len() >= 5 {

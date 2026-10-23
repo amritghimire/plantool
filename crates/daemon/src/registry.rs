@@ -365,6 +365,7 @@ impl LiveSession {
         g.state.updated_at = plantool_core::now();
         let seq = g.state.seq;
         let entry = match &event {
+            LiveEvent::TaskProgress { task_key } => Some(("task", format!("{task_key} completed"))),
             LiveEvent::DocRefreshed { kind, .. } => Some(("document", format!("{kind} revised"))),
             LiveEvent::StageChanged { to, .. } => Some(("step", format!("Step changed to {to}"))),
             LiveEvent::CommentAdded { comment } => Some((
@@ -1273,9 +1274,10 @@ impl LiveSession {
         self.lock().runs.get(id).cloned()
     }
 
-    pub fn upsert_run(&self, run: Run, event: fn(Run) -> LiveEvent) -> anyhow::Result<()> {
+    pub fn upsert_run(&self, mut run: Run, event: fn(Run) -> LiveEvent) -> anyhow::Result<()> {
         let mut g = self.lock();
         self.store.save_run(&run)?;
+        run.pinned = crate::retention::pinned(self.store.home(), &run.id)?;
         g.runs.insert(run.id.clone(), run.clone());
         self.broadcast(&mut g, event(run));
         Ok(())
@@ -1283,6 +1285,10 @@ impl LiveSession {
 
     pub fn remove_run(&self, id: &str) -> anyhow::Result<bool> {
         let mut g = self.lock();
+        anyhow::ensure!(
+            !g.runs.get(id).is_some_and(|r| r.pinned),
+            "Unpin this run before deleting its transcript"
+        );
         if g.runs.remove(id).is_none() {
             return Ok(false);
         }
@@ -1383,6 +1389,7 @@ pub struct Registry {
 impl Registry {
     pub fn load(home: PathBuf) -> anyhow::Result<Registry> {
         crate::database::initialize(&home)?;
+        crate::artifacts::sweep_orphans(&home, crate::database::unix_now())?;
         let mut map = BTreeMap::new();
         for (_, _, dir) in store::list_session_dirs(&home)? {
             match LiveSession::open(SessionStore::new(dir.clone())) {
@@ -1647,6 +1654,9 @@ impl Registry {
             run.milestone_review = None;
             run.milestone_pending = false;
             store.save_run(run)?;
+            if run.pinned {
+                crate::retention::set_pin(store.home(), &store.key(), &run.id, true)?;
+            }
         }
         for (id, content) in &bundle.transcripts {
             for line in content.lines().filter(|l| !l.trim().is_empty()) {
@@ -1762,16 +1772,37 @@ impl LiveSession {
             }
             self.broadcast(
                 &mut g,
-                LiveEvent::DocRefreshed {
-                    kind: DocKind::Plan,
-                    sha: plan.sha,
-                    lines: anchor::line_count(&content),
-                    reanchored: 0,
-                    outdated: 0,
+                LiveEvent::TaskProgress {
+                    task_key: key.into(),
                 },
             );
         }
         self.persist_state(&g)?;
+        Ok(())
+    }
+}
+
+impl LiveSession {
+    pub fn reload_metadata(&self) -> anyhow::Result<()> {
+        if let Some(session) = self.store.load_meta()? {
+            let mut g = self.lock();
+            g.session = session.clone();
+            self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        }
+        Ok(())
+    }
+}
+impl LiveSession {
+    pub fn pin_run(&self, id: &str, pinned: bool) -> anyhow::Result<()> {
+        let mut g = self.lock();
+        let run = g
+            .runs
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown run"))?;
+        crate::retention::set_pin(self.store.home(), &self.key, id, pinned)?;
+        run.pinned = pinned;
+        let run = run.clone();
+        self.broadcast(&mut g, LiveEvent::RunUpdated { run });
         Ok(())
     }
 }

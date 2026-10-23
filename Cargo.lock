@@ -1605,6 +1605,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "webauthn-authenticator-rs",
+ "webauthn-rs",
 ]
 
 [[package]]

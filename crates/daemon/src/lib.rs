@@ -13,6 +13,7 @@ pub mod identities;
 pub mod prompts;
 pub mod providers;
 pub mod registry;
+pub mod retention;
 pub mod routes;
 pub mod runs;
 pub mod sandbox;
@@ -47,6 +48,8 @@ pub struct AppState {
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
     let config = Arc::new(config);
+    database::initialize(&config.home)?;
+    database::reconcile_personal(&config.home)?;
     let registry = Arc::new(Registry::load(config.home.clone())?);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
     let runs = Arc::new(runs::RunManager::load(&config.home)?);
@@ -79,6 +82,31 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     });
 
+    let retention_state = state.clone();
+    let retention_job = tokio::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(86400));
+        loop {
+            timer.tick().await;
+            let home = retention_state.config.home.clone();
+            match tokio::task::spawn_blocking(move || retention::run(&home, database::unix_now()))
+                .await
+            {
+                Ok(Ok(report)) => {
+                    for key in report.cleaned_items {
+                        if let Some(session) = retention_state.registry.get_key(&key) {
+                            if let Err(e) = session.reload_metadata() {
+                                tracing::warn!("retention refresh: {e}");
+                            }
+                        }
+                    }
+                    for warning in report.warnings {
+                        tracing::warn!("retention: {warning}");
+                    }
+                }
+                other => tracing::warn!("retention failed: {other:?}"),
+            }
+        }
+    });
     let _watcher = watcher::start(registry.clone(), config.home.clone());
 
     let app = routes::router(state.clone());
@@ -144,6 +172,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     }
     idle_sweep.abort();
+    retention_job.abort();
     let _ = store::remove_daemon_info(&config.home);
     Ok(())
 }

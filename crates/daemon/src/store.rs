@@ -101,7 +101,7 @@ impl SessionStore {
     }
     pub fn save_meta(&self, s: &Session) -> anyhow::Result<()> {
         let mut db = self.db()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let project = plantool_core::sha256_hex(&s.repo.common_dir.to_string_lossy());
         tx.execute(
             "INSERT OR IGNORE INTO projects(id,local_checkout,created_at) VALUES(?1,?2,?3)",
@@ -109,6 +109,15 @@ impl SessionStore {
         )?;
         let changed=tx.execute("INSERT INTO work_items(id,project_id,title,created_at,repo_slug,slug,session_json) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET title=excluded.title,session_json=excluded.session_json WHERE work_items.deleted_at IS NULL",params![self.key(),project,s.title,s.created_at,s.repo_slug,s.slug,serde_json::to_string(s)?])?;
         anyhow::ensure!(changed == 1, "Session has been removed");
+        if let Some(pr) = &s.pull_request {
+            tx.execute("INSERT OR IGNORE INTO external_bindings(local_type,local_id,provider,external_id,url) VALUES('pull_request',?1,'github',?2,?2)",params![self.key(),pr.url])?;
+            if pr.state.eq_ignore_ascii_case("merged") {
+                tx.execute(
+                    "UPDATE work_items SET merged_at=coalesce(merged_at,?2) WHERE id=?1",
+                    params![self.key(), crate::database::unix_now()],
+                )?;
+            }
+        }
         crate::database::audit(
             &tx,
             "daemon",
@@ -133,7 +142,7 @@ impl SessionStore {
     }
     pub fn save_state(&self, s: &State) -> anyhow::Result<()> {
         let mut db = self.db()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let previous: Option<String> = tx
             .query_row(
                 "SELECT state_json FROM work_items WHERE id=?1 AND deleted_at IS NULL",
@@ -197,9 +206,9 @@ impl SessionStore {
             plantool_core::sha256_hex(&rev.content) == rev.sha,
             "Revision checksum mismatch"
         );
-        let sha = crate::artifacts::put(self.home(), rev.content.as_bytes())?;
         let mut db = self.db()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let sha = crate::artifacts::put(self.home(), rev.content.as_bytes())?;
         crate::artifacts::register(&tx, &sha, rev.content.len())?;
         let id = format!("{}:{}:{}", self.key(), rev.kind, sha);
         tx.execute("INSERT OR IGNORE INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) SELECT ?1,?2,?3,coalesce(max(number),0)+1,?4,'agent',?5 FROM revisions WHERE item_id=?2 AND doc_kind=?3",params![id,self.key(),rev.kind.as_str(),sha,rev.captured_at])?;
@@ -234,13 +243,25 @@ impl SessionStore {
     }
     pub fn save_run(&self, run: &Run) -> anyhow::Result<()> {
         let mut db = self.db()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let generation: i64 = tx.query_row(
+            "SELECT coalesce(max(generation),0)+1 FROM attempts WHERE item_id=?1",
+            [self.key()],
+            |r| r.get(0),
+        )?;
         let state = serde_json::to_value(run.status)?
             .as_str()
             .unwrap()
             .to_string();
-        tx.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,ended_at,outcome_json,idempotency_key,run_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?1,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,ended_at=excluded.ended_at,outcome_json=excluded.outcome_json,run_json=excluded.run_json",params![run.id,self.key(),run.task.as_deref().unwrap_or("personal"),run.execution_generation,run.provider.as_str(),state,run.cwd.to_string_lossy(),run.started_at,run.ended_at,serde_json::to_string(&run.error)?,serde_json::to_string(run)?])?;
+        tx.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,ended_at,outcome_json,idempotency_key,run_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?1,?11) ON CONFLICT(id) DO UPDATE SET state=excluded.state,ended_at=excluded.ended_at,outcome_json=excluded.outcome_json,run_json=excluded.run_json",params![run.id,self.key(),run.task.as_deref().unwrap_or("personal"),generation,run.provider.as_str(),state,run.cwd.to_string_lossy(),run.started_at,run.ended_at,serde_json::to_string(&run.error)?,serde_json::to_string(run)?])?;
         tx.execute("INSERT INTO runs_summary(attempt_id,provider,model) VALUES(?1,?2,?3) ON CONFLICT(attempt_id) DO UPDATE SET model=excluded.model",params![run.id,run.provider.as_str(),run.model])?;
+        tx.execute("UPDATE runs_summary SET duration_ms=max(0,coalesce((SELECT cast((julianday(ended_at)-julianday(started_at))*86400000 AS INTEGER) FROM attempts WHERE id=?1),0)) WHERE attempt_id=?1",[&run.id])?;
+        if state == "failed" {
+            tx.execute(
+                "UPDATE work_items SET outcome='failed' WHERE id=?1",
+                [self.key()],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -253,12 +274,20 @@ impl SessionStore {
             .query_map([self.key()], |r| r.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         rows.iter()
-            .map(|s| serde_json::from_str(s).map_err(Into::into))
+            .map(|s| {
+                let mut run: Run = serde_json::from_str(s)?;
+                run.pinned = crate::retention::pinned(self.home(), &run.id)?;
+                Ok(run)
+            })
             .collect()
     }
     pub fn remove_run(&self, id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !crate::retention::pinned(self.home(), id)?,
+            "Unpin this run before deleting its transcript"
+        );
         let mut db = self.db()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute(
             "UPDATE attempts SET hidden=1 WHERE id=?1 AND item_id=?2",
             params![id, self.key()],
@@ -275,9 +304,9 @@ impl SessionStore {
         let value: serde_json::Value = serde_json::from_str(line)?;
         let seq = value["seq"].as_u64().unwrap_or(0);
         let bytes = format!("{line}\n");
-        let sha = crate::artifacts::put(self.home(), bytes.as_bytes())?;
         let mut db = self.db()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let sha = crate::artifacts::put(self.home(), bytes.as_bytes())?;
         crate::artifacts::register(&tx, &sha, bytes.len())?;
         tx.execute(
             "INSERT INTO run_events(attempt_id,seq,content_sha256) VALUES(?1,?2,?3)",
@@ -423,5 +452,16 @@ impl SessionStore {
         )?;
         tx.commit()?;
         Ok(())
+    }
+}
+impl SessionStore {
+    pub fn save_evidence(&self, kind: &str, bytes: &[u8]) -> anyhow::Result<String> {
+        let mut db = self.db()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let sha = crate::artifacts::put(self.home(), bytes)?;
+        crate::artifacts::register(&tx, &sha, bytes.len())?;
+        tx.execute("INSERT INTO artifact_refs(owner_type,owner_id,kind,sha256,created_at) VALUES('evidence',?1,?2,?3,?4) ON CONFLICT(owner_type,owner_id,kind) DO UPDATE SET sha256=excluded.sha256,created_at=excluded.created_at",params![self.key(),kind,sha,crate::database::unix_now()])?;
+        tx.commit()?;
+        Ok(sha)
     }
 }

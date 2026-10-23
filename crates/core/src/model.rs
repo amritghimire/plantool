@@ -475,6 +475,8 @@ pub enum ImplementationMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
     pub sandboxed: bool,
     #[serde(default)]
     pub execution_generation: u64,
