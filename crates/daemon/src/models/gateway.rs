@@ -13,14 +13,18 @@ pub trait Gateway: Send + Sync {
     fn chat<'a>(&'a self, provider: &'a str, body: Value) -> BoxFuture<'a, anyhow::Result<Reply>>;
 }
 pub struct HttpGateway;
-fn base(provider: &str) -> anyhow::Result<&'static str> {
+fn base(provider: &str) -> anyhow::Result<String> {
+    if provider == "ollama" {
+        return Ok(format!("{}/v1", crate::providers::ollama_base_url()));
+    }
     Ok(match provider {
         "openrouter" => "https://openrouter.ai/api/v1",
         "ollama-cloud" => "https://ollama.com/v1",
         "opencode-zen" => "https://opencode.ai/zen/v1",
         "ollama" => "http://localhost:11434/v1",
         _ => anyhow::bail!("Provider is CLI-only or unknown"),
-    })
+    }
+    .to_string())
 }
 #[cfg(target_os = "macos")]
 fn key(provider: &str) -> anyhow::Result<Option<String>> {
@@ -81,6 +85,7 @@ impl Gateway for HttpGateway {
                 return codex_models().await;
             }
             let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(20))
                 .build()?;
             let mut request = client.get(format!("{}/models", base(provider)?));
@@ -99,6 +104,7 @@ impl Gateway for HttpGateway {
     fn chat<'a>(&'a self, provider: &'a str, body: Value) -> BoxFuture<'a, anyhow::Result<Reply>> {
         Box::pin(async move {
             let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(180))
                 .build()?;
             let mut request = client

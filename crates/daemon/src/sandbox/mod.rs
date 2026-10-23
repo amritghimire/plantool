@@ -14,6 +14,8 @@ use std::{
 pub enum Role {
     Agent,
     Reviewer,
+    EosAgent,
+    EosReviewer,
     Worker,
 }
 #[derive(Debug)]
@@ -49,6 +51,12 @@ impl Sandbox {
             (".local/share/opencode/auth.json", "data/opencode/auth.json"),
             (".claude/.credentials.json", "claude/.credentials.json"),
         ] {
+            if role == Role::Worker
+                || (matches!(role, Role::EosAgent | Role::EosReviewer)
+                    && source != ".codex/auth.json")
+            {
+                continue;
+            }
             let source = paths.owner_home.join(source);
             if source.is_file() {
                 let destination = temp.path().join(destination);

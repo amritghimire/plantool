@@ -340,10 +340,18 @@
           "type": "string"
         },
         "status": {
-          "type": "string"
+          "$ref": "#/definitions/CheckStatus"
         }
       },
       "additionalProperties": false
+    },
+    "CheckStatus": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "skipped"
+      ]
     },
     "Dispatch": {
       "type": "object",
@@ -484,16 +492,23 @@
           "minimum": 0.0
         },
         "scope": {
-          "type": "string"
+          "$ref": "#/definitions/FindingScope"
         },
         "severity": {
-          "type": "string"
+          "$ref": "#/definitions/Severity"
         },
         "title": {
           "type": "string"
         }
       },
       "additionalProperties": false
+    },
+    "FindingScope": {
+      "type": "string",
+      "enum": [
+        "in",
+        "out"
+      ]
     },
     "Gate": {
       "type": "object",
@@ -699,6 +714,18 @@
       },
       "additionalProperties": false
     },
+    "ReviewGuide": {
+      "type": "object",
+      "required": [
+        "same_family_warning"
+      ],
+      "properties": {
+        "same_family_warning": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "RoleResult": {
       "type": "object",
       "required": [
@@ -752,6 +779,16 @@
         "outcome": {
           "$ref": "#/definitions/Outcome"
         },
+        "review_guide": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewGuide"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "role": {
           "type": "string"
         },
@@ -766,6 +803,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
     },
     "Start": {
       "type": "object",

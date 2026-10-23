@@ -33,6 +33,27 @@
         inherit system;
         overlays = [ rust-overlay.overlays.default ];
       };
+      uvFor = system:
+        let
+          pkgs = pkgsFor system;
+          manifest = builtins.fromJSON (builtins.readFile ./crates/daemon/src/worker/uv-checksums.json);
+          target = {
+            x86_64-linux = "x86_64-unknown-linux-musl";
+            aarch64-linux = "aarch64-unknown-linux-musl";
+            x86_64-darwin = "x86_64-apple-darwin";
+            aarch64-darwin = "aarch64-apple-darwin";
+          }.${system};
+        in pkgs.stdenvNoCC.mkDerivation {
+          pname = "uv";
+          version = manifest.version;
+          src = pkgs.fetchurl {
+            url = "https://github.com/astral-sh/uv/releases/download/${manifest.version}/uv-${target}.tar.gz";
+            sha256 = manifest.targets.${target};
+          };
+          dontConfigure = true;
+          dontBuild = true;
+          installPhase = "mkdir -p $out/bin; cp uv uvx $out/bin";
+        };
       packageFor = system:
         let
           pkgs = pkgsFor system;
@@ -91,7 +112,7 @@
             })
             nodejs_22
             python312
-            uv
+            (uvFor system)
             sqlite
             gh
             perl

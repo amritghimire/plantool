@@ -122,6 +122,15 @@ pub async fn complete(
             item == context.item && role == context.role && generation == context.generation,
             "Proxy attempt scope mismatch"
         );
+        let blocked: bool = db.query_row(
+            "SELECT coalesce((SELECT quota_pending FROM dispatches WHERE attempt_id=?1),0)",
+            [attempt],
+            |r| r.get(0),
+        )?;
+        anyhow::ensure!(
+            !blocked,
+            "Quota checkpoint pending; this attempt cannot make another model call"
+        );
         anyhow::ensure!(
             lease::owns(home, owner)?,
             "Caller does not hold the coding-run lease"
@@ -215,6 +224,21 @@ pub async fn complete(
             reset: None,
         });
     }
+    let attempt = if let Some(attempt) = attempt {
+        Some(attempt)
+    } else {
+        let id = format!("l_{}", &plantool_core::sha256_hex(&id)[..24]);
+        let mut db = database::open(home)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,idempotency_key,run_json) VALUES(?1,?2,?3,?4,?5,'running',?6,?7,?8,'{}')",params![id,context.item,context.role,context.generation,selected.name,root.to_string_lossy(),plantool_core::now(),format!("llm:{}:{}",context.item,context.idempotency_key)])?;
+        tx.execute(
+            "INSERT INTO runs_summary(attempt_id,provider,model) VALUES(?1,?2,?3)",
+            params![id, selected.route.provider, selected.route.model],
+        )?;
+        tx.execute("INSERT INTO role_families VALUES(?1,?2,?3) ON CONFLICT(item_id,role) DO UPDATE SET family=excluded.family",params![context.item,context.role,router::family(&selected.route.model,&selected.route.provider)])?;
+        tx.commit()?;
+        Some(id)
+    };
     db.execute(
         "INSERT INTO proxy_calls VALUES(?1,?2,?3,'pending',NULL,?4)",
         params![id, attempt, digest, database::unix_now()],
@@ -222,6 +246,7 @@ pub async fn complete(
     body.as_object_mut().unwrap().remove("plantool");
     body["model"] = json!(selected.route.model);
     router::count(home, &selected, 1, 0, database::unix_now())?;
+    let mut request_count = 1u64;
     let execution_generation = execution.status().generation;
     let mut reply = fenced_chat(
         gateway,
@@ -234,6 +259,7 @@ pub async fn complete(
     if reply.as_ref().is_err() || reply.as_ref().is_ok_and(|r| r.status >= 500) {
         if !execution.status().stopped {
             router::count(home, &selected, 1, 0, database::unix_now())?;
+            request_count += 1;
             reply = fenced_chat(
                 gateway,
                 &selected.route.provider,
@@ -253,11 +279,32 @@ pub async fn complete(
     };
     if router::quota(reply.status, &reply.body) || reply.status >= 500 {
         router::exhaust(home, &selected, reply.reset, database::unix_now())?;
+        if let Some(attempt) = &context.attempt_id {
+            db.execute(
+                "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
+                [attempt],
+            )?;
+        }
     }
     let (input, output) = usage(&reply.body);
     router::count(home, &selected, 0, input + output, database::unix_now())?;
-    if let Some(attempt) = attempt {
-        db.execute("UPDATE runs_summary SET requests=requests+1,tokens_in=tokens_in+?2,tokens_out=tokens_out+?3 WHERE attempt_id=?1",params![attempt,input,output])?;
+    if let Some(attempt) = &attempt {
+        db.execute("UPDATE runs_summary SET requests=requests+?4,tokens_in=tokens_in+?2,tokens_out=tokens_out+?3 WHERE attempt_id=?1",params![attempt,input,output,request_count])?;
+        if context.attempt_id.is_none() {
+            db.execute(
+                "UPDATE attempts SET state=?2,ended_at=?3,outcome_json=?4 WHERE id=?1",
+                params![
+                    attempt,
+                    if reply.status < 400 {
+                        "completed"
+                    } else {
+                        "failed"
+                    },
+                    plantool_core::now(),
+                    json!({"status":reply.status,"route":selected.name}).to_string()
+                ],
+            )?;
+        }
     }
     let cached = serde_json::to_vec(
         &json!({"status":reply.status,"body":reply.body,"content_type":reply.content_type}),
@@ -268,12 +315,7 @@ pub async fn complete(
     artifacts::register(&tx, &sha, cached.len())?;
     tx.execute(
         "INSERT INTO artifact_refs VALUES('trace',?1,?2,?3,?4)",
-        params![
-            context.attempt_id.as_deref().unwrap_or(&context.item),
-            id,
-            sha,
-            database::unix_now()
-        ],
+        params![attempt.as_deref().unwrap(), id, sha, database::unix_now()],
     )?;
     tx.execute(
         "UPDATE proxy_calls SET state='completed',response_sha=?2 WHERE id=?1",

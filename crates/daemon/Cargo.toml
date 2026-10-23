@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fs2 = "0.4"
 libc = "0.2"
 shlex = "2"
 base64 = "0.22"

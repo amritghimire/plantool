@@ -102,6 +102,7 @@ impl Fixture {
             checks: vec![],
             findings: vec![],
             next: None,
+            review_guide: None,
         }
     }
 }
@@ -416,6 +417,14 @@ async fn proxy_blocks_never_sent_files_and_caches_replay_without_provider_call()
     .unwrap();
     assert_eq!(first.body, replay.body);
     assert_eq!(gateway.calls.load(Ordering::SeqCst), 1);
+    let (requests, input, output): (u64, u64, u64) = db
+        .query_row(
+            "SELECT requests,tokens_in,tokens_out FROM runs_summary",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((requests, input, output), (1, 2, 3));
 }
 #[tokio::test]
 async fn setup_marks_missing_slugs_unavailable_without_substitution() {
@@ -471,6 +480,8 @@ async fn outbox_crash_after_external_effect_retries_without_duplicate_push_pr_or
         })
         .await;
         assert!(first.is_err());
+        db.execute("UPDATE outbox SET next_attempt_at=0", [])
+            .unwrap();
         dispatcher::deliver_pending(&f.home, &[kind], |_, body| {
             let seen = seen.clone();
             let calls = calls.clone();
@@ -618,4 +629,397 @@ fn quota_detection_does_not_treat_model_discussion_as_provider_exhaustion() {
         r#"{"error":{"code":"insufficient_quota"}}"#
     ));
     assert!(router::quota(429, ""));
+}
+#[test]
+fn budget_reservations_preserve_capacity_and_reset_at_the_daily_window() {
+    let f = Fixture::new();
+    verified(&f);
+    let now = 1_700_000_000;
+    let codex = router::select(&f.home, &f.project, &f.item, "backend", now).unwrap();
+    router::exhaust(&f.home, &codex, Some(now + 172800), now).unwrap();
+    let openrouter = router::select(&f.home, &f.project, &f.item, "cto", now).unwrap();
+    assert_eq!(openrouter.route.provider, "openrouter");
+    router::count(&f.home, &openrouter, 500, 0, now).unwrap();
+    assert_ne!(
+        router::select(&f.home, &f.project, &f.item, "cto", now)
+            .unwrap()
+            .route
+            .provider,
+        "openrouter"
+    );
+    assert_eq!(
+        router::select(&f.home, &f.project, &f.item, "backend", now)
+            .unwrap()
+            .route
+            .provider,
+        "openrouter"
+    );
+    router::count(&f.home, &openrouter, 500, 0, now).unwrap();
+    assert_ne!(
+        router::select(&f.home, &f.project, &f.item, "backend", now)
+            .unwrap()
+            .route
+            .provider,
+        "openrouter"
+    );
+    assert_eq!(
+        router::select(
+            &f.home,
+            &f.project,
+            &f.item,
+            "backend",
+            (now / 86400 + 1) * 86400
+        )
+        .unwrap()
+        .route
+        .provider,
+        "openrouter"
+    );
+}
+#[tokio::test]
+async fn attempt_proxy_requires_lease_and_cannot_call_a_disallowed_or_exhausted_route() {
+    let f = Fixture::new();
+    verified(&f);
+    let reply = dispatcher::admit(&f.home, &f.request(1), 0).unwrap();
+    let selected =
+        router::select(&f.home, &f.project, &f.item, "cto", database::unix_now()).unwrap();
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE attempts SET state='running' WHERE id=?1",
+        [&reply.attempt_id],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE dispatches SET route_json=?2 WHERE attempt_id=?1",
+        params![reply.attempt_id, serde_json::to_string(&selected).unwrap()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO runs_summary(attempt_id,provider,model) VALUES(?1,?2,?3)",
+        params![
+            reply.attempt_id,
+            selected.route.provider,
+            selected.route.model
+        ],
+    )
+    .unwrap();
+    let context = plantool_contract::LlmContext {
+        item: f.item.clone(),
+        role: "backend".into(),
+        generation: 1,
+        attempt_id: Some(reply.attempt_id.clone()),
+        idempotency_key: "quota-call".into(),
+    };
+    let gateway = FakeGateway {
+        calls: AtomicUsize::new(0),
+        status: 429,
+        catalog: vec![],
+    };
+    let life = FakeLifecycle::default();
+    let execution = Arc::new(plantool_daemon::execution::Execution::default());
+    let owner = format!("attempt:{}", reply.attempt_id);
+    let body = json!({"model":"untrusted-override","messages":[]});
+    assert!(proxy::complete(
+        &f.home,
+        &owner,
+        &context,
+        body.clone(),
+        execution.clone(),
+        &gateway,
+        &life
+    )
+    .await
+    .is_err());
+    assert_eq!(gateway.calls.load(Ordering::SeqCst), 0);
+    let _lease = lease::acquire(
+        &f.home,
+        &owner,
+        Some(&reply.attempt_id),
+        lease::Model {
+            route: selected.name.clone(),
+            provider: selected.route.provider.clone(),
+            model: selected.route.model.clone(),
+        },
+        false,
+        0,
+        execution.clone(),
+        &life,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        proxy::complete(
+            &f.home,
+            &owner,
+            &context,
+            body.clone(),
+            execution.clone(),
+            &gateway,
+            &life
+        )
+        .await
+        .unwrap()
+        .status,
+        429
+    );
+    let mut retry = context.clone();
+    retry.idempotency_key = "after-quota".into();
+    assert!(proxy::complete(
+        &f.home,
+        &owner,
+        &retry,
+        body.clone(),
+        execution.clone(),
+        &gateway,
+        &life
+    )
+    .await
+    .is_err());
+    assert_eq!(gateway.calls.load(Ordering::SeqCst), 1);
+    db.execute(
+        "UPDATE dispatches SET quota_pending=0 WHERE attempt_id=?1",
+        [&reply.attempt_id],
+    )
+    .unwrap();
+    db.execute("INSERT INTO project_settings(project_id,version,allowed_providers_json,effective_at,set_by) VALUES(?1,1,'[]','now','test')",[&f.project]).unwrap();
+    assert!(
+        proxy::complete(&f.home, &owner, &retry, body, execution, &gateway, &life)
+            .await
+            .is_err()
+    );
+    assert_eq!(gateway.calls.load(Ordering::SeqCst), 1);
+}
+#[test]
+fn same_family_warning_is_recorded_by_daemon_not_claimed_by_the_agent() {
+    let f = Fixture::new();
+    let reply = dispatcher::admit(&f.home, &f.request(1), 0).unwrap();
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE dispatches SET same_family_warning=1 WHERE attempt_id=?1",
+        [&reply.attempt_id],
+    )
+    .unwrap();
+    dispatcher::report(&f.home, &f.result(&reply.attempt_id, 1)).unwrap();
+    let value: String = db
+        .query_row(
+            "SELECT outcome_json FROM attempts WHERE id=?1",
+            [reply.attempt_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&value).unwrap()["review_guide"]["same_family_warning"],
+        true
+    );
+}
+#[tokio::test]
+async fn lease_queue_orders_urgent_then_sprint_then_fifo_without_same_second_ties() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().to_path_buf();
+    let execution = Arc::new(plantool_daemon::execution::Execution::default());
+    let lifecycle = Arc::new(FakeLifecycle::default());
+    let hold = lease::acquire(
+        &home,
+        "hold",
+        None,
+        model("same"),
+        false,
+        0,
+        execution.clone(),
+        lifecycle.as_ref(),
+    )
+    .await
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+    let mut tasks = vec![];
+    for (id, urgent, order) in [
+        ("z-first", false, 10),
+        ("a-second", false, 10),
+        ("sprint", false, 1),
+        ("urgent", true, 99),
+    ] {
+        let (home, execution, lifecycle, sender) = (
+            home.clone(),
+            execution.clone(),
+            lifecycle.clone(),
+            sender.clone(),
+        );
+        let task_home = home.clone();
+        tasks.push(tokio::spawn(async move {
+            let lease = lease::acquire(
+                &home,
+                id,
+                None,
+                model("same"),
+                urgent,
+                order,
+                execution,
+                lifecycle.as_ref(),
+            )
+            .await
+            .unwrap();
+            sender.send(id).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+            drop(lease);
+        }));
+        for _ in 0..100 {
+            let exists: bool = database::open(&task_home)
+                .unwrap()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM model_queue WHERE id=?1)",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            if exists {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    }
+    drop(hold);
+    let mut order = vec![];
+    for _ in 0..4 {
+        order.push(receiver.recv().await.unwrap());
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    assert_eq!(order, vec!["urgent", "sprint", "z-first", "a-second"]);
+}
+#[tokio::test]
+async fn model_affinity_yields_to_a_waiter_older_than_ten_minutes() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().to_path_buf();
+    let execution = Arc::new(plantool_daemon::execution::Execution::default());
+    let lifecycle = Arc::new(FakeLifecycle::default());
+    let hold = lease::acquire(
+        &home,
+        "hold",
+        None,
+        model("loaded"),
+        false,
+        0,
+        execution.clone(),
+        lifecycle.as_ref(),
+    )
+    .await
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    let mut tasks = vec![];
+    for (id, choice) in [("old", "different"), ("affinity", "loaded")] {
+        let (home, execution, lifecycle, sender) = (
+            home.clone(),
+            execution.clone(),
+            lifecycle.clone(),
+            sender.clone(),
+        );
+        let check = home.clone();
+        tasks.push(tokio::spawn(async move {
+            let lease = lease::acquire(
+                &home,
+                id,
+                None,
+                model(choice),
+                false,
+                0,
+                execution,
+                lifecycle.as_ref(),
+            )
+            .await
+            .unwrap();
+            sender.send(id).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+            drop(lease);
+        }));
+        for _ in 0..100 {
+            let exists: bool = database::open(&check)
+                .unwrap()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM model_queue WHERE id=?1)",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            if exists {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    }
+    database::open(&home)
+        .unwrap()
+        .execute(
+            "UPDATE model_queue SET enqueued_at=?1 WHERE id='old'",
+            [database::unix_now() - 601],
+        )
+        .unwrap();
+    drop(hold);
+    assert_eq!(receiver.recv().await.unwrap(), "old");
+    for task in tasks {
+        task.await.unwrap();
+    }
+}
+#[tokio::test]
+async fn stop_all_persists_cancellation_even_when_the_worker_is_offline() {
+    let f = Fixture::new();
+    let reply = dispatcher::admit(&f.home, &f.request(1), 0).unwrap();
+    let worker = plantool_daemon::worker::WorkerManager::for_home(&f.home);
+    worker.stop().await.unwrap();
+    let db = database::open(&f.home).unwrap();
+    let count: u64 = db
+        .query_row(
+            "SELECT count(*) FROM outbox WHERE kind='worker.cancel'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(worker.availability().available == false);
+    assert!(!reply.attempt_id.is_empty());
+}
+#[test]
+fn next_attempt_uses_verified_wip_without_crossing_a_plan_revision() {
+    let f = Fixture::new();
+    let first = dispatcher::admit(&f.home, &f.request(1), 0).unwrap();
+    let wip = f.root.parent().unwrap().join("wip");
+    plantool_daemon::git::git(
+        &f.root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            &wip.to_string_lossy(),
+            "HEAD",
+        ],
+    )
+    .unwrap();
+    std::fs::write(wip.join("built.txt"), "verified work\n").unwrap();
+    plantool_daemon::git::git(&wip, &["add", "built.txt"]).unwrap();
+    plantool_daemon::git::git(&wip, &["commit", "-m", "WIP"]).unwrap();
+    let commit = plantool_daemon::git::git(&wip, &["rev-parse", "HEAD"]).unwrap();
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE attempts SET worktree=?2 WHERE id=?1",
+        params![first.attempt_id, wip.to_string_lossy()],
+    )
+    .unwrap();
+    let mut result = f.result(&first.attempt_id, 1);
+    result.outcome = Outcome::NeedsFix;
+    result.artifacts.push(plantool_contract::Artifact {
+        kind: "commit".into(),
+        reference: commit.clone(),
+    });
+    dispatcher::report(&f.home, &result).unwrap();
+    let default = plantool_daemon::git::git(&f.root, &["rev-parse", "HEAD"]).unwrap();
+    assert_eq!(
+        dispatcher::runtime::handoff_base(&f.home, &f.request(2), &default).unwrap(),
+        commit
+    );
+    let mut changed = f.request(2);
+    changed.plan_sha = "0".repeat(64);
+    assert_eq!(
+        dispatcher::runtime::handoff_base(&f.home, &changed, &default).unwrap(),
+        default
+    );
 }

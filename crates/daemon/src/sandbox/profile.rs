@@ -57,7 +57,7 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
         home.join(".npm"),
         home.join("Library/Caches"),
     ];
-    if role == Role::Agent {
+    if matches!(role, Role::Agent | Role::EosAgent) {
         writable.push(root.clone());
     }
     if role == Role::Worker {
@@ -87,6 +87,14 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
     let mut text = format!("(version 1)\n(allow default)\n(deny file-link)\n(deny file-write* (require-not (require-any {exceptions})))\n");
     let mut denied = super::read_guard::protected(paths);
     denied.extend(policy.protected_targets(&root)?);
+    if matches!(role, Role::Worker | Role::EosAgent | Role::EosReviewer) {
+        denied.push(home.join(".local/share/opencode"));
+        denied.push(home.join(".config/opencode"));
+        denied.push(home.join(".claude"));
+        if role == Role::Worker {
+            denied.push(home.join(".codex"));
+        }
+    }
     for p in denied {
         text.push_str(&format!(
             "(deny file-read* file-write* (subpath {}))\n",
@@ -102,18 +110,24 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
             format!("\"{}\"", expression.replace('"', "\\\""))
         ));
     }
-    if role != Role::Agent {
+    if !matches!(role, Role::Agent | Role::EosAgent) {
         text.push_str(&format!("(deny file-write* (subpath {}))\n", path(&root)?));
     }
     text.push_str("(deny mach-lookup (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.securityd\"))\n");
-    for p in [
-        home.join(".codex/auth.json"),
-        home.join(".local/share/opencode/auth.json"),
+    let mut readable = vec![
         PathBuf::from("/nix/store"),
         PathBuf::from("/nix/var/nix/daemon-socket/socket"),
-    ] {
+    ];
+    if role != Role::Worker {
+        readable.push(home.join(".codex/auth.json"));
+    }
+    if matches!(role, Role::Agent | Role::Reviewer) {
+        readable.push(home.join(".local/share/opencode/auth.json"));
+    }
+    for p in readable {
         text.push_str(&format!("(allow file-read* (subpath {}))\n", path(&p)?));
     }
+
     Ok(text)
 }
 #[cfg(test)]

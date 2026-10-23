@@ -5,6 +5,7 @@ pub mod auth;
 pub mod changes;
 pub mod commits;
 pub mod config;
+mod daemon_lock;
 pub mod database;
 pub mod dispatcher;
 pub mod events;
@@ -51,6 +52,7 @@ pub struct AppState {
 }
 
 pub async fn serve(config: Config) -> anyhow::Result<()> {
+    let _home_lock = daemon_lock::DaemonLock::acquire(&config.home)?;
     let config = Arc::new(config);
     database::initialize(&config.home)?;
     supervision::reconcile(&config.home)?;

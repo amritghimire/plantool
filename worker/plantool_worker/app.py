@@ -27,6 +27,7 @@ class Store:
     def __init__(self, path: Path):
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
         with self.db() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS bridge_threads(id TEXT PRIMARY KEY, graph_version INTEGER NOT NULL, state TEXT NOT NULL, interrupt_id TEXT, result TEXT);
@@ -34,6 +35,7 @@ class Store:
             """)
     def db(self):
         db = sqlite3.connect(self.path, timeout=5)
+        self.path.chmod(0o600)
         db.execute("PRAGMA journal_mode=WAL")
         return db
     def thread(self, name):
@@ -152,7 +154,9 @@ def create_app(home: Path, token: str, transport=None):
         async with lock(request.thread_id):
             receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
-            store.thread(request.thread_id)
+            current = store.thread(request.thread_id)
+            if current and current["state"] in ("completed","cancelled"):
+                return store.save(request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
             return store.save(request.thread_id,"cancelled",None,None,request.idempotency_key)
     return app
 

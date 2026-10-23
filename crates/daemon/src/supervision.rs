@@ -47,9 +47,11 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
     };
     if rows.is_empty() {
         crate::database::set(&db, "model_recovery_fence", &false)?;
+        crate::database::set(&db, "worker_recovery_fence", &false)?;
         return Ok(());
     }
     let mut fenced = false;
+    let mut worker_fenced = false;
     #[cfg(unix)]
     let groups = {
         let result = std::process::Command::new("/bin/ps")
@@ -67,7 +69,11 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
     for (id, pid) in rows {
         #[cfg(unix)]
         if groups.contains(&pid) {
-            fenced = true;
+            if id == "worker" {
+                worker_fenced = true;
+            } else {
+                fenced = true;
+            }
             continue;
         }
         #[cfg(not(unix))]
@@ -79,5 +85,6 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
         db.execute("DELETE FROM supervised_processes WHERE id=?1", [id])?;
     }
     crate::database::set(&db, "model_recovery_fence", &fenced)?;
+    crate::database::set(&db, "worker_recovery_fence", &worker_fenced)?;
     Ok(())
 }

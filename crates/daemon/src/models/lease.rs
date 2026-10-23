@@ -24,7 +24,10 @@ impl Lifecycle for Ollama {
                 .no_proxy()
                 .timeout(Duration::from_secs(15))
                 .build()?
-                .post("http://localhost:11434/api/generate")
+                .post(format!(
+                    "{}/api/generate",
+                    crate::providers::ollama_base_url()
+                ))
                 .json(&serde_json::json!({"model":model,"keep_alive":0}))
                 .send()
                 .await?
@@ -112,7 +115,7 @@ pub async fn acquire(
                 let preferred = previous.as_ref().map(|m| m.model.as_str()).unwrap_or("");
                 // Urgency and sprint order win. Model affinity only reorders peers and
                 // is disabled once a peer has waited ten minutes.
-                tx.query_row("SELECT id FROM model_queue WHERE (urgent,sprint_order)=(SELECT urgent,sprint_order FROM model_queue ORDER BY urgent DESC,sprint_order,enqueued_at,id LIMIT 1) ORDER BY CASE WHEN ?2-(SELECT min(enqueued_at) FROM model_queue)>=600 THEN 0 WHEN model=?1 THEN 0 ELSE 1 END,enqueued_at,id LIMIT 1",params![preferred,database::unix_now()],|r|r.get::<_,String>(0)).optional()?
+                tx.query_row("SELECT id FROM model_queue WHERE (urgent,sprint_order)=(SELECT urgent,sprint_order FROM model_queue ORDER BY urgent DESC,sprint_order,enqueued_at,rowid LIMIT 1) ORDER BY CASE WHEN ?2-(SELECT min(enqueued_at) FROM model_queue)>=600 THEN 0 WHEN model=?1 THEN 0 ELSE 1 END,enqueued_at,rowid LIMIT 1",params![preferred,database::unix_now()],|r|r.get::<_,String>(0)).optional()?
             } else {
                 None
             };

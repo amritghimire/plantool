@@ -6,6 +6,8 @@ pub struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Print the JSON Schema for a typed attempt report.
+    Schema,
     Report {
         #[arg(long)]
         file: std::path::PathBuf,
@@ -13,6 +15,10 @@ enum Command {
 }
 pub fn run(args: Args) -> anyhow::Result<()> {
     match args.command {
+        Command::Schema => {
+            print!("{}", plantool_contract::result_schema());
+            Ok(())
+        }
         Command::Report { file } => {
             anyhow::ensure!(
                 std::env::var_os("PLANTOOL_RUN_TOKEN").is_some(),

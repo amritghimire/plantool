@@ -10,7 +10,12 @@ pub struct Route {
     pub provider: String,
     pub model: String,
     #[serde(default)]
-    pub budget: Option<serde_json::Value>,
+    pub budget: Option<RouteBudget>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteBudget {
+    pub window: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,6 +279,12 @@ pub fn exhaust(
 pub fn quota(status: u16, body: &str) -> bool {
     if status == 429 {
         return true;
+    }
+    if body.lines().any(|line| line.starts_with("data:")) {
+        return body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .any(|chunk| quota(status, chunk.trim()));
     }
     let value = serde_json::from_str::<serde_json::Value>(body).ok();
     let text = if let Some(value) = value {

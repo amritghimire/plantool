@@ -103,12 +103,20 @@ pub struct Artifact {
     #[serde(rename = "ref")]
     pub reference: String,
 }
+macro_rules! wire_enum {($name:ident {$($variant:ident=>$text:literal),*})=>{
+ #[derive(Debug,Clone,Serialize,Deserialize,JsonSchema,PartialEq,Eq)]
+ pub enum $name {$(#[serde(rename=$text)] $variant),*}
+ impl $name {pub fn as_str(&self)->&'static str{match self{$(Self::$variant=>$text),*}}}
+};}
+wire_enum!(CheckStatus {Pass=>"pass",Fail=>"fail",Skipped=>"skipped"});
+wire_enum!(Severity {High=>"high",Medium=>"medium",Low=>"low"});
+wire_enum!(FindingScope {In=>"in",Out=>"out"});
 wire!(Check {
     name: String,
-    status: String,
+    status: CheckStatus,
     evidence: String
 });
-wire!(Finding {severity:String, scope:String, title:String, detail:String, file:Option<String>, line:Option<u32>});
+wire!(Finding {severity:Severity, scope:FindingScope, title:String, detail:String, file:Option<String>, line:Option<u32>});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -117,7 +125,10 @@ pub enum Outcome {
     Blocked,
     Failed,
 }
-wire!(RoleResult {item:String, role:String, attempt_id:String, generation:u64, outcome:Outcome, summary:String, tasks_done:Vec<String>, artifacts:Vec<Artifact>, checks:Vec<Check>, findings:Vec<Finding>, next:Option<String>});
+wire!(ReviewGuide {
+    same_family_warning: bool
+});
+wire!(RoleResult {item:String, role:String, attempt_id:String, generation:u64, outcome:Outcome, summary:String, tasks_done:Vec<String>, artifacts:Vec<Artifact>, checks:Vec<Check>, findings:Vec<Finding>, next:Option<String>, review_guide:Option<ReviewGuide>});
 wire!(LlmContext {item:String, role:String, generation:u64, attempt_id:Option<String>, idempotency_key:String});
 /// Schema roots include every request and response, not just the graph entrypoints.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -144,6 +155,12 @@ pub fn schema() -> String {
     format!(
         "{}\n",
         serde_json::to_string_pretty(&schemars::schema_for!(Contract)).unwrap()
+    )
+}
+pub fn result_schema() -> String {
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&schemars::schema_for!(RoleResult)).unwrap()
     )
 }
 #[cfg(test)]

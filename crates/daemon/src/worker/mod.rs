@@ -30,6 +30,12 @@ impl Default for Availability {
         }
     }
 }
+#[derive(Debug, thiserror::Error)]
+#[error("Worker returned {status}: {detail}")]
+pub struct CallError {
+    pub status: u16,
+    pub detail: String,
+}
 #[derive(Default)]
 pub struct WorkerManager {
     state: Mutex<Availability>,
@@ -63,7 +69,12 @@ impl WorkerManager {
         {
             let result = self.launch(state).await;
             if let Err(e) = &result {
-                self.unavailable(e)
+                if !e
+                    .downcast_ref::<CallError>()
+                    .is_some_and(|e| matches!(e.status, 400 | 404 | 409 | 422))
+                {
+                    self.unavailable(e)
+                }
             }
             result
         }
@@ -81,6 +92,8 @@ impl WorkerManager {
         let home = &state.config.home;
         if crate::database::get::<bool>(&crate::database::open(home)?, "model_recovery_fence")?
             .unwrap_or(false)
+            || crate::database::get::<bool>(&crate::database::open(home)?, "worker_recovery_fence")?
+                .unwrap_or(false)
         {
             crate::supervision::reconcile(home)?;
         }
@@ -88,6 +101,11 @@ impl WorkerManager {
             !crate::database::get::<bool>(&crate::database::open(home)?, "model_recovery_fence")?
                 .unwrap_or(false),
             "An old process group is unresolved; stop it before repairing"
+        );
+        anyhow::ensure!(
+            !crate::database::get::<bool>(&crate::database::open(home)?, "worker_recovery_fence")?
+                .unwrap_or(false),
+            "An old worker process is unresolved; stop it before repairing"
         );
         let dir = unpack(home, &state.config.version)?;
         let python = if let Some(path) = option_env!("PLANTOOL_PACKAGED_WORKER_PYTHON") {
@@ -117,6 +135,13 @@ impl WorkerManager {
             dir.join(".venv/bin/python")
         };
         std::fs::create_dir_all(home.join("worker-state"))?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                home.join("worker-state"),
+                std::fs::Permissions::from_mode(0o700),
+            )?;
+        }
         std::fs::create_dir_all(home.join("run"))?;
         let socket = home.join("run/worker.sock");
         if let Ok(meta) = std::fs::symlink_metadata(&socket) {
@@ -221,11 +246,26 @@ impl WorkerManager {
                 } else {
                     worker.client.get(url)
                 };
-                Ok(request.send().await?.error_for_status()?.json().await?)
+                let response = request.send().await?;
+                let status = response.status();
+                if !status.is_success() {
+                    let detail = response.text().await?;
+                    return Err(CallError {
+                        status: status.as_u16(),
+                        detail,
+                    }
+                    .into());
+                }
+                Ok(response.json().await?)
             }
             .await;
             if let Err(e) = &result {
-                self.unavailable(e)
+                if !e
+                    .downcast_ref::<CallError>()
+                    .is_some_and(|e| matches!(e.status, 400 | 404 | 409 | 422))
+                {
+                    self.unavailable(e)
+                }
             }
             result
         }
@@ -235,23 +275,53 @@ impl WorkerManager {
             anyhow::bail!("Worker unavailable on this platform")
         }
     }
+    pub fn for_home(home: &Path) -> Self {
+        Self {
+            home: Mutex::new(Some(home.into())),
+            ..Default::default()
+        }
+    }
     pub async fn stop(&self) -> anyhow::Result<()> {
         #[cfg(unix)]
         {
             let mut running = self.running.lock().await;
-            if let Some(worker) = running.as_mut() {
-                let home = self.home.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                if let Some(home) = home {
-                    let threads = {
-                        let db = database::open(&home)?;
-                        let mut q=db.prepare("SELECT DISTINCT json_extract(payload_json,'$.thread_id') FROM outbox WHERE kind LIKE 'worker.%' AND json_extract(payload_json,'$.thread_id') IS NOT NULL")?;
-                        let rows = q
-                            .query_map([], |r| r.get::<_, String>(0))?
-                            .collect::<Result<Vec<_>, _>>()?;
-                        rows
+            let home = self.home.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Some(home) = home {
+                let threads = {
+                    let db = database::open(&home)?;
+                    let mut q=db.prepare("SELECT DISTINCT thread_id FROM dispatches UNION SELECT DISTINCT json_extract(payload_json,'$.thread_id') FROM outbox WHERE kind LIKE 'worker.%' AND json_extract(payload_json,'$.thread_id') IS NOT NULL")?;
+                    let rows = q
+                        .query_map([], |r| r.get::<_, String>(0))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    rows
+                };
+                for thread in threads {
+                    let payload = serde_json::json!({"thread_id":thread,"idempotency_key":format!("stop:{thread}:{}",database::unix_now())});
+                    let id = {
+                        let mut db = database::open(&home)?;
+                        let tx =
+                            db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                        let id =
+                            crate::dispatcher::enqueue(&tx, &thread, "worker.cancel", &payload)?;
+                        tx.commit()?;
+                        id
                     };
-                    for thread in threads {
-                        let _=worker.client.post("http://localhost/internal/v1/cancel").json(&serde_json::json!({"thread_id":thread,"idempotency_key":format!("stop:{thread}:{}",database::unix_now())})).send().await;
+                    if let Some(worker) = running.as_ref() {
+                        if let Ok(response) = worker
+                            .client
+                            .post("http://localhost/internal/v1/cancel")
+                            .json(&payload)
+                            .send()
+                            .await
+                        {
+                            if response.status().is_success() {
+                                database::finish_intent(
+                                    &home,
+                                    &id,
+                                    &serde_json::json!({"cancelled":true}),
+                                )?;
+                            }
+                        }
                     }
                 }
             }

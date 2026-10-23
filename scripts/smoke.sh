@@ -62,4 +62,8 @@ expect smoke-test-import-1 "$BIN" import "$TMP/session.zip" --repo "$TMP/repo"
 expect '"proposed": true' "$BIN" session propose --session smoke-test --base HEAD --reason "Smoke proposal"
 expect '"paused": true' "$BIN" session pause --session smoke-test --reason "Smoke checkpoint"
 if "$BIN" settings difftool built-in --confirm 2>/dev/null; then echo "FAIL: agent changed global settings"; exit 1; fi
+# Personal does not bootstrap or depend on the Engineering OS worker.
+[ ! -d "$PLANTOOL_HOME/worker" ] || { echo "FAIL: Personal unpacked a worker"; exit 1; }
+[ ! -f "$PLANTOOL_HOME/worker-state/checkpoints.db" ] || { echo "FAIL: Personal opened worker checkpoints"; exit 1; }
+expect 'same_family_warning' "$BIN" attempt schema
 echo "smoke ok on port $PORT"

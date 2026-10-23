@@ -89,13 +89,10 @@ class Cancel(BaseModel):
     thread_id: str
 
 
-class Check(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    evidence: str
-    name: str
-    status: str
+class CheckStatus(str, Enum):
+    pass_ = 'pass'
+    fail = 'fail'
+    skipped = 'skipped'
 
 
 class Dispatch(BaseModel):
@@ -141,16 +138,9 @@ class FileProposal(BaseModel):
     title: str
 
 
-class Finding(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    detail: str
-    file: str | None = None
-    line: conint(ge=0) | None = None
-    scope: str
-    severity: str
-    title: str
+class FindingScope(str, Enum):
+    in_ = 'in'
+    out = 'out'
 
 
 class Gate(BaseModel):
@@ -241,21 +231,17 @@ class Resume(BaseModel):
     value: Any
 
 
-class RoleResult(BaseModel):
+class ReviewGuide(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    artifacts: list[Artifact]
-    attempt_id: str
-    checks: list[Check]
-    findings: list[Finding]
-    generation: conint(ge=0)
-    item: str
-    next: str | None = None
-    outcome: Outcome
-    role: str
-    summary: str
-    tasks_done: list[str]
+    same_family_warning: bool
+
+
+class Severity(str, Enum):
+    high = 'high'
+    medium = 'medium'
+    low = 'low'
 
 
 class Start(BaseModel):
@@ -341,11 +327,6 @@ class Contract12(BaseModel):
     type: Type11
 
 
-class Contract13(BaseModel):
-    body: RoleResult
-    type: Type12
-
-
 class Contract14(BaseModel):
     body: FileProposal
     type: Type13
@@ -359,6 +340,50 @@ class Contract15(BaseModel):
 class Contract16(BaseModel):
     body: LlmContext
     type: Type15
+
+
+class Check(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    evidence: str
+    name: str
+    status: CheckStatus
+
+
+class Finding(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    detail: str
+    file: str | None = None
+    line: conint(ge=0) | None = None
+    scope: FindingScope
+    severity: Severity
+    title: str
+
+
+class RoleResult(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    artifacts: list[Artifact]
+    attempt_id: str
+    checks: list[Check]
+    findings: list[Finding]
+    generation: conint(ge=0)
+    item: str
+    next: str | None = None
+    outcome: Outcome
+    review_guide: ReviewGuide | None = None
+    role: str
+    summary: str
+    tasks_done: list[str]
+
+
+class Contract13(BaseModel):
+    body: RoleResult
+    type: Type12
 
 
 class Contract(

@@ -56,6 +56,15 @@ pub fn admit(
             request.generation == generation + 1,
             "Stale dispatch generation"
         );
+        let unresolved: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state='recovery_needed')",
+            [&request.item],
+            |r| r.get(0),
+        )?;
+        anyhow::ensure!(
+            !unresolved,
+            "This item has an unresolved recovery-needed attempt; owner review is required"
+        );
         let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle'))",[&request.item],|r|r.get(0))?;
         anyhow::ensure!(!active, "Another attempt is active for this item");
         let id = format!("a_{}", uuid::Uuid::new_v4().simple());
@@ -93,7 +102,10 @@ pub fn enqueue(
     Ok(id)
 }
 pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
-    let body = serde_json::to_value(result)?;
+    let mut body = serde_json::to_value(result)?;
+    let mut claim = body.clone();
+    claim.as_object_mut().unwrap().remove("review_guide");
+    let request_digest = plantool_core::sha256_hex(&claim.to_string());
     let db = database::open(home)?;
     let (item_id, role, generation, worktree): (String, String, u64, String) = db.query_row(
         "SELECT item_id,role,generation,worktree FROM attempts WHERE id=?1",
@@ -104,6 +116,12 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
         item_id == result.item && role == result.role && generation == result.generation,
         "Result scope/generation mismatch"
     );
+    let warning: bool = db.query_row(
+        "SELECT same_family_warning FROM dispatches WHERE attempt_id=?1",
+        [&result.attempt_id],
+        |r| r.get(0),
+    )?;
+    body["review_guide"] = json!({"same_family_warning":warning});
     for artifact in &result.artifacts {
         if artifact.kind == "commit" {
             anyhow::ensure!(
@@ -152,6 +170,10 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
         anyhow::ensure!(current==result.generation,"Stale result generation");
         let status=if matches!(result.outcome,Outcome::Failed){"failed"}else{"completed"};
         tx.execute("UPDATE attempts SET state=?2,outcome_json=?3,ended_at=?4 WHERE id=?1",params![result.attempt_id,status,body.to_string(),plantool_core::now()])?;
+        if !result.tasks_done.is_empty(){
+            let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id JOIN dispatches d ON d.attempt_id=?2 WHERE i.id=?1 AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0 AND r.content_sha256=json_extract(d.request_json,'$.plan_sha'))",params![result.item,result.attempt_id],|r|r.get(0))?;
+            anyhow::ensure!(valid,"Plan scope changed; task progress needs fresh approval");
+        }
         for key in &result.tasks_done {
             let approved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2)",params![result.item,key],|r|r.get(0))?;
             anyhow::ensure!(approved,"Result references an unapproved task");
@@ -161,10 +183,10 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
         let resume=plantool_contract::Resume{thread_id:thread,interrupt_id:interrupt,value:body.clone(),idempotency_key:format!("result:{}:{}",result.attempt_id,result.generation),contract_version:plantool_contract::CONTRACT_VERSION,graph_version:plantool_contract::GRAPH_VERSION};
         enqueue(tx,&result.item,"worker.resume",&serde_json::to_value(resume)?)?;
         database::audit(tx,"agent","attempt.result",&result.attempt_id,&body)?;
-        Ok(json!({"accepted":true,"digest":plantool_core::sha256_hex(&body.to_string())}))
-    }).and_then(|receipt|{anyhow::ensure!(receipt["digest"]==plantool_core::sha256_hex(&body.to_string()),"Result replay changed payload");Ok(receipt)})
+        Ok(json!({"accepted":true,"digest":request_digest}))
+    }).and_then(|receipt|{anyhow::ensure!(receipt["digest"]==request_digest,"Result replay changed payload");Ok(receipt)})
 }
-/// Only daemon-owned, known process groups may be killed during recovery.
+/// Read a process start stamp without signalling it or reading its environment.
 pub fn process_stamp(pid: u32) -> anyhow::Result<String> {
     let out = std::process::Command::new("/bin/ps")
         .args(["-p", &pid.to_string(), "-o", "lstart="])
@@ -209,6 +231,7 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
                 checks: vec![],
                 findings: vec![],
                 next: None,
+                review_guide: None,
             };
             report(home, &result)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -224,6 +247,12 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
             tx.commit()?;
         }
     }
+    db.execute("UPDATE attempts SET state='recovery_needed',ended_at=?1 WHERE id IN(SELECT attempt_id FROM proxy_calls WHERE state='pending') AND state='running'",[plantool_core::now()])?;
+    db.execute("UPDATE work_items SET outcome='recovery_needed' WHERE id IN(SELECT item_id FROM attempts WHERE state='recovery_needed')",[])?;
+    db.execute(
+        "UPDATE proxy_calls SET state='recovery_needed' WHERE state='pending'",
+        [],
+    )?;
     // Leases are never inherited by a replacement process.
     db.execute("DELETE FROM leases", [])?;
     db.execute("DELETE FROM model_queue", [])?;
@@ -243,15 +272,18 @@ where
 {
     let rows = {
         let db = database::open(home)?;
-        let mut q=db.prepare("SELECT id,kind,payload_json FROM outbox WHERE delivered_at IS NULL ORDER BY created_at,id LIMIT 128")?;
+        let mut q=db.prepare("SELECT id,kind,payload_json FROM outbox WHERE delivered_at IS NULL AND next_attempt_at<=?2 AND kind IN(SELECT value FROM json_each(?1)) ORDER BY CASE kind WHEN 'worker.cancel' THEN 0 WHEN 'worker.start' THEN 1 ELSE 2 END,created_at,id LIMIT 128")?;
         let rows = q
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?
+            .query_map(
+                params![serde_json::to_string(kinds)?, database::unix_now()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         rows
     };
@@ -261,7 +293,7 @@ where
             continue;
         }
         database::open(home)?
-            .execute("UPDATE outbox SET attempts=attempts+1 WHERE id=?1", [&id])?;
+            .execute("UPDATE outbox SET attempts=attempts+1,next_attempt_at=?2+min(3600,(1 << min(attempts,10))) WHERE id=?1", params![id,database::unix_now()])?;
         let result = deliver(kind, serde_json::from_str(&body)?).await?;
         database::finish_intent(home, &id, &result)?;
         count += 1;
