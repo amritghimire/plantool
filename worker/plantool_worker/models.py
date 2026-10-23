@@ -148,10 +148,12 @@ class Gate(BaseModel):
         extra='forbid',
     )
     idempotency_key: str
+    interrupt_id: str | None = None
     item: str
     kind: str
     target_digest: str
     target_sha: str | None = None
+    thread_id: str | None = None
 
 
 class Graph(str, Enum):

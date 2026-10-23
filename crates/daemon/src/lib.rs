@@ -87,6 +87,17 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             }
         }
     });
+    let github_home = config.home.clone();
+    let github_sync = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(e) = github::sync::tick(&github_home).await {
+                tracing::warn!("GitHub sync: {e}");
+            }
+        }
+    });
     let idle_state = state.clone();
     let idle_sweep = tokio::spawn(async move {
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -194,6 +205,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             abort.abort();
         }
     }
+    github_sync.abort();
     idle_sweep.abort();
     dispatch_job.abort();
     retention_job.abort();

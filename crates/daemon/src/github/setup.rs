@@ -25,7 +25,7 @@ impl Repository {
 }
 pub fn repositories(home: &Path) -> anyhow::Result<Vec<Repository>> {
     let db = database::open(home)?;
-    let mut q=db.prepare("SELECT project_id,app_id,installation_id,repo_id,full_name,default_branch,app_bot_id FROM github_repositories")?;
+    let mut q=db.prepare("SELECT project_id,app_id,installation_id,repo_id,full_name,default_branch,app_bot_id FROM github_repositories ORDER BY project_id")?;
     let rows = q.query_map([], |r| {
         Ok(Repository {
             project: r.get(0)?,
@@ -109,6 +109,28 @@ pub async fn configure(
         crate::git::git(checkout, &["rev-parse", "--show-toplevel"]).map_err(anyhow::Error::msg)?,
     )
     .canonicalize()?;
+    let origin =
+        crate::git::git(&root, &["remote", "get-url", "origin"]).map_err(anyhow::Error::msg)?;
+    let remote = if let Some(path) = origin.strip_prefix("git@github.com:") {
+        path.trim_end_matches('/')
+            .trim_end_matches(".git")
+            .to_string()
+    } else {
+        let u = reqwest::Url::parse(&origin)?;
+        ensure!(
+            u.host_str() == Some("github.com"),
+            "Checkout origin must be on github.com"
+        );
+        u.path()
+            .trim_start_matches('/')
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .to_string()
+    };
+    ensure!(
+        remote.eq_ignore_ascii_case(full_name),
+        "Checkout origin does not match the selected repository"
+    );
     let path = api::repo_path(full_name)?;
     let repo = api::get(api, &path).await?;
     let id = repo["id"].as_u64().context("Missing repository ID")?;

@@ -30,11 +30,11 @@ async fn settings(
     let db = database::open(&state.config.home)?;
     let projects = {
         let mut q = db
-            .prepare("SELECT id,local_checkout FROM projects")
+            .prepare("SELECT id,local_checkout,visibility FROM projects")
             .map_err(anyhow::Error::from)?;
         let rows = q
             .query_map([], |r| {
-                Ok(json!({"id":r.get::<_,String>(0)?,"checkout":r.get::<_,String>(1)?}))
+                Ok(json!({"id":r.get::<_,String>(0)?,"checkout":r.get::<_,String>(1)?,"visibility":r.get::<_,Option<String>>(2)?}))
             })
             .map_err(anyhow::Error::from)?
             .collect::<Result<Vec<_>, _>>()

@@ -2,4 +2,6 @@
 pub mod api;
 pub mod auth;
 pub mod commands;
+pub mod gates;
 pub mod setup;
+pub mod sync;

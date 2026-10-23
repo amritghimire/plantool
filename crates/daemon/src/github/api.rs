@@ -162,11 +162,7 @@ pub async fn labels(api: &dyn Api, repo: &str) -> anyhow::Result<()> {
                     None,
                 )
                 .await?;
-            ensure!(
-                r.status == 201 || r.status == 422,
-                "Label creation failed ({})",
-                r.status
-            )
+            ensure!(r.status == 201, "Label creation failed ({})", r.status)
         } else {
             ensure!(old.status == 200, "Label lookup failed ({})", old.status)
         }

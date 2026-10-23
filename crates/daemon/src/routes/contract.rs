@@ -161,6 +161,16 @@ async fn gate(
         "worker.gate",
         &request.idempotency_key,
         |tx| {
+            if request.kind == "plan" {
+                let id = crate::github::gates::request(
+                    tx,
+                    &request.item,
+                    &request.target_digest,
+                    request.thread_id.as_deref().unwrap_or(""),
+                    request.interrupt_id.as_deref().unwrap_or(""),
+                )?;
+                return Ok(json!({"gate_id":id,"publication":"pending"}));
+            }
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute("INSERT INTO gates(id,item_id,kind,target_digest,target_sha,state,created_at) VALUES(?1,?2,?3,?4,?5,'pending',?6)",params![id,request.item,request.kind,request.target_digest,request.target_sha,plantool_core::now()])?;
             database::audit(

@@ -522,6 +522,12 @@
         "idempotency_key": {
           "type": "string"
         },
+        "interrupt_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "item": {
           "type": "string"
         },
@@ -532,6 +538,12 @@
           "type": "string"
         },
         "target_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
           "type": [
             "string",
             "null"

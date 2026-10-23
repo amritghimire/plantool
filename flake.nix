@@ -79,7 +79,7 @@
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
-              ./Cargo.toml ./Cargo.lock ./crates ./agents ./skills ./contract
+              ./Cargo.toml ./Cargo.lock ./crates ./agents ./skills ./contract ./tests
               ./worker/pyproject.toml ./worker/uv.lock
               (lib.fileset.fileFilter (file: file.hasExt "py" || file.name == "versions.json") ./worker/plantool_worker)
             ];

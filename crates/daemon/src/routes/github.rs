@@ -17,6 +17,10 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc};
+fn mutation_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 fn human(s: &AppState, h: &HeaderMap) -> Result<(), ApiError> {
     if actor_from(h, s) != plantool_core::Actor::Human {
         return Err(ApiError(
@@ -60,6 +64,7 @@ async fn configure(
     Json(body): Json<Configure>,
 ) -> Result<Json<Value>, ApiError> {
     human(&s, &h)?;
+    let _guard = mutation_lock().lock().await;
     proof.recheck(&s)?;
     let cfg = AppConfig {
         app_id: body.app_id,
@@ -68,6 +73,13 @@ async fn configure(
     if let Some(key) = body.private_key {
         crate::github::auth::jwt(cfg.app_id, key.as_bytes(), database::unix_now())?;
         Keychain.write(cfg.app_id, key.as_bytes())?;
+        database::audit(
+            &database::open(&s.config.home)?,
+            "human",
+            "github.key_stored",
+            &cfg.app_id.to_string(),
+            &json!({"app_id":cfg.app_id}),
+        )?;
     }
     let client = api::Client::new(cfg.clone(), Arc::new(Keychain))?;
     let value = setup::configure(&s.config.home, &client, &cfg, &body.repo, &body.checkout).await?;
@@ -86,6 +98,7 @@ async fn allow(
     Json(body): Json<Allow>,
 ) -> Result<Json<Value>, ApiError> {
     human(&s, &h)?;
+    let _guard = mutation_lock().lock().await;
     proof.recheck(&s)?;
     let repos = setup::repositories(&s.config.home)?;
     let r = repos
