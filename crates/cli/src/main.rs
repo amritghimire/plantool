@@ -91,7 +91,7 @@ fn setup() -> anyhow::Result<()> {
     let c = client::Client::bare(plantool_daemon::config::default_port());
     c.ensure_daemon()?;
     let _: serde_json::Value = reqwest::blocking::Client::builder().no_proxy().build()?.get(format!("{}/api/auth/status", c.base)).send()?.error_for_status()?.json().map_err(|_| anyhow::anyhow!("The running daemon does not support passkeys. Run `plantool daemon restart` with this binary first."))?;
-    let code = plantool_daemon::auth::setup_code(&client::home())?;
+    let code = c.setup_code()?;
     println!("One-time setup code (expires in 10 minutes): {code}");
     let url = format!("{}/setup", c.base);
     println!("Open {url} and enter the code to register your passkey.");

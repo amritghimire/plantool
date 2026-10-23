@@ -867,3 +867,66 @@ exit 1
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bootstrap_database_write_requires_the_owner_socket_credential() {
+    let mut h = harness();
+    h.state.runs = Arc::new(plantool_daemon::runs::RunManager::load(&h.state.config.home).unwrap());
+    let app = routes::router(h.state.clone());
+    let socket = plantool_daemon::socket::router(h.state.clone());
+    let credential =
+        std::fs::read_to_string(h.state.config.home.join("security/lifecycle-token")).unwrap();
+    let request = |credential: &str, origin: bool| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/owner/setup-code")
+            .header("host", "localhost:41300")
+            .header("x-plantool-lifecycle", credential);
+        if origin {
+            request = request.header("origin", "http://localhost:41300");
+        }
+        request.body(Body::empty()).unwrap()
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(request(&credential, false))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        socket
+            .clone()
+            .oneshot(request("forged", false))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        socket
+            .clone()
+            .oneshot(request(&credential, true))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let response = socket
+        .clone()
+        .oneshot(request(&credential, false))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(value(response).await["code"].as_str().is_some());
+    Browser::register(&app, &h.state.config.home).await;
+    assert!(!socket
+        .oneshot(request(&credential, false))
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+}

@@ -66,7 +66,7 @@ fn connection(home: &Path) -> anyhow::Result<Connection> {
     crate::database::initialize(home)?;
     crate::database::open(home)
 }
-/// Called only by the local `plantool setup` command, never exposed over HTTP.
+/// Daemon-only bootstrap write, requested by the owner-terminal socket endpoint.
 pub fn setup_code(home: &Path) -> anyhow::Result<String> {
     let mut db = connection(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

@@ -82,6 +82,22 @@ impl Client {
             .ok()
     }
 
+    pub fn setup_code(&self) -> anyhow::Result<String> {
+        ensure_owner_process()?;
+        let secret = std::fs::read_to_string(home().join("security/lifecycle-token"))?;
+        let mut credential = reqwest::header::HeaderValue::from_str(&secret)?;
+        credential.set_sensitive(true);
+        let response = self
+            .with_headers(self.http.post(self.url("/owner/setup-code")))
+            .header("x-plantool-lifecycle", credential)
+            .send()?;
+        let value: serde_json::Value = self.check(response)?;
+        value["code"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("Daemon did not return a setup code"))
+    }
+
     pub fn shutdown(&self) -> anyhow::Result<()> {
         ensure_owner_process()?;
         let secret = std::fs::read_to_string(home().join("security/lifecycle-token"));
