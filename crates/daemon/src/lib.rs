@@ -4,6 +4,7 @@ pub mod auth;
 pub mod changes;
 pub mod commits;
 pub mod config;
+pub mod database;
 pub mod events;
 pub mod execution;
 pub mod git;
