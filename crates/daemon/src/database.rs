@@ -309,3 +309,17 @@ mod consistency_tests {
             .unwrap());
     }
 }
+/// Read-back on a Personal publication retry resolves earlier uncertain intents.
+pub fn reconcile_pr_intents(
+    home: &Path,
+    item: &str,
+    repository: &str,
+    head: &str,
+    result: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let mut db = open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute("UPDATE outbox SET delivered_at=?4,result_json=?5 WHERE aggregate_id=?1 AND kind='personal.pr.create' AND delivered_at IS NULL AND json_extract(payload_json,'$.repository')=?2 AND json_extract(payload_json,'$.head')=?3",params![item,repository,head,plantool_core::now(),result.to_string()])?;
+    tx.commit()?;
+    Ok(())
+}

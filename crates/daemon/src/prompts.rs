@@ -85,10 +85,27 @@ Run `plantool skill` if it is no longer in your context. Check the current stage
 
 pub fn template(home: &Path, stage: &str) -> String {
     let override_path = home.join("prompts").join(format!("{stage}.md"));
-    if let Ok(s) = std::fs::read_to_string(&override_path) {
-        if !s.trim().is_empty() {
-            return s;
+    let input = std::fs::read_to_string(&override_path)
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    // The owner-editable file remains a live input; SQLite stores its snapshot.
+    if crate::database::path(home).is_file() {
+        if let Ok(db) = crate::database::open(home) {
+            let key = format!("prompt_override:{stage}");
+            if crate::database::get::<Option<String>>(&db, &key)
+                .ok()
+                .flatten()
+                .flatten()
+                != input
+            {
+                if let Err(error) = crate::database::set(&db, &key, &input) {
+                    tracing::warn!("prompt override snapshot: {error}");
+                }
+            }
         }
+    }
+    if let Some(input) = input {
+        return input;
     }
     match stage {
         "research" => RESEARCH.to_string(),

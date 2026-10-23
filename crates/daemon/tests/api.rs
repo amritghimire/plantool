@@ -215,7 +215,7 @@ async fn full_session_flow() {
 
     std::fs::write(
         &plan_path,
-        "# Plan\n\nalpha\nbeta\n\n### Phase 1: X\n- [ ] one\n- [x] two\n",
+        "# Plan\n\nalpha\nbeta\n\n### Phase 1: X\n- [ ] T1: one\n- [x] T2: two\n",
     )
     .unwrap();
     let (st, v) = call(
@@ -1502,7 +1502,7 @@ async fn scoped_comments_gate_approval_and_record_override() {
     let live = h.state.registry.get_key(key).unwrap();
     std::fs::write(
         live.doc_path(plantool_core::DocKind::Plan),
-        "# Plan\n\n## Risks\n- [ ] Task\n",
+        "# Plan\n\n## Risks\n- [ ] T1: Task\n",
     )
     .unwrap();
     live.capture_doc(plantool_core::DocKind::Plan).unwrap();
@@ -1676,7 +1676,7 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
     .await;
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
-    let original = "# Plan\n\n## Summary\nPortable session\n\n### Phase 1\n- [ ] Work\n";
+    let original = "# Plan\n\n## Summary\nPortable session\n\n### Phase 1\n- [ ] T1: Work\n";
     std::fs::write(live.doc_path(plantool_core::DocKind::Plan), original).unwrap();
     live.capture_doc(plantool_core::DocKind::Plan).unwrap();
     live.set_stage(plantool_core::Stage::Approved, plantool_core::Actor::Human)
@@ -2010,12 +2010,12 @@ async fn revised_plan_requires_review_and_reapproval_clears_pending() {
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
     let path = live.doc_path(DocKind::Plan);
-    let plan = "# Plan\n### Phase 1\n- [ ] First\n";
+    let plan = "# Plan\n### Phase 1\n- [ ] T1: First\n";
     std::fs::write(&path, plan).unwrap();
     live.capture_doc(DocKind::Plan).unwrap();
     live.set_stage(Stage::Approved, Actor::Human).unwrap();
     let old_sha = live.state().approved.unwrap().sha;
-    std::fs::write(&path, format!("{plan}- [ ] Added\n")).unwrap();
+    std::fs::write(&path, format!("{plan}- [ ] T100: Added\n")).unwrap();
     live.capture_doc(DocKind::Plan).unwrap();
     assert!(live.state().plan_revision_pending);
     assert!(live.set_stage(Stage::Implementing, Actor::Agent).is_err());
@@ -2081,7 +2081,10 @@ async fn code_comments_follow_a_changed_file_and_reject_stale_lines() {
 async fn accepting_scope_changes_reopens_finished_phases() {
     use plantool_core::{Actor, DocKind, Stage};
     for status in ["approved", "completed"] {
-        for changed in ["- [x] Done\n- [ ] Added\n", "- [ ] Reworded\n"] {
+        for changed in [
+            "- [x] T1: Done\n- [ ] T100: Added\n",
+            "- [ ] T1: Reworded\n",
+        ] {
             let h = harness();
             let (_, created) = call(
                 &h.app,
@@ -2100,7 +2103,7 @@ async fn accepting_scope_changes_reopens_finished_phases() {
             let path = live.doc_path(DocKind::Plan);
             std::fs::write(
                 &path,
-                "# Plan\n### Phase 1\n- [x] Done\n### Phase 2\n- [ ] Later\n",
+                "# Plan\n### Phase 1\n- [x] T1: Done\n### Phase 2\n- [ ] T2: Later\n",
             )
             .unwrap();
             live.capture_doc(DocKind::Plan).unwrap();
@@ -2111,7 +2114,7 @@ async fn accepting_scope_changes_reopens_finished_phases() {
             live.milestone_status("Phase 1", status, &run).unwrap();
             std::fs::write(
                 &path,
-                format!("# Plan\n### Phase 1\n{changed}### Phase 2\n- [ ] Later\n"),
+                format!("# Plan\n### Phase 1\n{changed}### Phase 2\n- [ ] T2: Later\n"),
             )
             .unwrap();
             live.capture_doc(DocKind::Plan).unwrap();

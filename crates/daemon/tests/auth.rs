@@ -73,7 +73,7 @@ async fn session(h: &Harness, slug: &str) -> String {
     let s = h.state.registry.get_key(&key).unwrap();
     std::fs::write(
         s.doc_path(plantool_core::DocKind::Plan),
-        "# Plan\n- [ ] task\n",
+        "# Plan\n- [ ] T1: task\n",
     )
     .unwrap();
     s.capture_doc(plantool_core::DocKind::Plan).unwrap();

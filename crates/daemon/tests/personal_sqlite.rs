@@ -58,6 +58,12 @@ async fn personal_approvals_pin_immutable_content_and_progress_survives_restart(
     )
     .unwrap();
     live.capture_doc(DocKind::Research).unwrap();
+    // The v0 plan syntax cannot be approved: progress needs stable keys.
+    std::fs::write(live.doc_path(DocKind::Plan), "# Plan\n- [ ] Build it\n").unwrap();
+    live.capture_doc(DocKind::Plan).unwrap();
+    assert!(live
+        .set_stage(plantool_core::Stage::Approved, plantool_core::Actor::Human)
+        .is_err());
     let original = "# Plan\n### Build\n- [ ] T1: Build it\n- [ ] T2: Test it\n";
     std::fs::write(live.doc_path(DocKind::Plan), original).unwrap();
     live.capture_doc(DocKind::Plan).unwrap();
@@ -263,4 +269,69 @@ async fn personal_approvals_pin_immutable_content_and_progress_survives_restart(
         .is_err());
     assert!(!live.store.dir.join("meta.json").exists());
     assert!(!live.store.dir.join("state.json").exists());
+}
+
+#[tokio::test]
+async fn clean_break_notice_is_owner_only_and_dismissal_survives_restart() {
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    std::fs::create_dir_all(home.join("sessions")).unwrap();
+    std::fs::write(home.join("old-marker"), "preserved").unwrap();
+    let registry = Arc::new(Registry::load(home.clone()).unwrap());
+    let (tx, _) = tokio::sync::mpsc::channel(1);
+    let state = AppState {
+        registry,
+        config: Arc::new(Config {
+            home: home.clone(),
+            port: 41300,
+            version: "test".into(),
+        }),
+        auth: Arc::new(Auth::new(&home, 41300).unwrap()),
+        runs: Arc::new(Default::default()),
+        shutdown: tx,
+    };
+    let app = routes::router(state);
+    let path = "/api/notices/clean-break";
+    assert_eq!(
+        raw(&app, "GET", path, json!(null), None, None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let browser = Browser::register(&app, &home).await;
+    let notice =
+        value(raw(&app, "GET", path, json!(null), Some(&browser.cookie), None).await).await;
+    let backup = std::path::Path::new(notice["backup"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(backup.join("old-marker")).unwrap(),
+        "preserved"
+    );
+    assert!(!home.join("old-marker").exists());
+    assert_eq!(
+        raw(&app, "POST", path, json!({}), Some(&browser.cookie), None)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    Registry::load(home.clone()).unwrap();
+    let db = database::open(&home).unwrap();
+    assert_eq!(
+        database::get::<serde_json::Value>(&db, "clean_break_banner").unwrap(),
+        Some(serde_json::Value::Null)
+    );
+}
+
+#[test]
+fn v0_archives_cannot_bypass_the_clean_break() {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("session.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(br#"{"version":1}"#).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let error = match plantool_daemon::archive::decode(&bytes) {
+        Ok(_) => panic!("v0 archive was accepted"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("v0 archives cannot be imported"));
 }

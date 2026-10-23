@@ -469,6 +469,13 @@ async fn create(
         published
     };
     let session = s.set_pull_request(pr.clone())?;
+    crate::database::reconcile_pr_intents(
+        s.store.home(),
+        &s.key,
+        &info.repository,
+        &info.head,
+        &serde_json::to_value(&pr).map_err(anyhow::Error::from)?,
+    )?;
     Ok(Json(
         serde_json::json!({ "pull_request": pr, "session": session }),
     ))

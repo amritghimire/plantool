@@ -1,4 +1,5 @@
 //! Admission, process-group ownership, and the persistent Stop All latch.
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -233,10 +234,33 @@ impl Execution {
 }
 fn persist(inner: &Inner) -> anyhow::Result<()> {
     if let Some(home) = &inner.home {
-        crate::database::set(&crate::database::open(home)?, "execution", &inner.saved)?;
+        let mut db = crate::database::open(home)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        crate::database::set(&tx, "execution", &inner.saved)?;
+        for (repo, patterns) in &inner.saved.rules {
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM projects WHERE local_checkout=?1 ORDER BY created_at LIMIT 1",
+                    [repo.to_string_lossy()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let project = existing.unwrap_or_else(|| {
+                crate::git::detect_checkout(repo)
+                    .map(|c| plantool_core::sha256_hex(&c.common_dir.to_string_lossy()))
+                    .unwrap_or_else(|_| plantool_core::sha256_hex(&repo.to_string_lossy()))
+            });
+            tx.execute(
+                "INSERT OR IGNORE INTO projects(id,local_checkout,created_at) VALUES(?1,?2,?3)",
+                rusqlite::params![project, repo.to_string_lossy(), plantool_core::now()],
+            )?;
+            tx.execute("INSERT OR IGNORE INTO project_settings(project_id,version,never_sent_globs_json,effective_at,set_by) VALUES(?1,?2,?3,?4,'browser')",rusqlite::params![project,inner.saved.status.policy_revision,serde_json::to_string(patterns)?,plantool_core::now()])?;
+        }
+        tx.commit()?;
     }
     Ok(())
 }
+
 pub struct HookRegistration {
     execution: Arc<Execution>,
     id: u64,

@@ -607,6 +607,13 @@ impl LiveSession {
             ));
         }
         if to == Stage::Approved {
+            if let Some(plan) = g.docs.get(&DocKind::Plan) {
+                let tasks = plantool_core::tasks::parse(&plan.content)
+                    .map_err(|e| RegistryError::ReviewBlocked(e))?;
+                if tasks.len() != markdown::checkboxes(&plan.content).len() {
+                    return Err(RegistryError::ReviewBlocked("Assign a unique T<n> key to every plan task before approving (for example: - [ ] T1: Build the endpoint)".into()));
+                }
+            }
             let blockers = plantool_core::review::owner_blockers(&g.state.comments);
             let reason = reason.filter(|r| !r.trim().is_empty());
             if !blockers.is_empty() && reason.is_none() {

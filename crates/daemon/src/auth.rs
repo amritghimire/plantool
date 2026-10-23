@@ -293,7 +293,7 @@ fn make_binding(
     if let Some(execution) = &execution {
         data["execution"] = json!(execution);
     }
-    if path == "/api/settings/retention" {
+    if path == "/api/settings/retention" || path.ends_with("/pin") {
         data["retention"] = serde_json::to_value(
             crate::retention::policy(&state.config.home).map_err(|_| denied())?,
         )
