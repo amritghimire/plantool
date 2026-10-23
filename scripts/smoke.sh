@@ -30,9 +30,15 @@ expect "Changed brief" "$BIN" session brief --session smoke-test --set "Changed 
 expect "name: plantool-research" "$BIN" skill research
 expect "plantool skill implement" "$BIN" skill list
 PLAN="$("$BIN" session doc path --session smoke-test --kind plan)"
-printf '# Plan\n\nalpha\n\n### Phase 1: A\n- [ ] one\n' > "$PLAN"
+printf '# Plan\n\nalpha\n\n### Phase 1: A\n- [ ] T1: one\n' > "$PLAN"
 # The watcher may capture the file before the explicit touch; either way a sha must be reported.
 expect -E "^(captured|unchanged) [0-9a-f]{64}$" "$BIN" session doc touch --session smoke-test --kind plan
+[ -s "$PLANTOOL_HOME/db/plantool.db" ] || { echo "FAIL: SQLite database missing"; exit 1; }
+case "$PLAN" in */docs/plan.md) ;; *) echo "FAIL: unexpected draft path $PLAN"; exit 1 ;; esac
+# These were JSON authority files in v0. The drafts remain ordinary files.
+ITEM_DIR="$(dirname "$(dirname "$PLAN")")"
+[ ! -e "$ITEM_DIR/meta.json" ] && [ ! -e "$ITEM_DIR/state.json" ] || { echo "FAIL: legacy authority files"; exit 1; }
+if "$BIN" task done smoke-test T1 2>/dev/null; then echo "FAIL: unapproved task completed"; exit 1; fi
 expect plan-review "$BIN" session get --session smoke-test
 ID="$("$BIN" session comment add --session smoke-test --kind plan --match alpha --body hello | cut -d' ' -f1)"
 expect "\"id\": \"$ID\"" "$BIN" session comment list --session smoke-test --json
@@ -43,6 +49,11 @@ WT="$("$BIN" session worktree --session smoke-test)"
 [ -f "$WT/a.txt" ] || { echo "FAIL: worktree missing at $WT"; exit 1; }
 expect "$WT" "$BIN" session get --session smoke-test
 expect smoke-test "$BIN" status
+# Reload the registry from SQLite and preserve both the document and inline comment.
+"$BIN" daemon restart >/dev/null
+expect "Changed brief" "$BIN" session brief --session smoke-test
+expect "\"id\": \"$ID\"" "$BIN" session comment list --session smoke-test --json
+expect 'T1: one' cat "$PLAN"
 # Human confirmation flags are absent from the agent-only CLI.
 if "$BIN" session set --session smoke-test --difftool built-in --confirm 2>/dev/null; then echo "FAIL: agent changed owner settings"; exit 1; fi
 "$BIN" export smoke-test -o "$TMP/session.zip"

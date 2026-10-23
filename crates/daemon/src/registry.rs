@@ -461,6 +461,13 @@ impl LiveSession {
                 g.state.plan_change = Some(change);
                 g.state.plan_revision_pending =
                     g.state.plan_revision_pending || change == markdown::PlanChange::ScopeChange;
+            } else if matches!(
+                g.state.stage,
+                Stage::Approved | Stage::Implementing | Stage::ImplementationReview | Stage::Done
+            ) {
+                // Skipping planning authorizes drafting a plan, not its new scope.
+                g.state.plan_change = Some(markdown::PlanChange::ScopeChange);
+                g.state.plan_revision_pending = true;
             }
         }
         let mut affected: Vec<&mut Comment> = g

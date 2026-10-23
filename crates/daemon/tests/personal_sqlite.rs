@@ -335,3 +335,41 @@ fn v0_archives_cannot_bypass_the_clean_break() {
     };
     assert!(error.to_string().contains("v0 archives cannot be imported"));
 }
+
+#[test]
+fn a_plan_written_after_skipping_planning_needs_its_own_approval() {
+    use plantool_core::{Actor, Stage};
+    let t = tempfile::tempdir().unwrap();
+    let repo = t.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["config", "user.email", "t@t"],
+        vec!["config", "user.name", "t"],
+        vec!["commit", "--allow-empty", "-qm", "init"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let registry = Registry::load(t.path().join("home")).unwrap();
+    let (live, _) = registry
+        .create(serde_json::from_value(json!({"repo":repo,"slug":"skipped"})).unwrap())
+        .unwrap();
+    live.set_stage(Stage::Approved, Actor::Human).unwrap();
+    std::fs::write(
+        live.doc_path(DocKind::Plan),
+        "# Plan\n- [ ] T1: New scope\n",
+    )
+    .unwrap();
+    live.capture_doc(DocKind::Plan).unwrap();
+    assert!(live.state().plan_revision_pending);
+    assert!(live.complete_task("T1", None).is_err());
+    assert!(live.set_stage(Stage::Implementing, Actor::Agent).is_err());
+    live.set_stage(Stage::Approved, Actor::Human).unwrap();
+    live.set_stage(Stage::Implementing, Actor::Agent).unwrap();
+    live.complete_task("T1", None).unwrap();
+}
