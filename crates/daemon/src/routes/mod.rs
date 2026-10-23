@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod changes;
 pub mod comments;
+pub mod execution;
 pub mod live;
 pub mod pr;
 pub mod runs;
@@ -86,13 +87,22 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-async fn shutdown(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn shutdown(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !state.runs.execution.can_shutdown(&headers) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Daemon lifecycle credential required".into(),
+        ));
+    }
     let tx = state.shutdown.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let _ = tx.send(()).await;
     });
-    Json(json!({ "ok": true }))
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn spa(uri: Uri) -> Response {
@@ -105,6 +115,7 @@ pub fn router(state: AppState) -> Router {
         .route("/shutdown", post(shutdown))
         .merge(crate::auth::routes())
         .merge(sessions::routes())
+        .merge(execution::routes())
         .merge(comments::routes())
         .merge(changes::routes())
         .merge(archive::routes())

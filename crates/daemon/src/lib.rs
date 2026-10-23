@@ -5,6 +5,7 @@ pub mod changes;
 pub mod commits;
 pub mod config;
 pub mod events;
+pub mod execution;
 pub mod git;
 pub mod identities;
 pub mod prompts;
@@ -12,6 +13,7 @@ pub mod providers;
 pub mod registry;
 pub mod routes;
 pub mod runs;
+pub mod sandbox;
 pub mod security;
 pub mod socket;
 pub mod store;
@@ -45,7 +47,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let config = Arc::new(config);
     let registry = Arc::new(Registry::load(config.home.clone())?);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
-    let runs = Arc::new(runs::RunManager::default());
+    let runs = Arc::new(runs::RunManager::load(&config.home)?);
     for s in registry.all() {
         runs.mark_orphans(&s);
     }

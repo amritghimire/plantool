@@ -594,3 +594,176 @@ async fn hosted_provider_tokens_are_injected_and_revoked_on_exit_failure_or_stop
         plantool_core::RunStatus::Failed
     );
 }
+
+#[tokio::test]
+async fn stop_all_is_browser_only_revokes_tokens_and_resume_requires_a_fresh_bound_assertion() {
+    let h = harness();
+    let key = session(&h, "stop-repo", "one").await;
+    let lease = h.state.runs.tokens.issue(RunScope {
+        session: key.clone(),
+        attempt: "stop-test".into(),
+    });
+    let secret = token(&lease, &h);
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    assert_eq!(
+        call(
+            &h.app,
+            "POST",
+            "/api/execution/stop",
+            json!({}),
+            &secret,
+            Some(&browser.cookie)
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/execution/stop",
+            json!({}),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert!(h.state.runs.execution.status().stopped);
+    assert_eq!(
+        call(
+            &h.app,
+            "GET",
+            &format!("/api/sessions/{key}"),
+            Value::Null,
+            &secret,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let path = "/api/execution/resume";
+    assert_eq!(
+        raw(&h.app, "POST", path, json!({}), Some(&browser.cookie), None)
+            .await
+            .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let stale = browser.proof(&h.app, "POST", path, json!({})).await;
+    raw(
+        &h.app,
+        "POST",
+        "/api/execution/stop",
+        json!({}),
+        Some(&browser.cookie),
+        None,
+    )
+    .await;
+    assert!(!raw(
+        &h.app,
+        "POST",
+        path,
+        json!({}),
+        Some(&browser.cookie),
+        Some(&stale)
+    )
+    .await
+    .status()
+    .is_success());
+    assert!(h.state.runs.execution.status().stopped);
+    let proof = browser.proof(&h.app, "POST", path, json!({})).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            json!({}),
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert!(!h.state.runs.execution.status().stopped);
+    assert!(!raw(
+        &h.app,
+        "POST",
+        path,
+        json!({}),
+        Some(&browser.cookie),
+        Some(&proof)
+    )
+    .await
+    .status()
+    .is_success());
+}
+
+#[tokio::test]
+async fn never_sent_changes_require_stopped_execution_and_a_fresh_assertion() {
+    let h = harness();
+    session(&h, "policy-repo", "one").await;
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    let path = "/api/settings/never-sent";
+    let body = json!({"repo":h.tmp.path().join("policy-repo"),"patterns":["private/**"]});
+    let proof = browser.proof(&h.app, "POST", path, body.clone()).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            body.clone(),
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    raw(
+        &h.app,
+        "POST",
+        "/api/execution/stop",
+        json!({}),
+        Some(&browser.cookie),
+        None,
+    )
+    .await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&h.app, "POST", path, body.clone()).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.state
+            .runs
+            .execution
+            .rules(&h.tmp.path().join("policy-repo").canonicalize().unwrap()),
+        vec!["private/**"]
+    );
+}

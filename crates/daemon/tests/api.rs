@@ -505,6 +505,8 @@ async fn brief_and_prompt() {
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     let stopped = plantool_core::Run {
+        sandboxed: false,
+        execution_generation: 0,
         idle_stopped: false,
         milestone_key: None,
         plan_sha: None,
@@ -661,6 +663,8 @@ async fn step_mode_previews_one_ticket_and_reviews_uncommitted_changes() {
     let base = plantool_daemon::git::commit_all(&h.repo, "Milestone 1: first").unwrap();
     std::fs::write(h.repo.join("b.txt"), "milestone two\n").unwrap();
     let run = plantool_core::Run {
+        sandboxed: false,
+        execution_generation: 0,
         idle_stopped: false,
         milestone_key: None,
         plan_sha: None,

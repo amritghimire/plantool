@@ -107,9 +107,10 @@ pub enum RunInput {
     Stop,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RunOptions {
     pub environment: Option<crate::identities::RunEnvironment>,
+    pub launch: Option<std::sync::Arc<crate::sandbox::launch::Launch>>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub model: Option<String>,
@@ -121,11 +122,32 @@ pub struct RunOptions {
 }
 
 impl RunOptions {
-    pub fn apply_environment(&self, command: &mut tokio::process::Command) {
+    pub fn command(&self, exe: &std::path::Path) -> anyhow::Result<tokio::process::Command> {
+        if let Some(launch) = &self.launch {
+            launch.command(exe)
+        } else {
+            Ok(tokio::process::Command::new(exe))
+        }
+    }
+    pub fn spawn(
+        &self,
+        command: &mut tokio::process::Command,
+    ) -> anyhow::Result<crate::execution::ManagedChild> {
+        match &self.launch {
+            Some(launch) => launch.execution.spawn(launch.generation, command),
+            None => std::sync::Arc::new(crate::execution::Execution::default()).spawn(0, command),
+        }
+    }
+
+    pub fn apply_environment(&self, command: &mut tokio::process::Command, provider: Provider) {
+        crate::sandbox::environment::apply(command, Some(provider));
         // Never inherit the caller's attempt credential in probes or direct tests.
         command.env_remove("PLANTOOL_RUN_TOKEN");
         if let Some(environment) = &self.environment {
             environment.apply(command);
+        }
+        if let Some(launch) = &self.launch {
+            launch.apply_environment(command);
         }
     }
 }

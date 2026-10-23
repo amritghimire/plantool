@@ -475,6 +475,10 @@ pub enum ImplementationMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub sandboxed: bool,
+    #[serde(default)]
+    pub execution_generation: u64,
+    #[serde(default)]
     pub milestone_key: Option<String>,
     #[serde(default)]
     pub plan_sha: Option<String>,

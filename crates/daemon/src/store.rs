@@ -123,7 +123,7 @@ impl SessionStore {
     }
 
     pub fn read_doc(&self, kind: DocKind) -> anyhow::Result<Option<String>> {
-        match fs::read_to_string(self.doc_path(kind)) {
+        match read_live_document(&self.doc_path(kind)) {
             Ok(s) => Ok(Some(s)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
@@ -240,4 +240,58 @@ pub fn list_session_dirs(home: &Path) -> Vec<(String, String, PathBuf)> {
     }
     out.sort();
     out
+}
+
+// A live draft must not redirect the daemon into a protected file. Opening with
+// O_NOFOLLOW closes the symlink check/use race; hard-linked drafts are rejected.
+fn read_live_document(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(not(unix))]
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::other("Live documents cannot be symlinks"));
+    }
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::other(
+            "Live document must be a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err(std::io::Error::other("Live documents cannot be hard links"));
+        }
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
+}
+
+#[cfg(all(test, unix))]
+mod live_document_security_tests {
+    use super::*;
+    #[test]
+    fn live_documents_cannot_redirect_daemon_reads() {
+        let t = tempfile::tempdir().unwrap();
+        let secret = t.path().join("secret");
+        fs::write(&secret, "private").unwrap();
+        let doc = t.path().join("plan.md");
+        std::os::unix::fs::symlink(&secret, &doc).unwrap();
+        assert!(read_live_document(&doc).is_err());
+        fs::remove_file(&doc).unwrap();
+        fs::hard_link(&secret, &doc).unwrap();
+        assert!(read_live_document(&doc).is_err());
+        fs::remove_file(&doc).unwrap();
+        fs::write(&doc, "plan").unwrap();
+        assert_eq!(read_live_document(&doc).unwrap(), "plan");
+    }
 }
