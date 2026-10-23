@@ -1,3 +1,4 @@
+import { AccountMenu } from "./AuthGate";
 import { DecisionSummary } from "./DecisionSummary";
 import { ArchivePanel } from "./ArchivePanel";
 import { WherePanel } from "./WherePanel";
@@ -406,6 +407,7 @@ export function SessionPage() {
       <div className="page">
         <header className="topbar">
           <Link to="/" className="brand">plantool</Link>
+          <span className="spacer" /><AccountMenu />
         </header>
         <main className="list">
           <p className="error">{error}</p>
@@ -454,7 +456,7 @@ export function SessionPage() {
             </button>
           </div>
         )}
-        <ThemeToggle />
+        <ThemeToggle /><AccountMenu />
       </header>
       <Sidebar
         onHandoff={onHandoff}

@@ -1,3 +1,4 @@
+import { AccountMenu } from "./AuthGate";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -80,7 +81,7 @@ export function SessionList() {
   return <div className="page">
     <header className="topbar"><h1 className="brand">plantool</h1><div className="spacer" />
       <button className="btn primary" onClick={() => setCreating(true)} type="button">New session</button>
-      <button className="btn" onClick={() => setSettings(true)} type="button">Settings</button><ThemeToggle />
+      <button className="btn" onClick={() => setSettings(true)} type="button">Settings</button><ThemeToggle /><AccountMenu />
     </header>
     {creating && <NewSessionDialog onClose={() => setCreating(false)} />}
     {settings && <SettingsDialog onClose={() => setSettings(false)} />}
