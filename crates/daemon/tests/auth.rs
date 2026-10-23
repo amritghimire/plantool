@@ -1099,3 +1099,21 @@ async fn github_settings_are_browser_only_and_assertions_bind_the_allowlist() {
         StatusCode::FORBIDDEN
     );
 }
+#[tokio::test]
+async fn github_preflight_refresh_requires_a_fresh_assertion() {
+    let h = harness();
+    let browser = Browser::register(&h.app, &h.state.config.home).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/settings/github/preflight",
+            json!({"project":"p"}),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+}

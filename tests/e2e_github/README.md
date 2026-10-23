@@ -20,7 +20,7 @@ Default workspace tests perform no GitHub calls. This suite returns immediately 
 
 The test creates its own temporary PlanTool home and local checkout, installs the seven
 labels, runs preflight, creates an issue, publishes a new App plan comment, rejects an App
-approval, accepts one owner approval and checks replay plus durable resume. No model,
+approval, rejects early/edited/deleted/stale owner comments, accepts one current owner approval and checks replay plus durable resume. No model,
 work-item graph, role, push, PR or merge is exercised in this half-phase. It closes its test
 issue on success or assertion failure and retains comments as evidence. A killed test
 process/network failure may require manually closing issues titled `[PlanTool e2e]`.

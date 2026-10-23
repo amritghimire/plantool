@@ -45,6 +45,24 @@ async fn status(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, 
         .prepare("SELECT project_id,last_error,last_sync_at FROM github_repositories")
         .map_err(anyhow::Error::from)?;
     let rows=q.query_map([],|r|Ok(json!({"project":r.get::<_,String>(0)?,"error":r.get::<_,Option<String>>(1)?,"synced_at":r.get::<_,Option<String>>(2)?}))).map_err(anyhow::Error::from)?;
+    if let Some(repositories) = value["repositories"].as_array_mut() {
+        for repo in repositories {
+            if let Some(project) = repo["project"].as_str().map(str::to_owned) {
+                repo["preflight"] =
+                    database::get::<Value>(&db, &format!("github_preflight:{project}"))?
+                        .unwrap_or(Value::Null);
+                repo["visibility"] = db
+                    .query_row(
+                        "SELECT visibility FROM projects WHERE id=?1",
+                        [project],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .map_err(anyhow::Error::from)?
+                    .map(Value::String)
+                    .unwrap_or(Value::Null);
+            }
+        }
+    }
     value["sync"] = json!(rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(anyhow::Error::from)?);
@@ -123,6 +141,35 @@ async fn allow(
     setup::change_allowlist(&s.config.home, &c, &body.login, body.remove).await?;
     Ok(Json(json!({"ok":true})))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Preflight {
+    project: String,
+}
+async fn preflight(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Extension(proof): Extension<crate::auth::ApprovedAction>,
+    Json(body): Json<Preflight>,
+) -> Result<Json<Value>, ApiError> {
+    human(&s, &h)?;
+    let _guard = mutation_lock().lock().await;
+    proof.recheck(&s)?;
+    let repo = setup::repositories(&s.config.home)?
+        .into_iter()
+        .find(|r| r.project == body.project)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "GitHub project not found".into()))?;
+    let client = api::Client::new(
+        AppConfig {
+            app_id: repo.app_id,
+            installation_id: repo.installation_id,
+        },
+        Arc::new(Keychain),
+    )?;
+    Ok(Json(
+        setup::refresh_preflight(&s.config.home, &client, &repo).await?,
+    ))
+}
 async fn plan(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -156,4 +203,5 @@ pub fn routes() -> Router<AppState> {
         .route("/github/plans/{id}", get(plan))
         .route("/settings/github", get(status).post(configure))
         .route("/settings/github/allowlist", post(allow))
+        .route("/settings/github/preflight", post(preflight))
 }

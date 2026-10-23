@@ -177,7 +177,13 @@ pub async fn configure(
     let bot = api::get(api, &format!("/users/{slug}%5Bbot%5D")).await?;
     ensure!(bot["type"] == "Bot", "Missing App bot identity");
     let bot_id = bot["id"].as_u64().context("Missing bot ID")?;
-    let initial = resolve_user(api, "amritghimire").await?;
+    let initial = if database::get::<bool>(&database::open(home)?, "github_allowlist_initialized")?
+        != Some(true)
+    {
+        Some(resolve_user(api, "amritghimire").await?)
+    } else {
+        None
+    };
     api::labels(
         home,
         api,
@@ -219,10 +225,20 @@ pub async fn configure(
         )?;
     }
     database::set(&tx, &format!("github_preflight:{project}"), &preflight)?;
-    tx.execute("INSERT OR IGNORE INTO project_settings(project_id,version,effective_at,set_by) VALUES(?1,1,?2,'browser')",params![project,plantool_core::now()])?;
+    // Sandbox rules are scoped to the checkout. A newly connected GitHub
+    // project must not start with a weaker publication policy for that root.
+    let root_rules = database::get::<Value>(&tx, "execution")?
+        .and_then(|saved| saved["rules"].get(root.to_string_lossy().as_ref()).cloned())
+        .unwrap_or_else(|| json!([]));
+    let patterns: Vec<String> = serde_json::from_value(root_rules)?;
+    crate::sandbox::NeverSent::new(&patterns)?;
+    tx.execute("INSERT OR IGNORE INTO project_settings(project_id,version,never_sent_globs_json,effective_at,set_by) VALUES(?1,1,?2,?3,'browser')",params![project,serde_json::to_string(&patterns)?,plantool_core::now()])?;
     // Seed only once; removing the initial member later must remain effective.
     if database::get::<bool>(&tx, "github_allowlist_initialized")? != Some(true) {
-        tx.execute(
+        let initial = initial
+            .as_ref()
+            .context("Allowlist setup changed; retry setup")?;
+        let inserted = tx.execute(
             "INSERT OR IGNORE INTO allowlist VALUES(?1,?2,?3,'setup')",
             params![
                 initial["id"].as_u64(),
@@ -230,6 +246,15 @@ pub async fn configure(
                 plantool_core::now()
             ],
         )?;
+        if inserted > 0 {
+            database::audit(
+                &tx,
+                "human",
+                "github.allowlist",
+                "global",
+                &json!({"id":initial["id"],"login":initial["login"],"initial":true,"removed":false}),
+            )?;
+        }
         database::set(&tx, "github_allowlist_initialized", &true)?;
     }
     tx.execute("INSERT INTO github_repositories(project_id,app_id,installation_id,repo_id,full_name,default_branch,app_bot_id) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(project_id) DO UPDATE SET app_id=excluded.app_id,installation_id=excluded.installation_id,default_branch=excluded.default_branch,app_bot_id=excluded.app_bot_id,full_name=excluded.full_name",params![project,cfg.app_id,cfg.installation_id,id,full_name,branch,bot_id])?;
@@ -238,7 +263,7 @@ pub async fn configure(
         "human",
         "github.setup",
         &project,
-        &json!({"app_id":cfg.app_id,"installation_id":cfg.installation_id,"repo_id":id,"visibility":visibility,"preflight":preflight}),
+        &json!({"app_id":cfg.app_id,"installation_id":cfg.installation_id,"repo_id":id,"visibility":visibility,"preflight":preflight,"never_sent_patterns":patterns}),
     )?;
     tx.commit()?;
     Ok(json!({"project":project,"preflight":preflight,"visibility":visibility}))

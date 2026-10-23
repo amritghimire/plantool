@@ -416,10 +416,10 @@ cached for at most 59 minutes and expire earlier when GitHub requires it. No App
 installation token is passed to the worker or agents. Linux has an explicit unavailable
 Keychain stub; Personal still works without App setup.
 
-The wizard resolves `amritghimire` to a numeric ID as the initial approver. Add/remove users
+The wizard resolves `amritghimire` to a numeric ID once as the initial approver. Add/remove users
 with a fresh passkey; changes are audited and the last approver cannot be removed. Names
 are display metadata, never approval authority. Preflight warns about missing required
-checks, approving reviews or dismissal of stale reviews. It links branch settings; add
+checks, approving reviews or dismissal of stale reviews. Warnings remain visible after reopening Settings; Refresh preflight with passkey checks the live default branch without re-entering credentials. Label setup records each write intent before the GitHub request and recovers a lost response by looking up the unique label. It links branch settings; add
 `plantool/policy` once the later PR workflow actually publishes that check. Finish setup
 using the existing worker Repair, route verification, allowed-provider and never-sent
 controls. Provider settings apply to both public and private repositories; a visibility
@@ -437,18 +437,18 @@ to a read-only PlanTool plan/thread page. The worker gate request may supply `su
 `discussion_thread_id`; the thread must belong to that item. Otherwise the page explicitly
 has no supplied discussion summary. GitHub is where approvals happen: post exactly
 `/plantool approve-plan sha256:<12-or-more-hex-prefix>` or
-`/plantool request-changes <reason>` on the issue. PlanTool refetches the comment and issue,
+`/plantool request-changes <reason>` on its own line in the issue comment. Empty leading/trailing lines and GitHub line endings are accepted; prose and multiple commands are rejected. PlanTool refetches the comment and issue, then revalidates the comment immediately before committing,
 requires an allowlisted numeric human ID, rejects edits, deletions, comments at/before the
 publication, stale revisions/policies and used comment IDs. Decision, gate closure and
 idempotent graph-resume outbox entry commit together. Natural language never approves.
-Near-miss replies are limited to allowlisted humans.
+Near-miss replies are limited to allowlisted humans, with eligibility rechecked at delivery. Publication recovery precedes command polling; open gates also backfill issue comments so a previously advanced cursor cannot lose an approval posted while the daemon was down.
 
 The parser and verification context also cover sprint, per-item sprint, milestone and
 urgent command syntax. Their workflow effects remain deferred to the scoped later
 implementations. No PR approval/merge gate is implemented here. After an uncertain GitHub
 POST, publication searches all comment pages for its App-authored marker. If it cannot
 prove the outcome, it stops for owner inspection instead of risking duplicate comments;
-the repository's last sync error appears in Settings. Do not delete an uncertain outbox
+the repository's last sync error appears in Settings. Definite API rejections (for example, missing permission) remain retryable once corrected. Do not delete an uncertain outbox
 entry or repeat the publication blindly.
 
 Default GitHub tests use mocks only:

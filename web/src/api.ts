@@ -46,8 +46,9 @@ export function setAuthorName(name: string) {
 
 export const api = {
   githubPlan: (id:string) => request<{gate:{number:number;hash:string;state:string};summary:string;plan:string;messages:{role:string;body:string}[]}>("GET",`/api/github/plans/${encodeURIComponent(id)}`),
-  githubSettings: () => request<{repositories:{project:string;repo_id:number;full_name:string}[];allowlist:{id:number;login:string}[];sync:{project:string;error:string|null;synced_at:string|null}[]}>("GET","/api/settings/github"),
+  githubSettings: () => request<{repositories:{project:string;repo_id:number;full_name:string;visibility?:string|null;preflight?:{warnings:string[];checked_at?:string}|null}[];status?:{supported:boolean;worker:{available:boolean;message:string}};allowlist:{id:number;login:string}[];sync:{project:string;error:string|null;synced_at:string|null}[]}>("GET","/api/settings/github"),
   configureGithub: (body:{app_id:number;installation_id:number;repo:string;checkout:string;private_key:string|null}) => request<{preflight:{warnings:string[]}}>("POST","/api/settings/github",body),
+  githubPreflight: (project:string) => request<{warnings:string[]}>("POST","/api/settings/github/preflight",{project}),
   githubAllowlist: (login:string,remove:boolean) => request("POST","/api/settings/github/allowlist",{login,remove}),
   modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null}[]}>("GET","/api/settings/models"),
   saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),

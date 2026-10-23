@@ -602,6 +602,15 @@ async fn setup_seeds_initial_numeric_approver_creates_labels_and_preserves_later
         );
     }
     let home = tmp.path().join("home");
+    let execution = plantool_daemon::execution::Execution::load(&home).unwrap();
+    let stopped = execution.stop_all(&Default::default()).await.unwrap();
+    execution
+        .set_rules(
+            &stopped,
+            root.canonicalize().unwrap(),
+            vec!["private/**".into()],
+        )
+        .unwrap();
     let cfg = AppConfig {
         app_id: 1,
         installation_id: 2,
@@ -618,12 +627,18 @@ async fn setup_seeds_initial_numeric_approver_creates_labels_and_preserves_later
         vec![json!({"id":7,"login":"amritghimire"})]
     );
     let db = database::open(&home).unwrap();
+    let protected:String=db.query_row("SELECT never_sent_globs_json FROM project_settings WHERE project_id='github:42' ORDER BY version DESC LIMIT 1",[],|r|r.get(0)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&protected).unwrap(),
+        json!(["private/**"])
+    );
     db.execute("DELETE FROM allowlist", []).unwrap();
     db.execute(
         "INSERT INTO allowlist VALUES(8,'replacement','now','test')",
         [],
     )
     .unwrap();
+    fake.0.lock().unwrap().objects.remove("/users/amritghimire");
     setup::configure(&home, &fake, &cfg, "o/r", &root)
         .await
         .unwrap();
