@@ -72,8 +72,18 @@ impl Api for Client {
                     && !path.contains(['\r', '\n', '#']),
                 "Invalid GitHub resource"
             );
-            let token =
-                auth::token(&self.http, &self.base, &self.config, self.keys.as_ref()).await?;
+            let token = if method == "GET"
+                && (path == "/app"
+                    || path == format!("/app/installations/{}", self.config.installation_id))
+            {
+                auth::jwt(
+                    self.config.app_id,
+                    &self.keys.read(self.config.app_id)?,
+                    crate::database::unix_now(),
+                )?
+            } else {
+                auth::token(&self.http, &self.base, &self.config, self.keys.as_ref()).await?
+            };
             let mut request = self
                 .http
                 .request(method.parse()?, format!("{}{path}", self.base))

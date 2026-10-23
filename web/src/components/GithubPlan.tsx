@@ -1,0 +1,4 @@
+import {useEffect,useState} from "react";
+import {Link,useParams} from "react-router-dom";
+import {api} from "../api";
+export function GithubPlan(){const {id}=useParams();const [plan,setPlan]=useState<Awaited<ReturnType<typeof api.githubPlan>>|null>(null);const [error,setError]=useState("");useEffect(()=>{if(id)void api.githubPlan(id).then(setPlan).catch(e=>setError((e as Error).message))},[id]);return <main className="form-stack"><Link to="/">Back to PlanTool</Link><h1>Published plan</h1><p>Read only. Approve or request changes on the GitHub issue.</p>{error&&<p role="alert">{error}</p>}{plan&&<><p>Plan v{plan.gate.number} · sha256:{plan.gate.hash} · {plan.gate.state}</p><p>{plan.summary}</p><pre style={{whiteSpace:"pre-wrap"}}>{plan.plan}</pre>{plan.messages.map((m,i)=><article key={i}><strong>{m.role}</strong><pre style={{whiteSpace:"pre-wrap"}}>{m.body}</pre></article>)}</>}</main>}

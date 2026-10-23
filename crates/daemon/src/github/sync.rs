@@ -221,8 +221,8 @@ async fn object(
 }
 pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
     let base = repo.path()?;
-    // Visibility is deliberately unconditional on every sync.
-    let metadata = api::get(api, &base).await?;
+    // Revalidate repository identity and visibility on every sync, including 304s.
+    let metadata = object(home, api, repo, &base).await?;
     ensure!(
         metadata["id"].as_u64() == Some(repo.repo_id),
         "Repository numeric identity changed"

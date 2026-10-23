@@ -1065,7 +1065,7 @@ async fn github_settings_are_browser_only_and_assertions_bind_the_allowlist() {
         )
         .await
         .status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::FORBIDDEN
     );
     let mut browser = Browser::register(&h.app, &h.state.config.home).await;
     assert_eq!(

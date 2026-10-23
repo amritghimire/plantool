@@ -9,7 +9,7 @@ use crate::{
     AppState,
 };
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Extension, Json, Router,
@@ -31,7 +31,9 @@ fn human(s: &AppState, h: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 pub fn snapshot(home: &std::path::Path) -> anyhow::Result<Value> {
-    Ok(json!({"repositories":setup::repositories(home)?,"allowlist":setup::allowlist(home)?}))
+    Ok(
+        json!({"repositories":setup::repositories(home)?,"allowlist":setup::allowlist(home)?,"credential_revision":database::get::<u64>(&database::open(home)?,"github_credential_revision")?.unwrap_or(0)}),
+    )
 }
 async fn status(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
     human(&s, &h)?;
@@ -73,13 +75,20 @@ async fn configure(
     if let Some(key) = body.private_key {
         crate::github::auth::jwt(cfg.app_id, key.as_bytes(), database::unix_now())?;
         Keychain.write(cfg.app_id, key.as_bytes())?;
+        let mut db = database::open(&s.config.home)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(anyhow::Error::from)?;
+        let revision = database::get::<u64>(&tx, "github_credential_revision")?.unwrap_or(0) + 1;
+        database::set(&tx, "github_credential_revision", &revision)?;
         database::audit(
-            &database::open(&s.config.home)?,
+            &tx,
             "human",
             "github.key_stored",
             &cfg.app_id.to_string(),
             &json!({"app_id":cfg.app_id}),
         )?;
+        tx.commit().map_err(anyhow::Error::from)?;
     }
     let client = api::Client::new(cfg.clone(), Arc::new(Keychain))?;
     let value = setup::configure(&s.config.home, &client, &cfg, &body.repo, &body.checkout).await?;
@@ -114,8 +123,37 @@ async fn allow(
     setup::change_allowlist(&s.config.home, &c, &body.login, body.remove).await?;
     Ok(Json(json!({"ok":true})))
 }
+async fn plan(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    human(&s, &h)?;
+    let db = database::open(&s.config.home)?;
+    let (sha,summary,thread,gate):(String,String,Option<String>,Value)=db.query_row("SELECT r.content_sha256,c.summary,c.discussion_thread_id,json_object('state',g.state,'number',r.number,'hash',r.content_sha256) FROM github_gate_context c JOIN gates g ON g.id=c.gate_id JOIN revisions r ON r.id=c.revision_id WHERE c.gate_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,serde_json::from_str(&r.get::<_,String>(3)?).unwrap_or(Value::Null)))).map_err(|_|ApiError(StatusCode::NOT_FOUND,"Plan publication not found".into()))?;
+    let messages = if let Some(thread) = thread {
+        let mut q = db
+            .prepare(
+                "SELECT sender_role,body FROM messages WHERE thread_id=?1 ORDER BY created_at,id",
+            )
+            .map_err(anyhow::Error::from)?;
+        let rows = q
+            .query_map([thread], |r| {
+                Ok(json!({"role":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?}))
+            })
+            .map_err(anyhow::Error::from)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::from)?
+    } else {
+        vec![]
+    };
+    Ok(Json(
+        json!({"gate":gate,"summary":summary,"plan":String::from_utf8(crate::artifacts::read(&s.config.home,&sha)?).map_err(anyhow::Error::from)?,"messages":messages}),
+    ))
+}
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/github/plans/{id}", get(plan))
         .route("/settings/github", get(status).post(configure))
         .route("/settings/github/allowlist", post(allow))
 }

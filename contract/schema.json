@@ -519,6 +519,12 @@
         "target_digest"
       ],
       "properties": {
+        "discussion_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "idempotency_key": {
           "type": "string"
         },
@@ -533,6 +539,12 @@
         },
         "kind": {
           "type": "string"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "target_digest": {
           "type": "string"

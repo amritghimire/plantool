@@ -105,10 +105,8 @@ pub async fn configure(
     full_name: &str,
     checkout: &Path,
 ) -> anyhow::Result<Value> {
-    let root = std::path::PathBuf::from(
-        crate::git::git(checkout, &["rev-parse", "--show-toplevel"]).map_err(anyhow::Error::msg)?,
-    )
-    .canonicalize()?;
+    let detected = crate::git::detect_checkout(checkout).map_err(anyhow::Error::msg)?;
+    let root = crate::git::main_root(&detected.common_dir).canonicalize()?;
     let origin =
         crate::git::git(&root, &["remote", "get-url", "origin"]).map_err(anyhow::Error::msg)?;
     let remote = if let Some(path) = origin.strip_prefix("git@github.com:") {
@@ -143,7 +141,7 @@ pub async fn configure(
     let branch = repo["default_branch"]
         .as_str()
         .context("Missing default branch")?;
-    let app = api::get(api, "/installation").await?;
+    let app = api::get(api, &format!("/app/installations/{}", cfg.installation_id)).await?;
     ensure!(
         app["id"].as_u64() == Some(cfg.installation_id)
             && app["app_id"].as_u64() == Some(cfg.app_id),

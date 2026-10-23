@@ -66,7 +66,7 @@ wire!(DispatchReply {
     attempt_id: String,
     generation: u64
 });
-wire!(Gate {item:String, kind:String, target_digest:String, target_sha:Option<String>, idempotency_key:String, thread_id:Option<String>, interrupt_id:Option<String>});
+wire!(Gate {item:String, kind:String, target_digest:String, target_sha:Option<String>, idempotency_key:String, thread_id:Option<String>, interrupt_id:Option<String>, summary:Option<String>, discussion_thread_id:Option<String>});
 wire!(ReadArtifact {
     item: String,
     sha256: String

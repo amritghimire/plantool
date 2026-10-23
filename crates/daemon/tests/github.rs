@@ -24,6 +24,7 @@ struct FakeState {
     calls: Vec<(String, String, Option<String>)>,
     not_modified: bool,
     lose_reply: bool,
+    next_pages: Vec<String>,
 }
 #[derive(Default, Clone)]
 struct Fake(Arc<Mutex<FakeState>>);
@@ -52,6 +53,21 @@ impl Api for Fake {
                     next: false,
                 });
             }
+            if method == "POST" && path.ends_with("/labels") {
+                let value = body.unwrap();
+                let name = value["name"].as_str().unwrap();
+                let label_path = format!(
+                    "{path}/{}",
+                    percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
+                );
+                s.objects.insert(label_path, value.clone());
+                return Ok(Reply {
+                    status: 201,
+                    body: value,
+                    etag: None,
+                    next: false,
+                });
+            }
             let is_list = path.contains('?');
             let prefix = path.split('?').next().unwrap();
             let value = if path.contains("/issues/1/comments?") {
@@ -74,7 +90,7 @@ impl Api for Fake {
                 status,
                 body: if status == 304 { Value::Null } else { value },
                 etag: Some("\"v1\"".into()),
-                next: false,
+                next: s.next_pages.iter().any(|p| p == path),
             })
         })
     }
@@ -434,7 +450,7 @@ async fn http_client_signs_rs256_caches_short_lived_tokens_and_sends_etags() {
  count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);let jwt=headers["authorization"].to_str().unwrap().strip_prefix("Bearer ").unwrap();assert_eq!(jsonwebtoken::decode_header(jwt).unwrap().alg,jsonwebtoken::Algorithm::RS256);
  let data=jsonwebtoken::decode::<Value>(jwt,&jsonwebtoken::DecodingKey::from_rsa_pem(&key).unwrap(),&jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256)).unwrap();assert_eq!(data.claims["iss"],"333");assert!(data.claims["exp"].as_i64().unwrap()-data.claims["iat"].as_i64().unwrap()<=600);
  Json(json!({"token":"test-installation","expires_at":(chrono::Utc::now()+chrono::Duration::hours(1)).to_rfc3339()}))
- })).route("/repos/o/r",get(|h:HeaderMap|async move{assert_eq!(h["authorization"],"Bearer test-installation");assert_eq!(h["if-none-match"],"\"tag\"");(StatusCode::NOT_MODIFIED,"")})).with_state(state);
+ })).route("/repos/o/r",get(|h:HeaderMap|async move{assert_eq!(h["authorization"],"Bearer test-installation");assert_eq!(h["if-none-match"],"\"tag\"");(StatusCode::NOT_MODIFIED,"")})) .route("/app/installations/444",get(|h:HeaderMap|async move{let token=h["authorization"].to_str().unwrap().strip_prefix("Bearer ").unwrap();assert_eq!(jsonwebtoken::decode_header(token).unwrap().alg,jsonwebtoken::Algorithm::RS256);Json(json!({"id":444,"app_id":333}))})).with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -447,6 +463,14 @@ async fn http_client_signs_rs256_caches_short_lived_tokens_and_sends_etags() {
         &format!("http://{address}"),
     )
     .unwrap();
+    assert_eq!(
+        client
+            .request("GET", "/app/installations/444", None, None)
+            .await
+            .unwrap()
+            .status,
+        200
+    );
     for _ in 0..2 {
         assert_eq!(
             client
@@ -506,5 +530,145 @@ async fn failed_poll_does_not_advance_cursor_and_repository_identity_fails_close
         .objects
         .insert("/repos/o/r".into(), json!({"id":999,"visibility":"public"}));
     assert!(sync::poll(&f.home, &f.fake, &f.repo).await.is_err());
-    assert_eq!(f.count("github_cursors"), 0);
+    assert_eq!(
+        database::open(&f.home)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM github_cursors WHERE resource LIKE '%/issues%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn setup_seeds_initial_numeric_approver_creates_labels_and_preserves_later_removal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("checkout");
+    std::fs::create_dir_all(&root).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["remote", "add", "origin", "https://github.com/o/r.git"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success())
+    }
+    let fake = Fake::default();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.objects.insert(
+            "/repos/o/r".into(),
+            json!({"id":42,"full_name":"o/r","default_branch":"main","visibility":"private"}),
+        );
+        s.objects.insert("/app/installations/2".into(),json!({"id":2,"app_id":1,"app_slug":"plantool-test","permissions":{"issues":"write","pull_requests":"write","contents":"write","checks":"write","statuses":"read","actions":"read","administration":"read","metadata":"read"}}));
+        s.objects.insert(
+            "/users/plantool-test%5Bbot%5D".into(),
+            json!({"id":99,"type":"Bot"}),
+        );
+        s.objects.insert(
+            "/users/amritghimire".into(),
+            json!({"id":7,"type":"User","login":"amritghimire"}),
+        );
+    }
+    let home = tmp.path().join("home");
+    let cfg = AppConfig {
+        app_id: 1,
+        installation_id: 2,
+    };
+    let first = setup::configure(&home, &fake, &cfg, "o/r", &root)
+        .await
+        .unwrap();
+    assert!(!first["preflight"]["warnings"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        setup::allowlist(&home).unwrap(),
+        vec![json!({"id":7,"login":"amritghimire"})]
+    );
+    let db = database::open(&home).unwrap();
+    db.execute("DELETE FROM allowlist", []).unwrap();
+    db.execute(
+        "INSERT INTO allowlist VALUES(8,'replacement','now','test')",
+        [],
+    )
+    .unwrap();
+    setup::configure(&home, &fake, &cfg, "o/r", &root)
+        .await
+        .unwrap();
+    assert_eq!(
+        setup::allowlist(&home).unwrap(),
+        vec![json!({"id":8,"login":"replacement"})]
+    );
+    assert_eq!(
+        fake.0
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|(m, p, _)| m == "POST" && p.ends_with("/labels"))
+            .count(),
+        7
+    );
+}
+#[tokio::test]
+async fn paginated_etag_pages_keep_later_items_and_label_actors() {
+    let f = Fixture::new();
+    let base = "/repos/o/r/issues?state=all&sort=updated&direction=asc";
+    {
+        let mut s = f.fake.0.lock().unwrap();
+        let p1 = format!("{base}&per_page=100&page=1");
+        let p2 = format!("{base}&per_page=100&page=2");
+        s.next_pages.push(p1.clone());
+        s.objects.insert(p1, json!([{"id":100,"number":1}]));
+        s.objects.insert(p2, json!([{"id":101,"number":2}]));
+        s.objects.insert("/repos/o/r/issues/2/events".into(),json!([{"id":20,"event":"labeled","actor":{"id":7,"type":"User"},"label":{"name":"plantool:accept"}}]));
+    }
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    assert!(sync::authorized_label(&f.home, "p", 2, "plantool:accept").unwrap());
+    f.fake.0.lock().unwrap().not_modified = true;
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    assert!(sync::authorized_label(&f.home, "p", 2, "plantool:accept").unwrap());
+    assert!(f
+        .fake
+        .0
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|(_, p, tag)| p.contains("page=2") && tag.is_some()));
+}
+#[test]
+fn prior_github_draft_database_upgrades_without_losing_allowlist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dbpath = database::path(tmp.path());
+    std::fs::create_dir_all(dbpath.parent().unwrap()).unwrap();
+    let db = rusqlite::Connection::open(dbpath).unwrap();
+    db.execute_batch(include_str!("../migrations/001_initial.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("../migrations/002_worker.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("../migrations/003_github.sql"))
+        .unwrap();
+    db.execute("INSERT INTO allowlist VALUES(7,'owner','now','test')", [])
+        .unwrap();
+    db.pragma_update(None, "user_version", 3).unwrap();
+    drop(db);
+    let upgraded = database::open(tmp.path()).unwrap();
+    assert_eq!(
+        upgraded
+            .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    upgraded
+        .prepare("SELECT summary,discussion_thread_id FROM github_gate_context")
+        .unwrap();
+    assert_eq!(setup::allowlist(tmp.path()).unwrap().len(), 1);
 }

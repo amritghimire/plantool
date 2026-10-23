@@ -44,7 +44,7 @@ pub fn request(
     )?;
     tx.execute("INSERT INTO gates(id,item_id,kind,target_digest,policy_version,state,created_at) VALUES(?1,?2,'plan',?3,?4,'pending',?5)",params![id,item,current,policy,plantool_core::now()])?;
     tx.execute(
-        "INSERT INTO github_gate_context VALUES(?1,?2,?3,?4,?1)",
+        "INSERT INTO github_gate_context(gate_id,revision_id,thread_id,interrupt_id,publication_key) VALUES(?1,?2,?3,?4,?1)",
         params![id, revision, thread, interrupt],
     )?;
     dispatcher::enqueue(tx, item, "github.plan", &json!({"gate":id}))?;
@@ -314,7 +314,20 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
                 &crate::sandbox::NeverSent::new(&serde_json::from_str::<Vec<String>>(&patterns)?)?,
                 &json!({"plan":plan}),
             )?;
-            let body=format!("### Plan v{number} · sha256:{}\n\n<details><summary>Full hash</summary>sha256:{sha}</details>\n\nDiscussion and immutable plan for this item are available in PlanTool.\n\n{plan}\n\nTo approve: `/plantool approve-plan sha256:{}`\n\n{marker}",&sha[..12],&sha[..12]);
+            let summary: String = db.query_row(
+                "SELECT summary FROM github_gate_context WHERE gate_id=?1",
+                [g],
+                |r| r.get(0),
+            )?;
+            crate::models::proxy::check_payload(
+                Path::new(&root),
+                &crate::sandbox::NeverSent::new(&serde_json::from_str::<Vec<String>>(&patterns)?)?,
+                &json!({"summary":summary}),
+            )?;
+            let port = crate::store::read_daemon_info(home)?
+                .map(|i| i.port)
+                .unwrap_or_else(crate::config::default_port);
+            let body=format!("### Plan v{number} · sha256:{}\n\n<details><summary>Full hash</summary>\n\nsha256:{sha}\n\n</details>\n\n{summary}\n\n[PlanTool thread and immutable plan](http://localhost:{port}/github/plans/{g})\n\n{plan}\n\nTo approve: `/plantool approve-plan sha256:{}`\n\n{marker}",&sha[..12],&sha[..12]);
             (issue, body, Some(g.to_string()))
         } else {
             (
