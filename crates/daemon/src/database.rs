@@ -32,7 +32,7 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", true)?;
     let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    ensure!(version <= 2, "Database is newer than this PlanTool version");
+    ensure!(version <= 3, "Database is newer than this PlanTool version");
     if version == 0 {
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // A second connection may have waited for the same initial migration.
@@ -49,6 +49,15 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
         if version < 2 {
             tx.execute_batch(include_str!("../migrations/002_worker.sql"))?;
             tx.pragma_update(None, "user_version", 2)?;
+        }
+        tx.commit()?;
+    }
+    if version < 3 {
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current < 3 {
+            tx.execute_batch(include_str!("../migrations/003_github.sql"))?;
+            tx.pragma_update(None, "user_version", 3)?;
         }
         tx.commit()?;
     }

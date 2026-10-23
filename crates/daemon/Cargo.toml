@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+jsonwebtoken = "9"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 fs2 = "0.4"
 libc = "0.2"
 shlex = "2"
@@ -45,3 +47,6 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tokio-tungstenite.workspace = true
 http-body-util = "0.1"
 webauthn-authenticator-rs = { version = "0.5", default-features = false, features = ["softpasskey"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"

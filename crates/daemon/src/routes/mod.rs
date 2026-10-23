@@ -4,6 +4,7 @@ pub mod comments;
 mod contract;
 pub mod engineering;
 pub mod execution;
+pub mod github;
 pub mod live;
 mod models;
 pub mod notices;
@@ -153,6 +154,7 @@ pub fn router(state: AppState) -> Router {
         .merge(execution::routes())
         .merge(engineering::browser_routes())
         .merge(models::browser_routes())
+        .merge(github::routes())
         .merge(notices::routes())
         .merge(comments::routes())
         .merge(changes::routes())
