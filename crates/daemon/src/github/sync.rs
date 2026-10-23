@@ -94,7 +94,7 @@ async fn collection(
         for c in &all {
             if c["body"]
                 .as_str()
-                .is_some_and(|b| b.starts_with("/plantool"))
+                .is_some_and(|b| b.lines().any(|line| line.starts_with("/plantool")))
             {
                 if let Some(id) = c["id"].as_u64() {
                     gates::comment(home, api, repo, id).await?;
@@ -227,13 +227,7 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         metadata["id"].as_u64() == Some(repo.repo_id),
         "Repository numeric identity changed"
     );
-    let visibility = metadata["visibility"]
-        .as_str()
-        .unwrap_or(if metadata["private"] == true {
-            "private"
-        } else {
-            "public"
-        });
+    let visibility = api::visibility(&metadata)?;
     {
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -266,6 +260,30 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         "issues",
     )
     .await?;
+    // Recover a successful publication before consuming approvals posted while
+    // the daemon was down. Global comment cursors may already be past them.
+    gates::publish(home, api, repo).await?;
+    let open_gates = {
+        let db = database::open(home)?;
+        let mut q=db.prepare("SELECT i.github_issue_number,g.created_at FROM gates g JOIN work_items i ON i.id=g.item_id WHERE i.project_id=?1 AND g.kind='plan' AND g.state='open' ORDER BY g.id")?;
+        let rows = q.query_map([&repo.project], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for (issue, opened) in open_gates {
+        let since =
+            percent_encoding::utf8_percent_encode(&opened, percent_encoding::NON_ALPHANUMERIC);
+        collection(
+            home,
+            api,
+            repo,
+            &format!("{base}/issues/{issue}/comments?since={since}"),
+            false,
+            "comments",
+        )
+        .await?;
+    }
     let _ = collection(
         home,
         api,

@@ -1,4 +1,4 @@
-//! Strict, whole-comment command grammar. Natural language is never authority.
+//! One command on its own line. Natural language is never authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     ApprovePlan(String),
@@ -9,7 +9,9 @@ pub enum Command {
     Urgent,
 }
 pub fn parse(body: &str) -> Option<Command> {
-    if body.contains(['\n', '\r']) || body.trim() != body {
+    let mut lines = body.lines().filter(|line| !line.is_empty());
+    let body = lines.next()?;
+    if lines.next().is_some() || body.trim() != body {
         return None;
     }
     if body == "/plantool approve-sprint" {
@@ -48,13 +50,13 @@ mod tests {
             parse("/plantool approve-plan sha256:abcdef012345"),
             Some(Command::ApprovePlan("abcdef012345".into()))
         );
+        assert_eq!(parse("\n/plantool urgent\r\n"), Some(Command::Urgent));
         for s in [
             "LGTM",
             "approved",
             "👍",
             "/Plantool urgent",
             " /plantool urgent",
-            "/plantool urgent\n",
             "/plantool urgent\n/plantool continue",
             "/plantool approve-plan sha256:abc",
             "/plantool approve-plan sha256:zzzzzzzzzzzz",

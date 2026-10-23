@@ -83,22 +83,6 @@ pub fn hash_matches(prefix: &str, current: &str) -> bool {
             .to_ascii_lowercase()
             .starts_with(&prefix.to_ascii_lowercase())
 }
-/// Pure verification shared by future sprint/milestone consumers. No workflow is implied.
-pub fn verify(c: &Value, opened: &str, current: &str, expected: &str) -> anyhow::Result<()> {
-    ensure!(
-        c["created_at"].is_string() && c["created_at"] == c["updated_at"],
-        "Edited or missing comment timestamp"
-    );
-    ensure!(
-        timestamp(c["created_at"].as_str().unwrap())? > timestamp(opened)?,
-        "Comment predates the current gate or snapshot"
-    );
-    ensure!(
-        hash_matches(expected, current),
-        "Hash or commit does not match the current gate"
-    );
-    Ok(())
-}
 pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> anyhow::Result<()> {
     // Never trust the list object: re-fetch the authoritative object, including deletions.
     let base = repo.path()?;
@@ -128,7 +112,7 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
         return Ok(());
     }
     let Some(command) = commands::parse(body) else {
-        if body.starts_with("/plantool ") {
+        if body.lines().any(|line| line.starts_with("/plantool ")) {
             near_miss(
                 home,
                 repo,
@@ -168,6 +152,22 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
     if issue["state"] != "open" || !issue["pull_request"].is_null() {
         return Ok(());
     }
+    // Revalidate last, after the issue lookup: an edit/deletion during that
+    // request must not turn the earlier representation into an approval.
+    let fresh = api
+        .request("GET", &format!("{base}/issues/comments/{id}"), None, None)
+        .await?;
+    if fresh.status == 404 {
+        return Ok(());
+    }
+    ensure!(
+        fresh.status == 200,
+        "Final comment refetch failed ({})",
+        fresh.status
+    );
+    if fresh.body != c {
+        return Ok(());
+    }
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if !valid_identity(&tx, &c) {
@@ -183,6 +183,14 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
     }
     let current:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM gates g JOIN github_gate_context c ON c.gate_id=g.id JOIN revisions r ON r.id=c.revision_id JOIN work_items i ON i.id=g.item_id WHERE g.id=?1 AND g.state='open' AND c.revision_id=?2 AND r.id=(SELECT id FROM revisions WHERE item_id=g.item_id AND doc_kind='plan' ORDER BY number DESC LIMIT 1) AND g.target_digest=r.content_sha256 AND g.policy_version=(SELECT max(version) FROM project_settings WHERE project_id=i.project_id))",params![gate,revision],|r|r.get(0))?;
     if !current {
+        tx.rollback()?;
+        near_miss(
+            home,
+            repo,
+            number,
+            id,
+            "The current plan revision or policy changed; a new plan publication is required",
+        )?;
         return Ok(());
     }
     let decision = if matches!(command, Command::ApprovePlan(_)) {
@@ -330,8 +338,38 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
             let body=format!("### Plan v{number} · sha256:{}\n\n<details><summary>Full hash</summary>\n\nsha256:{sha}\n\n</details>\n\n{summary}\n\n[PlanTool thread and immutable plan](http://localhost:{port}/github/plans/{g})\n\n{plan}\n\nTo approve: `/plantool approve-plan sha256:{}`\n\n{marker}",&sha[..12],&sha[..12]);
             (issue, body, Some(g.to_string()))
         } else {
+            let comment = p["comment"].as_u64().context("Missing reply source")?;
+            let source = api
+                .request(
+                    "GET",
+                    &format!("{base}/issues/comments/{comment}"),
+                    None,
+                    None,
+                )
+                .await?;
+            ensure!(
+                source.status == 200 || source.status == 404,
+                "Reply source refetch failed ({})",
+                source.status
+            );
+            let issue = p["issue"].as_i64().context("Missing issue")?;
+            let expected_url = format!("https://api.github.com{base}/issues/{issue}");
+            if source.status == 404
+                || !valid_identity(&database::open(home)?, &source.body)
+                || source.body["issue_url"].as_str() != Some(expected_url.as_str())
+            {
+                database::open(home)?.execute(
+                    "UPDATE outbox SET delivered_at=?2,result_json=?3 WHERE id=?1",
+                    params![
+                        outbox,
+                        plantool_core::now(),
+                        json!({"ignored":"reply author is no longer eligible"}).to_string()
+                    ],
+                )?;
+                continue;
+            }
             (
-                p["issue"].as_i64().context("Missing issue")?,
+                issue,
                 format!(
                     "{}\n\n{marker}",
                     p["body"].as_str().context("Missing reply")?
@@ -359,6 +397,13 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
                     None,
                 )
                 .await?;
+            if matches!(r.status, 401 | 403 | 404 | 422 | 429) {
+                database::open(home)?.execute("UPDATE outbox SET attempts=0,result_json=?2 WHERE id=?1 AND delivered_at IS NULL",params![outbox,json!({"http_status":r.status,"outcome":"not_created"}).to_string()])?;
+                anyhow::bail!(
+                    "Comment was not created (HTTP {}); retry after the API error clears",
+                    r.status
+                );
+            }
             ensure!(
                 r.status == 201,
                 "Comment publication outcome requires reconciliation ({})",

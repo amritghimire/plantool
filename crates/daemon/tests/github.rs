@@ -25,6 +25,9 @@ struct FakeState {
     not_modified: bool,
     lose_reply: bool,
     next_pages: Vec<String>,
+    mutate_on_issue: Option<(u64, Option<Value>)>,
+    lose_label_reply: bool,
+    reject_comment_status: Option<u16>,
 }
 #[derive(Default, Clone)]
 struct Fake(Arc<Mutex<FakeState>>);
@@ -40,6 +43,14 @@ impl Api for Fake {
             let mut s = self.0.lock().unwrap();
             s.calls.push((method.into(), path.into(), etag.clone()));
             if method == "POST" && path.contains("/comments") {
+                if let Some(status) = s.reject_comment_status {
+                    return Ok(Reply {
+                        status,
+                        body: json!({"message":"rejected"}),
+                        etag: None,
+                        next: false,
+                    });
+                }
                 s.posts += 1;
                 let c = json!({"id":900+s.posts,"user":{"id":99,"type":"Bot"},"body":body.unwrap()["body"],"created_at":"2026-10-23T12:00:00Z"});
                 s.comments.push(c.clone());
@@ -61,12 +72,26 @@ impl Api for Fake {
                     percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
                 );
                 s.objects.insert(label_path, value.clone());
+                if s.lose_label_reply {
+                    s.lose_label_reply = false;
+                    return Err(anyhow::anyhow!("lost label reply after effect"));
+                }
                 return Ok(Reply {
                     status: 201,
                     body: value,
                     etag: None,
                     next: false,
                 });
+            }
+            if method == "GET" && path == "/repos/o/r/issues/1" {
+                if let Some((id, value)) = s.mutate_on_issue.take() {
+                    let key = format!("/repos/o/r/issues/comments/{id}");
+                    if let Some(value) = value {
+                        s.objects.insert(key, value);
+                    } else {
+                        s.objects.remove(&key);
+                    }
+                }
             }
             let is_list = path.contains('?');
             let prefix = path.split('?').next().unwrap();
@@ -671,4 +696,257 @@ fn prior_github_draft_database_upgrades_without_losing_allowlist() {
         .prepare("SELECT summary,discussion_thread_id FROM github_gate_context")
         .unwrap();
     assert_eq!(setup::allowlist(tmp.path()).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn publication_recovery_backfills_approval_past_the_global_cursor() {
+    let f = Fixture::new();
+    f.gate();
+    f.fake.0.lock().unwrap().lose_reply = true;
+    assert!(gates::publish(&f.home, &f.fake, &f.repo).await.is_err());
+    let c = f.command(
+        77,
+        format!("/plantool approve-plan sha256:{}", &f.sha[..12]),
+    );
+    f.install(c.clone());
+    {
+        let mut fake = f.fake.0.lock().unwrap();
+        fake.lose_reply = false;
+        fake.comments.push(c);
+    }
+    database::open(&f.home).unwrap().execute("INSERT INTO github_cursors(resource,last_seen_at) VALUES('42:/repos/o/r/issues/comments?sort=updated&direction=asc','2026-10-23T14:00:00Z')",[]).unwrap();
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    assert_eq!(f.count("decisions"), 1);
+    assert_eq!(f.fake.0.lock().unwrap().posts, 1);
+    let resumes: i64 = database::open(&f.home)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM outbox WHERE kind='worker.resume'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(resumes, 1);
+}
+#[tokio::test]
+async fn comment_edited_or_deleted_during_issue_lookup_cannot_approve() {
+    for delete in [false, true] {
+        let f = Fixture::new();
+        f.gate();
+        gates::publish(&f.home, &f.fake, &f.repo).await.unwrap();
+        let c = f.command(
+            77,
+            format!("/plantool approve-plan sha256:{}", &f.sha[..12]),
+        );
+        f.install(c.clone());
+        let mut changed = c;
+        changed["updated_at"] = json!("2026-10-23T12:02:00Z");
+        f.fake.0.lock().unwrap().mutate_on_issue =
+            Some((77, if delete { None } else { Some(changed) }));
+        gates::comment(&f.home, &f.fake, &f.repo, 77).await.unwrap();
+        assert_eq!(f.count("decisions"), 0);
+    }
+}
+#[tokio::test]
+async fn command_on_its_own_line_accepts_github_trailing_newline() {
+    let f = Fixture::new();
+    f.gate();
+    gates::publish(&f.home, &f.fake, &f.repo).await.unwrap();
+    f.install(f.command(
+        77,
+        format!("\n/plantool approve-plan sha256:{}\r\n", &f.sha[..12]),
+    ));
+    gates::comment(&f.home, &f.fake, &f.repo, 77).await.unwrap();
+    assert_eq!(f.count("decisions"), 1);
+}
+#[tokio::test]
+async fn label_intent_survives_lost_reply_and_resolves_without_a_duplicate() {
+    let f = Fixture::new();
+    f.fake.0.lock().unwrap().lose_label_reply = true;
+    assert!(
+        plantool_daemon::github::api::labels(&f.home, &f.fake, "/repos/o/r", "1:2:42")
+            .await
+            .is_err()
+    );
+    let db = database::open(&f.home).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM outbox WHERE kind='github.label' AND delivered_at IS NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    plantool_daemon::github::api::labels(&f.home, &f.fake, "/repos/o/r", "1:2:42")
+        .await
+        .unwrap();
+    assert_eq!(
+        f.fake
+            .0
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|(m, p, _)| m == "POST" && p.ends_with("/labels"))
+            .count(),
+        7
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM outbox WHERE kind='github.label' AND delivered_at IS NOT NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        7
+    );
+}
+#[tokio::test]
+async fn near_miss_reply_rechecks_current_allowlist_at_delivery() {
+    let f = Fixture::new();
+    f.gate();
+    gates::publish(&f.home, &f.fake, &f.repo).await.unwrap();
+    f.install(f.command(77, "/plantool approve-plan sha256:000000000000".into()));
+    gates::comment(&f.home, &f.fake, &f.repo, 77).await.unwrap();
+    database::open(&f.home)
+        .unwrap()
+        .execute("DELETE FROM allowlist", [])
+        .unwrap();
+    gates::publish(&f.home, &f.fake, &f.repo).await.unwrap();
+    assert_eq!(f.fake.0.lock().unwrap().posts, 1);
+}
+#[tokio::test]
+async fn known_failed_publication_can_retry_after_permissions_are_fixed() {
+    let f = Fixture::new();
+    f.gate();
+    f.fake.0.lock().unwrap().reject_comment_status = Some(403);
+    assert!(gates::publish(&f.home, &f.fake, &f.repo).await.is_err());
+    f.fake.0.lock().unwrap().reject_comment_status = None;
+    gates::publish(&f.home, &f.fake, &f.repo).await.unwrap();
+    assert_eq!(f.fake.0.lock().unwrap().posts, 1);
+}
+#[tokio::test]
+async fn preflight_can_be_refreshed_and_warnings_are_durable() {
+    let f = Fixture::new();
+    f.fake.0.lock().unwrap().objects.insert(
+        "/repos/o/r".into(),
+        json!({"id":42,"default_branch":"main","visibility":"public"}),
+    );
+    let first = setup::refresh_preflight(&f.home, &f.fake, &f.repo)
+        .await
+        .unwrap();
+    assert!(!first["warnings"].as_array().unwrap().is_empty());
+    f.fake.0.lock().unwrap().objects.insert("/repos/o/r/branches/main/protection".into(),json!({"required_status_checks":{"contexts":["ci"]},"required_pull_request_reviews":{"required_approving_review_count":1,"dismiss_stale_reviews":true}}));
+    setup::refresh_preflight(&f.home, &f.fake, &f.repo)
+        .await
+        .unwrap();
+    let saved = database::get::<Value>(&database::open(&f.home).unwrap(), "github_preflight:p")
+        .unwrap()
+        .unwrap();
+    assert!(saved["warnings"].as_array().unwrap().is_empty());
+    assert!(f
+        .fake
+        .0
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .all(|(method, _, _)| method == "GET"));
+}
+#[tokio::test]
+async fn missing_visibility_does_not_guess_that_a_repository_is_public() {
+    let f = Fixture::new();
+    f.fake
+        .0
+        .lock()
+        .unwrap()
+        .objects
+        .insert("/repos/o/r".into(), json!({"id":42}));
+    assert!(sync::poll(&f.home, &f.fake, &f.repo).await.is_err());
+    assert_eq!(f.count("audit"), 0);
+}
+#[tokio::test]
+async fn pr_reviews_checks_and_state_refresh_when_the_head_changes_or_pr_closes() {
+    let f = Fixture::new();
+    let old = "a".repeat(40);
+    let new = "b".repeat(40);
+    {
+        let mut api = f.fake.0.lock().unwrap();
+        api.objects
+            .insert("/repos/o/r/pulls".into(), json!([{"id":300,"number":2}]));
+        api.objects.insert(
+            "/repos/o/r/pulls/2".into(),
+            json!({"id":300,"state":"open","head":{"sha":old}}),
+        );
+        api.objects.insert(
+            "/repos/o/r/pulls/2/reviews".into(),
+            json!([{"id":301,"state":"APPROVED","commit_id":old}]),
+        );
+        api.objects.insert(
+            format!("/repos/o/r/commits/{old}/check-runs"),
+            json!({"check_runs":[{"id":302,"head_sha":old,"conclusion":"success"}]}),
+        );
+        api.objects.insert(
+            format!("/repos/o/r/commits/{new}/check-runs"),
+            json!({"check_runs":[{"id":303,"head_sha":new,"conclusion":null}]}),
+        );
+    }
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    f.fake.0.lock().unwrap().objects.insert(
+        "/repos/o/r/pulls/2".into(),
+        json!({"id":300,"state":"open","head":{"sha":new}}),
+    );
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    let db = database::open(&f.home).unwrap();
+    let state: String = db
+        .query_row(
+            "SELECT body_json FROM github_objects WHERE resource='42:pr_state' AND object_id='2'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&state).unwrap()["head"]["sha"],
+        new
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM inbox WHERE source='github:checks'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(f.count("decisions"), 0);
+    {
+        let mut api = f.fake.0.lock().unwrap();
+        api.objects.insert("/repos/o/r/pulls".into(), json!([]));
+        api.objects.insert(
+            "/repos/o/r/pulls/2".into(),
+            json!({"id":300,"state":"closed","head":{"sha":new}}),
+        );
+    }
+    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    let state: String = db
+        .query_row(
+            "SELECT body_json FROM github_objects WHERE resource='42:pr_state' AND object_id='2'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&state).unwrap()["state"],
+        "closed"
+    );
+    assert!(f
+        .fake
+        .0
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|(_, path, tag)| path == "/repos/o/r/pulls/2" && tag.is_some()));
 }

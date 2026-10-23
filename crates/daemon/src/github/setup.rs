@@ -53,6 +53,12 @@ pub async fn resolve_user(api: &dyn Api, login: &str) -> anyhow::Result<Value> {
         user["type"] == "User" && user["id"].as_u64().is_some_and(|n| n > 0),
         "Allowlist requires a human GitHub user"
     );
+    ensure!(
+        user["login"]
+            .as_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(login)),
+        "GitHub username resolution mismatch"
+    );
     Ok(user)
 }
 pub fn allowlist(home: &Path) -> anyhow::Result<Vec<Value>> {
@@ -172,16 +178,16 @@ pub async fn configure(
     ensure!(bot["type"] == "Bot", "Missing App bot identity");
     let bot_id = bot["id"].as_u64().context("Missing bot ID")?;
     let initial = resolve_user(api, "amritghimire").await?;
-    api::labels(api, &path).await?;
+    api::labels(
+        home,
+        api,
+        &path,
+        &format!("{}:{}:{id}", cfg.app_id, cfg.installation_id),
+    )
+    .await?;
     let preflight = api::preflight(api, &path, branch).await?;
     let project = format!("github:{id}");
-    let visibility = repo["visibility"]
-        .as_str()
-        .unwrap_or(if repo["private"] == true {
-            "private"
-        } else {
-            "public"
-        });
+    let visibility = api::visibility(&repo)?;
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("INSERT OR IGNORE INTO projects(id,repo_full_name,repo_id,local_checkout,mode,visibility,created_at) VALUES(?1,?2,?3,?4,'eos',?5,?6)",params![project,full_name,id,root.to_string_lossy(),visibility,plantool_core::now()])?;
@@ -194,6 +200,25 @@ pub async fn configure(
         Path::new(&existing) == root,
         "Repository already configured with another checkout"
     );
+    let previous: Option<String> = tx.query_row(
+        "SELECT visibility FROM projects WHERE id=?1",
+        [&project],
+        |r| r.get(0),
+    )?;
+    if previous.as_deref() != Some(visibility) {
+        tx.execute(
+            "UPDATE projects SET visibility=?2 WHERE id=?1",
+            params![project, visibility],
+        )?;
+        database::audit(
+            &tx,
+            "github",
+            "github.visibility",
+            &project,
+            &json!({"from":previous,"to":visibility,"provider_policy_changed":false}),
+        )?;
+    }
+    database::set(&tx, &format!("github_preflight:{project}"), &preflight)?;
     tx.execute("INSERT OR IGNORE INTO project_settings(project_id,version,effective_at,set_by) VALUES(?1,1,?2,'browser')",params![project,plantool_core::now()])?;
     // Seed only once; removing the initial member later must remain effective.
     if database::get::<bool>(&tx, "github_allowlist_initialized")? != Some(true) {
@@ -217,4 +242,33 @@ pub async fn configure(
     )?;
     tx.commit()?;
     Ok(json!({"project":project,"preflight":preflight,"visibility":visibility}))
+}
+
+pub async fn refresh_preflight(
+    home: &Path,
+    api: &dyn Api,
+    repo: &Repository,
+) -> anyhow::Result<Value> {
+    let path = repo.path()?;
+    let metadata = api::get(api, &path).await?;
+    ensure!(
+        metadata["id"].as_u64() == Some(repo.repo_id),
+        "Repository numeric identity changed"
+    );
+    let branch = metadata["default_branch"]
+        .as_str()
+        .context("Missing default branch")?;
+    let mut result = api::preflight(api, &path, branch).await?;
+    result["checked_at"] = json!(plantool_core::now());
+    result["default_branch"] = json!(branch);
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    database::set(&tx, &format!("github_preflight:{}", repo.project), &result)?;
+    tx.execute(
+        "UPDATE github_repositories SET default_branch=?2 WHERE project_id=?1",
+        params![repo.project, branch],
+    )?;
+    database::audit(&tx, "human", "github.preflight", &repo.project, &result)?;
+    tx.commit()?;
+    Ok(result)
 }

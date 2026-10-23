@@ -156,15 +156,43 @@ pub const LABELS: [&str; 7] = [
     "plantool:sprint",
     "plantool:in-progress",
 ];
-pub async fn labels(api: &dyn Api, repo: &str) -> anyhow::Result<()> {
+pub async fn labels(
+    home: &std::path::Path,
+    api: &dyn Api,
+    repo: &str,
+    scope: &str,
+) -> anyhow::Result<()> {
+    use crate::{database, dispatcher};
+    use rusqlite::params;
     for label in LABELS {
-        let p = format!(
+        let resource = format!(
             "{repo}/labels/{}",
             percent_encoding::utf8_percent_encode(label, percent_encoding::NON_ALPHANUMERIC)
         );
-        let old = api.request("GET", &p, None, None).await?;
-        if old.status == 404 {
-            let r = api
+        let aggregate = format!("github-label:{scope}:{label}");
+        let old = api.request("GET", &resource, None, None).await?;
+        let observed = if old.status == 200 {
+            old.body
+        } else {
+            ensure!(old.status == 404, "Label lookup failed ({})", old.status);
+            // Persist intent before the write. Retries first GET the unique
+            // label resource, so a lost POST reply cannot duplicate a label.
+            {
+                let mut db = database::open(home)?;
+                let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let pending:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND kind='github.label' AND delivered_at IS NULL)",[&aggregate],|r|r.get(0))?;
+                if !pending {
+                    dispatcher::enqueue(
+                        &tx,
+                        &aggregate,
+                        "github.label",
+                        &json!({"repository":repo,"name":label,"color":"5b5bd6","scope":scope,"operation":uuid::Uuid::new_v4().to_string()}),
+                    )?;
+                }
+                tx.execute("UPDATE outbox SET attempts=attempts+1 WHERE aggregate_id=?1 AND kind='github.label' AND delivered_at IS NULL",[&aggregate])?;
+                tx.commit()?;
+            }
+            let created = api
                 .request(
                     "POST",
                     &format!("{repo}/labels"),
@@ -172,12 +200,52 @@ pub async fn labels(api: &dyn Api, repo: &str) -> anyhow::Result<()> {
                     None,
                 )
                 .await?;
-            ensure!(r.status == 201, "Label creation failed ({})", r.status)
-        } else {
-            ensure!(old.status == 200, "Label lookup failed ({})", old.status)
+            if created.status == 201 {
+                created.body
+            } else {
+                ensure!(
+                    created.status == 422,
+                    "Label creation failed ({})",
+                    created.status
+                );
+                // Another setup may win the name race; only the authoritative
+                // resource proves this is a harmless conflict.
+                get(api, &resource).await?
+            }
+        };
+        ensure!(
+            observed["name"].as_str() == Some(label),
+            "GitHub label identity mismatch"
+        );
+        let mut db = database::open(home)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let changed=tx.execute("UPDATE outbox SET delivered_at=?2,result_json=?3 WHERE aggregate_id=?1 AND kind='github.label' AND delivered_at IS NULL",params![aggregate,plantool_core::now(),json!({"name":label}).to_string()])?;
+        if changed > 0 {
+            database::audit(
+                &tx,
+                "github",
+                "github.label_observed",
+                &aggregate,
+                &json!({"name":label}),
+            )?;
         }
+        tx.commit()?;
     }
     Ok(())
+}
+pub fn visibility(repo: &Value) -> anyhow::Result<&str> {
+    if let Some(value) = repo["visibility"].as_str() {
+        ensure!(
+            ["public", "private", "internal"].contains(&value),
+            "Unknown GitHub visibility"
+        );
+        return Ok(value);
+    }
+    match repo["private"].as_bool() {
+        Some(true) => Ok("private"),
+        Some(false) => Ok("public"),
+        None => anyhow::bail!("Repository visibility missing"),
+    }
 }
 pub async fn preflight(api: &dyn Api, repo: &str, branch: &str) -> anyhow::Result<Value> {
     let r = api
@@ -216,6 +284,6 @@ pub async fn preflight(api: &dyn Api, repo: &str, branch: &str) -> anyhow::Resul
         }
     }
     Ok(
-        json!({"warnings":warnings,"policy_check":"Offer plantool/policy as a required check after the PR workflow is implemented; this phase does not publish that check.","settings_url":"https://github.com/settings/apps"}),
+        json!({"warnings":warnings,"policy_check":"Offer plantool/policy as a required check after the PR workflow is implemented; this phase does not publish that check.","settings_url":format!("https://github.com{}/settings/branches",repo.trim_start_matches("/repos"))}),
     )
 }
