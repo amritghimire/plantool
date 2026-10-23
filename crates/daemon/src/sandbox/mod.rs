@@ -118,12 +118,25 @@ pub fn spawn_worker(
 ) -> anyhow::Result<WorkerProcess> {
     let version = execution.status();
     anyhow::ensure!(!version.stopped, "Stop All is active");
+    let daemon_home = paths.daemon_home.clone();
     let sandbox = Sandbox::required(paths, Role::Worker, policy)?;
-    let mut command = sandbox.command(exe)?;
+    let command = sandbox.command(exe)?;
+    #[cfg(unix)]
+    let (mut command, _id, barrier) = crate::supervision::wrap(command)?;
+    #[cfg(not(unix))]
+    let mut command = command;
     environment::apply(&mut command, None);
     configure(&mut command)?;
     sandbox.apply_environment(&mut command);
     let child = execution.spawn(version.generation, &mut command)?;
+    #[cfg(unix)]
+    barrier.release(
+        &daemon_home,
+        "worker",
+        child
+            .id()
+            .ok_or_else(|| anyhow::anyhow!("Worker PID unavailable"))?,
+    )?;
     Ok(WorkerProcess {
         child,
         _sandbox: sandbox,

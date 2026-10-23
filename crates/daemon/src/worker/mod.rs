@@ -79,6 +79,16 @@ impl WorkerManager {
             let _ = old.process.child.kill().await;
         }
         let home = &state.config.home;
+        if crate::database::get::<bool>(&crate::database::open(home)?, "model_recovery_fence")?
+            .unwrap_or(false)
+        {
+            crate::supervision::reconcile(home)?;
+        }
+        anyhow::ensure!(
+            !crate::database::get::<bool>(&crate::database::open(home)?, "model_recovery_fence")?
+                .unwrap_or(false),
+            "An old process group is unresolved; stop it before repairing"
+        );
         let dir = unpack(home, &state.config.version)?;
         let python = if let Some(path) = option_env!("PLANTOOL_PACKAGED_WORKER_PYTHON") {
             PathBuf::from(path)

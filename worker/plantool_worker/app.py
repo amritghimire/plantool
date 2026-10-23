@@ -41,6 +41,11 @@ class Store:
             row = db.execute("SELECT graph_version,state,interrupt_id,result FROM bridge_threads WHERE id=?", (name,)).fetchone()
         if row and row[0] != VERSIONS["graph_version"]:
             raise HTTPException(409, "Checkpoint graph_version requires a migration; refusing resume")
+        if not row:
+            with self.db() as db:
+                exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone()
+                if exists and db.execute("SELECT 1 FROM checkpoints WHERE thread_id=? LIMIT 1",(name,)).fetchone():
+                    raise HTTPException(409,"Checkpoint has no graph_version; migration required")
         return None if not row else {"thread_id":name,"graph_version":row[0],"state":row[1],"interrupt_id":row[2],"result":json.loads(row[3]) if row[3] else None}
     def receipt(self, key, body):
         digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
@@ -116,6 +121,8 @@ def create_app(home: Path, token: str, transport=None):
             receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
+            if current and current["state"] == "starting":
+                return store.save(request.thread_id,"recovery_needed",None,{"error":"Start was interrupted before its checkpoint was acknowledged"},request.idempotency_key)
             if current: return store.save(request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
             identifier = str(uuid4())
             payload = dict(request.input or {})
@@ -135,6 +142,9 @@ def create_app(home: Path, token: str, transport=None):
             current = store.thread(request.thread_id)
             if not current or current["state"] != "interrupted" or current["interrupt_id"] != request.interrupt_id:
                 raise HTTPException(409,"Stale interrupt or cancelled graph")
+            snapshot = await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
+            if not snapshot.next and "result" in snapshot.values:
+                return store.save(request.thread_id,"completed",None,snapshot.values["result"],request.idempotency_key)
             result = await app.state.graph.ainvoke(Command(resume=request.value),{"configurable":{"thread_id":request.thread_id}})
             return store.save(request.thread_id,"completed",None,result.get("result"),request.idempotency_key)
     @app.post("/internal/v1/cancel")

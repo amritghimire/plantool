@@ -181,7 +181,24 @@ impl Execution {
         for pid in groups {
             kill_group(pid);
         }
-        let error = results.into_iter().find_map(Result::err);
+        let mut error = results.into_iter().find_map(Result::err);
+        let home = self.lock().home.clone();
+        if let Some(home) = home {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                let active = crate::models::lease::current(&home)?;
+                if active.is_none() {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    error = Some(anyhow::anyhow!(
+                        "Model lease is still draining; execution remains stopped"
+                    ));
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }
         {
             let mut inner = self.lock();
             inner.draining -= 1;

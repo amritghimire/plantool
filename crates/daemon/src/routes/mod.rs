@@ -1,9 +1,11 @@
 pub mod archive;
 pub mod changes;
 pub mod comments;
+mod contract;
 pub mod engineering;
 pub mod execution;
 pub mod live;
+mod models;
 pub mod notices;
 pub mod pr;
 pub mod retention;
@@ -150,6 +152,7 @@ pub fn router(state: AppState) -> Router {
         .merge(tasks::routes())
         .merge(execution::routes())
         .merge(engineering::browser_routes())
+        .merge(models::browser_routes())
         .merge(notices::routes())
         .merge(comments::routes())
         .merge(changes::routes())
@@ -163,6 +166,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .nest("/api", api)
         .merge(engineering::internal_routes())
+        .merge(contract::routes())
+        .merge(models::proxy_routes())
         .route("/health", get(health))
         .route("/shutdown", post(shutdown))
         .route("/owner/setup-code", post(owner_setup_code))

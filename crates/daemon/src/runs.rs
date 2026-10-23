@@ -305,12 +305,13 @@ impl RunManager {
         } else {
             None
         };
-        let launch = crate::sandbox::launch::Launch::new(
+        let mut launch = crate::sandbox::launch::Launch::new(
             self.execution.clone(),
             version.generation,
             isolation,
             policy.clone(),
         )?;
+        Arc::get_mut(&mut launch).unwrap().attempt = Some((daemon_home.clone(), run.id.clone()));
         let admission = self.execution.admit_version(&version)?;
         let credential = self.tokens.issue(crate::identities::RunScope {
             session: session.key.clone(),
@@ -347,7 +348,13 @@ impl RunManager {
             );
         let opts = RunOptions {
             launch: Some(launch),
-            environment: Some(credential.environment(home, port)),
+            environment: Some(if provider == Provider::Ollama {
+                credential
+                    .environment(home, port)
+                    .with_proxy(format!("http://localhost:{port}/v1"))
+            } else {
+                credential.environment(home, port)
+            }),
             cwd: run.cwd.clone(),
             prompt,
             model,
@@ -509,7 +516,39 @@ impl RunManager {
         }
 
         tokio::spawn(async move {
-            let result = providers::run_provider(provider, opts, in_rx, ev_tx).await;
+            let result = async {
+                let _lease = crate::models::lease::acquire(
+                    &daemon_home,
+                    &format!("attempt:{run_id}"),
+                    Some(&run_id),
+                    crate::models::lease::Model {
+                        route: format!("personal:{}", provider.as_str()),
+                        provider: if provider == Provider::Ollama {
+                            "ollama".into()
+                        } else {
+                            provider.as_str().into()
+                        },
+                        model: opts
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| provider.as_str().into()),
+                    },
+                    false,
+                    i64::MAX,
+                    manager.execution.clone(),
+                    &crate::models::lease::Ollama,
+                )
+                .await?;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2700),
+                    providers::run_provider(provider, opts, in_rx, ev_tx),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("45 minute run limit reached; resume from the saved context")
+                })?
+            }
+            .await;
             drop(credential);
             let _ = consumer.await;
             manager

@@ -930,3 +930,118 @@ async fn bootstrap_database_write_requires_the_owner_socket_credential() {
         .status()
         .is_success());
 }
+#[cfg(unix)]
+#[tokio::test]
+async fn worker_identity_is_socket_only_and_repair_needs_a_fresh_bound_assertion() {
+    let h = harness();
+    let socket = plantool_daemon::socket::router(h.state.clone());
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args(["-c", "IFS= read -r value; printf '%s' \"$value\""]);
+    let _credential = h.state.runs.tokens.worker_command(&mut command).unwrap();
+    let secret = String::from_utf8(command.output().await.unwrap().stdout).unwrap();
+    let request = || {
+        Request::builder()
+            .uri("/internal/v1/health")
+            .header("host", "localhost:41300")
+            .header("x-plantool-run-token", &secret)
+            .header("x-plantool-contract-version", "1")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        h.app.clone().oneshot(request()).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        socket.oneshot(request()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        raw(
+            &h.app,
+            "GET",
+            "/internal/v1/health",
+            json!(null),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    let path = "/api/engineering-os/repair";
+    assert_eq!(
+        raw(&h.app, "POST", path, json!({}), Some(&browser.cookie), None)
+            .await
+            .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&h.app, "POST", path, json!({})).await;
+    h.state
+        .runs
+        .execution
+        .stop_all(&h.state.runs.tokens)
+        .await
+        .unwrap();
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            json!({}),
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let config = "/api/settings/models";
+    assert_eq!(
+        raw(&h.app, "GET", config, json!(null), None, None)
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let settings = value(
+        raw(
+            &h.app,
+            "GET",
+            config,
+            json!(null),
+            Some(&browser.cookie),
+            None,
+        )
+        .await,
+    )
+    .await;
+    let body = json!({"yaml":settings["yaml"],"project":null,"allowed_providers":null});
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            config,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&h.app, "POST", config, body.clone()).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            config,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+}

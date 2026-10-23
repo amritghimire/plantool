@@ -6,10 +6,12 @@ pub mod changes;
 pub mod commits;
 pub mod config;
 pub mod database;
+pub mod dispatcher;
 pub mod events;
 pub mod execution;
 pub mod git;
 pub mod identities;
+pub mod models;
 pub mod prompts;
 pub mod providers;
 pub mod registry;
@@ -20,6 +22,7 @@ pub mod sandbox;
 pub mod security;
 pub mod socket;
 pub mod store;
+pub mod supervision;
 pub mod watcher;
 pub mod worker;
 
@@ -50,7 +53,9 @@ pub struct AppState {
 pub async fn serve(config: Config) -> anyhow::Result<()> {
     let config = Arc::new(config);
     database::initialize(&config.home)?;
+    supervision::reconcile(&config.home)?;
     database::reconcile_personal(&config.home)?;
+    dispatcher::reconcile(&config.home)?;
     let registry = Arc::new(Registry::load(config.home.clone())?);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
     let runs = Arc::new(runs::RunManager::load(&config.home)?);
@@ -69,6 +74,16 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .runs
         .execution
         .register_hook(state.runs.worker.clone())?;
+    let dispatch_state = state.clone();
+    let dispatch_job = tokio::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            timer.tick().await;
+            if let Err(error) = dispatcher::runtime::tick(&dispatch_state).await {
+                tracing::warn!("dispatch recovery pending: {error}");
+            }
+        }
+    });
     let idle_state = state.clone();
     let idle_sweep = tokio::spawn(async move {
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -177,6 +192,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     }
     idle_sweep.abort();
+    dispatch_job.abort();
     retention_job.abort();
     let _ = store::remove_daemon_info(&config.home);
     Ok(())

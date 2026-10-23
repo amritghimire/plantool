@@ -301,6 +301,18 @@ fn make_binding(
     if let Some(execution) = &execution {
         data["execution"] = json!(execution);
     }
+    if path.starts_with("/api/settings/models") {
+        data["chains"] =
+            json!(crate::models::router::config(&state.config.home).map_err(|_| denied())?);
+        data["execution"] = json!(state.runs.execution.status());
+        if let Some(project) = body["project"].as_str() {
+            data["allowed_providers"] = json!(crate::models::router::allowed(
+                &crate::database::open(&state.config.home).map_err(|_| denied())?,
+                project
+            )
+            .map_err(|_| denied())?);
+        }
+    }
     if path == "/api/settings/retention" || path.ends_with("/pin") {
         data["retention"] = serde_json::to_value(
             crate::retention::policy(&state.config.home).map_err(|_| denied())?,
@@ -384,6 +396,26 @@ fn make_binding(
 }
 
 pub async fn guard(State(state): State<AppState>, mut req: Request<Body>, next: Next) -> Response {
+    if req.uri().path() == "/v1/chat/completions" {
+        if let Some(value) = req.headers_mut().remove("authorization") {
+            if req
+                .headers()
+                .contains_key(crate::identities::RUN_TOKEN_HEADER)
+            {
+                return denied().into_response();
+            }
+            let Some(token) = value
+                .to_str()
+                .ok()
+                .and_then(|s| s.strip_prefix("Bearer "))
+                .and_then(|s| s.parse::<axum::http::HeaderValue>().ok())
+            else {
+                return denied().into_response();
+            };
+            req.headers_mut()
+                .insert(crate::identities::RUN_TOKEN_HEADER, token);
+        }
+    }
     match crate::identities::authorize(&state, &req) {
         Ok(Some(authorized)) => {
             req.extensions_mut().insert(authorized);

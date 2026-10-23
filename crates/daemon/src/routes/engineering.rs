@@ -42,6 +42,9 @@ async fn repair(
         .repair(&state)
         .await
         .map_err(|e| ApiError(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let _ =
+        crate::models::gateway::verify(&state.config.home, &crate::models::gateway::HttpGateway)
+            .await?;
     crate::database::audit(
         &crate::database::open(&state.config.home)?,
         "human",

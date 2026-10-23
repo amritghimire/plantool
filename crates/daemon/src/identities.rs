@@ -102,6 +102,7 @@ impl Drop for RunCredential {
 /// Applied to each provider process, including providers that spawn once per turn.
 #[derive(Clone)]
 pub struct RunEnvironment {
+    proxy: Option<String>,
     token: String,
     home: PathBuf,
     port: u16,
@@ -116,6 +117,7 @@ impl std::fmt::Debug for RunEnvironment {
 impl RunCredential {
     pub fn environment(&self, home: PathBuf, port: u16) -> RunEnvironment {
         RunEnvironment {
+            proxy: None,
             token: self.secret.clone(),
             home,
             port,
@@ -127,6 +129,16 @@ impl RunCredential {
     }
 }
 impl RunEnvironment {
+    pub fn with_proxy(mut self, base: String) -> Self {
+        self.proxy = Some(base);
+        self
+    }
+    pub fn proxy_options(&self) -> Option<serde_json::Value> {
+        self.proxy
+            .as_ref()
+            .map(|base| serde_json::json!({"baseURL":base,"apiKey":self.token}))
+    }
+
     pub fn apply(&self, command: &mut tokio::process::Command) {
         command
             .env("PLANTOOL_RUN_TOKEN", &self.token)
@@ -185,6 +197,11 @@ pub fn authorize(state: &AppState, req: &Request<Body>) -> Result<Option<Authori
         revoked: entry.revoked.subscribe(),
     };
     if req.method() == "GET" && matches!(path, "/health" | "/api/health") {
+        return Ok(Some(authorized));
+    }
+    if req.method() == "POST"
+        && (path == "/v1/chat/completions" || path == "/internal/v1/report_result")
+    {
         return Ok(Some(authorized));
     }
     let decoded = percent_encoding::percent_decode_str(path)
