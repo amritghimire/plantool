@@ -15,6 +15,20 @@ permissions:
   contents: read
 
 jobs:
+  contract-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"
+          python-version: "3.12"
+      - run: scripts/generate-contract.sh
+      - run: git diff --exit-code -- contract/schema.json worker/plantool_worker/models.py worker/plantool_worker/versions.json
+      - run: uv run --project worker --frozen pytest -c worker/pyproject.toml worker/tests
+
   nix-check:
     strategy:
       fail-fast: false
