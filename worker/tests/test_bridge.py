@@ -1,0 +1,33 @@
+import json
+import httpx
+import pytest
+from plantool_worker.app import create_app, VERSIONS, Store
+
+async def fake_daemon(request):
+    if request.url.path.endswith("health"): return httpx.Response(200,json=VERSIONS)
+    return httpx.Response(200,json={"attempt_id":"a1","generation":1})
+
+@pytest.mark.asyncio
+async def test_version_auth_replay_restart_and_stale_checkpoint(tmp_path):
+    token="test-token-"*5
+    app=create_app(tmp_path,token,httpx.MockTransport(fake_daemon))
+    headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"1"}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url="http://localhost",headers=headers) as client:
+            assert (await client.get("/internal/v1/health",headers={"x-plantool-worker-token":"forged"})).status_code==403
+            assert (await client.get("/internal/v1/health",headers={"x-plantool-contract-version":"99"})).status_code==409
+            start={"thread_id":"p:i","graph":"work_item","input":{},"idempotency_key":"start","contract_version":1,"graph_version":1}
+            first=(await client.post("/internal/v1/start",json=start)).json()
+            assert first["state"]=="interrupted"
+            assert (await client.post("/internal/v1/start",json=start)).json()==first
+            resume={"thread_id":"p:i","interrupt_id":first["interrupt_id"],"value":{"outcome":"done"},"idempotency_key":"resume","contract_version":1,"graph_version":1}
+            done=(await client.post("/internal/v1/resume",json=resume)).json()
+            assert done["state"]=="completed"
+            assert (await client.post("/internal/v1/resume",json=resume)).json()==done
+            assert (await client.post("/internal/v1/resume",json={**resume,"idempotency_key":"stale"})).status_code==409
+    restarted=create_app(tmp_path,token,httpx.MockTransport(fake_daemon))
+    async with restarted.router.lifespan_context(restarted):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=restarted),base_url="http://localhost",headers=headers) as client:
+            assert (await client.post("/internal/v1/resume",json=resume)).json()==done
+            with Store(tmp_path/"worker-state/checkpoints.db").db() as db: db.execute("UPDATE bridge_threads SET graph_version=0")
+            assert (await client.get("/internal/v1/status/p:i")).status_code==409

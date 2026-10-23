@@ -178,6 +178,9 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
     if path == "/api/execution/resume" || path.ends_with("/pin") {
         return true;
     }
+    if path == "/api/engineering-os/repair" {
+        return true;
+    }
     if path.starts_with("/api/settings/") {
         return true;
     }
@@ -290,6 +293,11 @@ fn make_binding(
     } else {
         None
     };
+    if path == "/api/engineering-os/repair" {
+        data["worker_version"] = json!(state.config.version);
+        data["contract"] = json!(plantool_contract::Health::default());
+        data["stop_all"] = json!(state.runs.execution.status());
+    }
     if let Some(execution) = &execution {
         data["execution"] = json!(execution);
     }

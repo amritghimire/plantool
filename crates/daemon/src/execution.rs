@@ -172,15 +172,15 @@ impl Execution {
                 saved,
             )
         };
-        for pid in groups {
-            kill_group(pid);
-        }
         let results = futures::future::join_all(hooks.iter().map(|h| async {
             tokio::time::timeout(std::time::Duration::from_secs(5), h.stop())
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker cancellation/lease cleanup timed out"))?
         }))
         .await;
+        for pid in groups {
+            kill_group(pid);
+        }
         let error = results.into_iter().find_map(Result::err);
         {
             let mut inner = self.lock();
@@ -198,7 +198,7 @@ impl Execution {
         hook: Arc<dyn StopHook>,
     ) -> anyhow::Result<HookRegistration> {
         let mut inner = self.lock();
-        anyhow::ensure!(!inner.saved.status.stopped, "Stop All is active");
+        // Cleanup hooks may be registered while stopped; they grant no execution admission.
         let id = inner.next_hook;
         inner.next_hook += 1;
         inner.hooks.insert(id, hook);

@@ -45,6 +45,9 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  workerStatus: () => request<{worker:{available:boolean;message:string}}>("GET","/api/engineering-os/status"),
+  repairWorker: () => request<{worker:{available:boolean;message:string}}>("POST","/api/engineering-os/repair", {}),
+
   retentionPolicy: () => request<{transcript_days:number;evidence_days:number;disk_cap_bytes:number}>("GET","/api/settings/retention"),
   saveRetentionPolicy: (policy:{transcript_days:number;evidence_days:number;disk_cap_bytes:number}) => request<{ok:boolean}>("POST","/api/settings/retention",policy),
   pinRun: (key:string,id:string,pinned:boolean) => request<{ok:boolean;pinned:boolean}>("POST",`/api/sessions/${key}/runs/${id}/pin`,{pinned}),

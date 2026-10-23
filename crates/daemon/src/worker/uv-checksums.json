@@ -1,0 +1,7 @@
+{
+  "version": "0.9.5",
+  "targets": {
+    "aarch64-apple-darwin": "dc098ff224d78ed418e121fd374f655949d2c7031a70f6f6604eaf016a130433",
+    "x86_64-apple-darwin": "58b1d4a25aa8ff99147c2550b33dcf730207fe7e0f9a0d5d36a1bbf36b845aca"
+  }
+}

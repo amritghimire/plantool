@@ -21,6 +21,7 @@ pub mod security;
 pub mod socket;
 pub mod store;
 pub mod watcher;
+pub mod worker;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -64,6 +65,10 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         shutdown: shutdown_tx,
     };
 
+    let _worker_stop = state
+        .runs
+        .execution
+        .register_hook(state.runs.worker.clone())?;
     let idle_state = state.clone();
     let idle_sweep = tokio::spawn(async move {
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));

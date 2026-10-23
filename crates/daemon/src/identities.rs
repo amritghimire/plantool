@@ -67,6 +67,13 @@ impl RunTokens {
             .get(&hash(secret))
             .cloned()
     }
+    pub(crate) fn is_worker(&self, headers: &axum::http::HeaderMap) -> bool {
+        headers
+            .get(RUN_TOKEN_HEADER)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|v| self.lookup(v))
+            .is_some_and(|e| e.scope.is_none() && !*e.revoked.borrow())
+    }
     pub fn revoke_all(&self) {
         let mut entries = self.0.lock().unwrap_or_else(|e| e.into_inner());
         for entry in entries.values() {
@@ -164,8 +171,9 @@ pub fn authorize(state: &AppState, req: &Request<Body>) -> Result<Option<Authori
             .extensions()
             .get::<crate::socket::SocketTransport>()
             .is_some()
-            && req.method() == "GET"
-            && matches!(path, "/health" | "/api/health")
+            && ((req.method() == "GET" && matches!(path, "/health" | "/api/health"))
+                || path.starts_with("/internal/v1/")
+                || path == "/v1/chat/completions")
         {
             Ok(None)
         } else {
@@ -355,5 +363,12 @@ impl RunTokens {
                 tokens: self.clone(),
             },
         })
+    }
+}
+
+#[cfg(unix)]
+impl WorkerCredential {
+    pub(crate) fn token(&self) -> &str {
+        &self._lease.secret
     }
 }

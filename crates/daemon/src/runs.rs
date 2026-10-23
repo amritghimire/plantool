@@ -18,6 +18,7 @@ struct Handle {
 
 #[derive(Default)]
 pub struct RunManager {
+    pub worker: Arc<crate::worker::WorkerManager>,
     handles: Mutex<HashMap<String, Handle>>,
     pub tokens: Arc<crate::identities::RunTokens>,
     pub execution: Arc<crate::execution::Execution>,

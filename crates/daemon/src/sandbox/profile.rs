@@ -75,7 +75,15 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
         .map(|name| path(&paths.docs.join(name)).map(|p| format!("(literal {p})")))
         .collect::<anyhow::Result<Vec<_>>>()?
         .join(" ");
-    let exceptions = format!("{exceptions} {docs} (literal \"/dev/null\")");
+    let worker_socket = if role == Role::Worker {
+        format!(
+            "(literal {})",
+            path(&paths.daemon_home.join("run/worker.sock"))?
+        )
+    } else {
+        String::new()
+    };
+    let exceptions = format!("{exceptions} {worker_socket} {docs} (literal \"/dev/null\")");
     let mut text = format!("(version 1)\n(allow default)\n(deny file-link)\n(deny file-write* (require-not (require-any {exceptions})))\n");
     let mut denied = super::read_guard::protected(paths);
     denied.extend(policy.protected_targets(&root)?);
