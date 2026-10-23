@@ -135,3 +135,7 @@ the run ends. Never print it or put it in a URL. Invalid credentials do not beco
 The CLI has no human confirmation, thread resolution/removal, or owner settings commands.
 Propose context changes; the owner applies them in the browser. Do not stop or restart
 PlanTool from a hosted/sandboxed run.
+
+## Stable task progress
+
+Plan tasks use unique keys (`- [ ] T1: Do the work`). Once the owner approves, report completion with `plantool task done <ref> T1`. The browser overlays progress on the immutable approved revision. Never tick the plan file to report progress. Added, removed or reworded tasks and renamed phases require a fresh browser approval.

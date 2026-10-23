@@ -44,9 +44,9 @@ After writing the plan, post blocking questions as comments on their own lines. 
 pub const IMPLEMENT: &str = r#"Implement plantool session `{key}`: {title}
 
 Run `plantool skill` and then `plantool skill implement`, and follow both. The human approved building this.
-The plan lives at `{plan_path}`; if that file does not exist, planning was skipped: write the task list there first, as the skill says.
+The plan lives at `{plan_path}`; if that file does not exist, planning was skipped: write a task list with unique T<n> keys there first and wait for the owner to approve it in the browser, as the skill says.
 Set the stage with `plantool session stage --session {key} --set implementing`, work in `{checkout}`,
-and tick the plan's checkboxes as you finish each task. When every task is done, run the project's checks,
+and report each completed stable task key with `plantool task done {key} T1` (replace T1 with the actual key). Do not edit plan checkboxes. When every task is done, run the project's checks,
 set the stage to `implementation-review`, and summarise what changed and what you skipped.
 {brief}
 {extra}"#;

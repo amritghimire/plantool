@@ -1,6 +1,6 @@
 ---
 name: plantool-implement
-description: Implement an approved plantool plan, ticking its checkboxes as you go so the browser shows progress, then hand the changes to the human for review. Use when a plantool session is approved or implementing, or the user asks to implement a session's plan.
+description: Implement an approved plantool plan, reporting task-key progress with plantool task done so the browser shows progress, then hand the changes to the human for review. Use when a plantool session is approved or implementing, or the user asks to implement a session's plan.
 user-invocable: true
 ---
 
@@ -38,23 +38,22 @@ One or two lines: what "done" looks like, from the brief.
 
 ## Tasks
 ### Phase 1: <name>
-- [ ] <task: one concrete, verifiable step>
+- [ ] T1: <task: one concrete, verifiable step>
 - [ ] …
 ```
 
 Tasks are checklist items: no architecture essay, no alternatives. Each task is a step
 you can finish and verify on its own, and the list is the whole job. Post a comment on the first
 task if a decision is needed, pick the option you recommend, and keep going; the human sees the
-list and can comment while you work. Keep the file current: add a task when work surfaces one,
-and tick each one as you finish it.
+list and can comment. Give each task a unique stable T<n> key and wait for the owner to approve this new revision in the browser before implementing. Do not edit task checkboxes to report progress.
 
 ## Plan revisions
 
 Before changing task scope during implementation, stop at a safe boundary and run
 `plantool session plan propose-revision --session <ref> --reason "…"`.
 Then edit `plan.md`. The approval pins the previous revision. Added, removed, reworded or
-unticked tasks and renamed phases need the owner's acceptance before another build run.
-Checkbox progress and other text edits show a banner and revision diff.
+tasks and renamed phases need the owner's acceptance before another build run.
+Checkbox-only draft edits are ignored. Task progress is stored separately from the approved plan.
 
 Use `--scope document` for whole-plan feedback or `--scope section --match "## Heading"`
 for section feedback. Comments accept `--type blocker|question|suggestion|change-approach`.
@@ -64,12 +63,11 @@ Reply with `--proposes-resolve` when you think a thread is addressed; let the ow
 
 - Follow the plan. If it turns out to be wrong, stop, update the plan file with what you
   learned, and say so, rather than patching around it.
-- Tick each task in the plan file as you finish it: change `- [ ]` to `- [x]`. The browser
-  shows the progress live. Do not tick tasks you did not do.
+- Complete each task with `plantool task done <ref> T1` (use its actual stable key). This records progress separately and updates the browser without changing the approved plan hash. Never edit the approved revision or tick its checkboxes. Do not report tasks you did not complete.
 - Follow the codebase's existing patterns, style and naming. No unnecessary comments.
 - Run the project's typecheck, lint and tests as you go, and once more at the end.
 - In all-at-once mode, finish the scoped phase and end your turn at `implementing`. Plantool starts a new run for the next phase without a pause. Run the full checks after the final phase. For a plan without phases, finish all tasks.
-- In step-by-step mode, complete one plan phase per agent run. Tick its tasks and run the relevant checks,
+- In step-by-step mode, complete one plan phase per agent run. Report its task keys with `plantool task done` and run the relevant checks,
   and pause with the stage at `implementing`, including after the last phase. Plantool opens or
   refreshes the change review. If difftool is available, the run watches its human comments and
   sends them back to you in this same provider session. Read the whole open board with the
@@ -86,7 +84,7 @@ Reply with `--proposes-resolve` when you think a thread is addressed; let the ow
 
 ## Finish
 
-1. Every checkbox in the plan is `[x]`, or the ones left open are explained in the plan.
+1. Every completed task has been reported with `plantool task done`; explain unfinished keys in your handoff or a comment, without editing the approved plan.
 2. `plantool session stage --session <ref> --set implementation-review`.
 3. Tell the human what changed, what you skipped, and how to review:
    `plantool changes <ref>` opens difftool (if installed) or `git difftool`. If a difftool review
