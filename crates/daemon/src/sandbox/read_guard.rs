@@ -129,7 +129,7 @@ pub fn session_check(
                 .ok_or_else(|| anyhow::anyhow!("owner home unavailable"))?,
             daemon_home: state.config.home.clone(),
             worktree: s.cwd().clone(),
-            docs: session.store.dir.clone(),
+            docs: session.store.dir.join("docs"),
         },
         &policy,
         path,

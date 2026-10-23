@@ -287,7 +287,7 @@ impl RunManager {
                         .ok_or_else(|| anyhow::anyhow!("owner home is unavailable"))?,
                     daemon_home: daemon_home.clone(),
                     worktree: sess.cwd().clone(),
-                    docs: session.store.dir.clone(),
+                    docs: session.store.dir.join("docs"),
                 },
                 if stage_name == "critique" {
                     crate::sandbox::Role::Reviewer

@@ -45,6 +45,8 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  cleanBreakNotice: () => request<{backup:string|null}>("GET","/api/notices/clean-break"),
+  dismissCleanBreakNotice: () => request<{ok:boolean}>("POST","/api/notices/clean-break",{}),
   executionStatus: () => request<{ execution: { stopped: boolean; generation: number }; sandbox_supported: boolean }>("GET", "/api/execution/status"),
   stopAll: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/stop", {}),
   resumeExecution: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/resume", {}),

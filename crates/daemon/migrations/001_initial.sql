@@ -1,8 +1,8 @@
 CREATE TABLE projects(id TEXT PRIMARY KEY, repo_full_name TEXT, repo_id INTEGER, local_checkout TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'personal' CHECK(mode IN('personal','eos')), visibility TEXT, created_at TEXT NOT NULL);
 CREATE TABLE project_settings(project_id TEXT NOT NULL REFERENCES projects(id), version INTEGER NOT NULL, oversight TEXT NOT NULL DEFAULT 'minimal', allowed_providers_json TEXT NOT NULL DEFAULT '[]', never_sent_globs_json TEXT NOT NULL DEFAULT '[]', sprint_day INTEGER, scan_time TEXT, timezone TEXT, retention_json TEXT NOT NULL DEFAULT '{}', effective_at TEXT NOT NULL, set_by TEXT NOT NULL, PRIMARY KEY(project_id,version));
 CREATE TABLE allowlist(github_user_id INTEGER PRIMARY KEY, login_at_add TEXT NOT NULL, added_at TEXT NOT NULL, added_by TEXT NOT NULL);
-CREATE TABLE passkeys(id TEXT PRIMARY KEY, credential_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER);
-CREATE TABLE passkey_setup(id INTEGER PRIMARY KEY CHECK(id=1), code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS passkeys(id TEXT PRIMARY KEY, credential_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER);
+CREATE TABLE IF NOT EXISTS passkey_setup(id INTEGER PRIMARY KEY CHECK(id=1), code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL);
 CREATE TABLE artifacts(sha256 TEXT PRIMARY KEY CHECK(length(sha256)=64), size INTEGER NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE work_items(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL DEFAULT 'personal' CHECK(kind IN('personal','eos')), title TEXT NOT NULL, github_issue_number INTEGER, state TEXT NOT NULL DEFAULT 'new', priority TEXT, sprint_id TEXT, approved_plan_revision_id TEXT REFERENCES revisions(id), created_at TEXT NOT NULL, repo_slug TEXT NOT NULL, slug TEXT NOT NULL, session_json TEXT NOT NULL, state_json TEXT NOT NULL DEFAULT '{}', closed_at INTEGER, merged_at INTEGER, outcome TEXT, deleted_at INTEGER, UNIQUE(repo_slug,slug));
 CREATE TABLE work_item_deps(item_id TEXT NOT NULL REFERENCES work_items(id), depends_on_id TEXT NOT NULL REFERENCES work_items(id), PRIMARY KEY(item_id,depends_on_id), CHECK(item_id<>depends_on_id));
@@ -34,3 +34,4 @@ CREATE INDEX revisions_item ON revisions(item_id,doc_kind,number);
 CREATE INDEX attempts_item ON attempts(item_id,started_at);
 CREATE INDEX refs_sha ON artifact_refs(sha256);
 CREATE INDEX outbox_pending ON outbox(delivered_at);
+CREATE TABLE run_events(id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id), seq INTEGER NOT NULL, content_sha256 TEXT NOT NULL REFERENCES artifacts(sha256), UNIQUE(attempt_id,seq));

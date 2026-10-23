@@ -43,8 +43,12 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
 /// Run before opening auth or the registry. No old JSON is imported.
 pub fn initialize(home: &Path) -> anyhow::Result<()> {
     if path(home).exists() {
-        open(home)?;
-        return Ok(());
+        let db = Connection::open(path(home))?;
+        let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version >= 1 {
+            open(home)?;
+            return Ok(());
+        }
     }
     let old = home.join("sessions");
     let legacy = old.is_dir()

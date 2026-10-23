@@ -1,4 +1,5 @@
 import React from "react";
+import { CleanBreakNotice } from "./components/CleanBreakNotice";
 import { ExecutionControls } from "./components/ExecutionControls";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
@@ -9,7 +10,7 @@ import { AuthGate } from "./components/AuthGate";
 
 function App() {
   return (
-    <AuthGate><ExecutionControls /><BrowserRouter>
+    <AuthGate><CleanBreakNotice /><ExecutionControls /><BrowserRouter>
       <Routes>
         <Route path="/" element={<SessionList />} />
         <Route path="/s/:repo/:slug" element={<SessionPage />} />

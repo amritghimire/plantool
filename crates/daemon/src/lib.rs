@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod artifacts;
 pub mod assets;
 pub mod auth;
 pub mod changes;

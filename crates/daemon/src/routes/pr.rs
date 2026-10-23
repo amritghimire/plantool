@@ -218,7 +218,7 @@ async fn preview(
 }
 
 fn draft_path(s: &crate::registry::LiveSession) -> std::path::PathBuf {
-    s.store.dir.join("pr-draft.md")
+    s.store.dir.join("docs/pr-draft.md")
 }
 
 fn parse_draft(content: &str) -> (String, String) {
@@ -272,7 +272,7 @@ async fn save_draft(
 }
 
 fn commit_draft_path(s: &crate::registry::LiveSession) -> std::path::PathBuf {
-    s.store.dir.join("commit-draft.md")
+    s.store.dir.join("docs/commit-draft.md")
 }
 
 async fn get_commit_draft(

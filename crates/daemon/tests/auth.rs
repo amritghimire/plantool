@@ -739,6 +739,11 @@ async fn provider_output_does_not_invalidate_unrelated_confirmations() {
     let route = format!("/api/sessions/{key}/where");
     let body = json!({"difftool":"built-in"});
     let proof = browser.proof(&h.app, "POST", &route, body.clone()).await;
+    let run = serde_json::from_value(json!({"id":"background","provider":"codex","stage":"new","cwd":s.session().cwd(),"status":"running","started_at":plantool_core::now()})).unwrap();
+    s.upsert_run(run, |run| plantool_daemon::events::LiveEvent::RunStarted {
+        run,
+    })
+    .unwrap();
     s.append_run_event(
         "background",
         1,

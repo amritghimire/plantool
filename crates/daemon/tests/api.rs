@@ -444,7 +444,7 @@ async fn brief_and_prompt() {
     .await;
     assert_eq!(v["session"]["brief"], "Rename the scopes");
     let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
+        serde_json::to_value(live.store.load_meta().unwrap().unwrap()).unwrap();
     assert_eq!(meta["brief"], "Rename the scopes");
 
     let (_, v) = call(
@@ -537,7 +537,7 @@ async fn brief_and_prompt() {
     .unwrap();
     live.append_run_event("r1", 1, json!({ "type": "status", "label": "x" }))
         .unwrap();
-    assert!(live.store.run_log_path("r1").is_file());
+    assert!(!live.store.read_run_events("r1", 0).unwrap().is_empty());
     let (st, v) = call(
         app,
         "DELETE",
@@ -548,8 +548,8 @@ async fn brief_and_prompt() {
     )
     .await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    assert!(!live.store.run_meta_path("r1").exists());
-    assert!(!live.store.run_log_path("r1").exists());
+    assert!(!live.store.load_runs().unwrap().iter().any(|r| r.id == "r1"));
+    assert!(live.store.read_run_events("r1", 0).unwrap().is_empty());
     let (_, v) = call(
         app,
         "GET",
@@ -1091,8 +1091,7 @@ async fn pr_drafts_require_human_and_old_meta_loads() {
     .await;
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
-    let mut old: Value =
-        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
+    let mut old: Value = serde_json::to_value(live.store.load_meta().unwrap().unwrap()).unwrap();
     old.as_object_mut().unwrap().remove("pull_request");
     let parsed: plantool_core::Session = serde_json::from_value(old).unwrap();
     assert!(parsed.pull_request.is_none());
@@ -1187,8 +1186,7 @@ exit 1
     std::env::remove_var("PLANTOOL_GH_BIN");
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["pull_request"]["number"], 23);
-    let saved: plantool_core::Session =
-        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
+    let saved: plantool_core::Session = live.store.load_meta().unwrap().unwrap();
     assert_eq!(saved.pull_request.unwrap().number, 23);
 }
 
@@ -1267,7 +1265,7 @@ async fn pr_commit_from_dialog() {
         "{draft}"
     );
     std::fs::write(
-        live.store.dir.join("commit-draft.md"),
+        live.store.dir.join("docs/commit-draft.md"),
         "Add the change\n\nSession: repo/fix-it\n",
     )
     .unwrap();
@@ -1328,7 +1326,7 @@ async fn pr_commit_from_dialog() {
         plantool_daemon::git::git(&wt, &["log", "-1", "--format=%s"]).unwrap(),
         "Add the change"
     );
-    assert!(!live.store.dir.join("commit-draft.md").exists());
+    assert!(!live.store.dir.join("docs/commit-draft.md").exists());
 
     git(&wt, &["checkout", "-q", "--detach"]);
     std::fs::write(wt.join("more.txt"), "more").unwrap();

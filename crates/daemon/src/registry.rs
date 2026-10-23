@@ -1378,8 +1378,9 @@ pub struct Registry {
 
 impl Registry {
     pub fn load(home: PathBuf) -> anyhow::Result<Registry> {
+        crate::database::initialize(&home)?;
         let mut map = BTreeMap::new();
-        for (_, _, dir) in store::list_session_dirs(&home) {
+        for (_, _, dir) in store::list_session_dirs(&home)? {
             match LiveSession::open(SessionStore::new(dir.clone())) {
                 Ok(Some(s)) => {
                     map.insert(s.key.clone(), s);
@@ -1562,6 +1563,7 @@ impl Registry {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(key);
+        live.store.remove()?;
         std::fs::remove_dir_all(&live.store.dir)
             .map_err(|e| anyhow::anyhow!("removing {}: {e}", live.store.dir.display()))?;
         Ok(session)
@@ -1608,6 +1610,7 @@ impl Registry {
             &bundle.session.repo_slug,
             &bundle.session.slug,
         ));
+        store.save_meta(&bundle.session)?;
         for revision in &bundle.revisions {
             store.save_revision(revision)?;
         }
@@ -1616,7 +1619,25 @@ impl Registry {
                 .map_err(anyhow::Error::from)?;
             store.save_revision(doc)?;
         }
+        let ids: std::collections::HashMap<String, String> = bundle
+            .runs
+            .iter()
+            .map(|r| (r.id.clone(), uuid::Uuid::new_v4().simple().to_string()))
+            .collect();
+        bundle.transcripts = bundle
+            .transcripts
+            .into_iter()
+            .filter_map(|(id, content)| ids.get(&id).map(|new| (new.clone(), content)))
+            .collect();
+        for milestone in &mut bundle.state.milestones {
+            milestone.run_id = milestone
+                .run_id
+                .as_ref()
+                .and_then(|id| ids.get(id))
+                .cloned();
+        }
         for run in &mut bundle.runs {
+            run.id = ids[&run.id].clone();
             run.cwd = bundle.session.cwd().clone();
             run.status = plantool_core::RunStatus::Stopped;
             run.milestone_review = None;
@@ -1624,8 +1645,9 @@ impl Registry {
             store.save_run(run)?;
         }
         for (id, content) in &bundle.transcripts {
-            store::write_atomic(&store.run_log_path(id), content.as_bytes())
-                .map_err(anyhow::Error::from)?;
+            for line in content.lines().filter(|l| !l.trim().is_empty()) {
+                store.append_run_event(id, line)?;
+            }
         }
         store.save_state(&bundle.state)?;
         store.save_meta(&bundle.session)?;

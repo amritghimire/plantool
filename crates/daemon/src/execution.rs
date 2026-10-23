@@ -49,7 +49,7 @@ impl Admission<'_> {
 impl Execution {
     pub fn load(home: &Path) -> anyhow::Result<Self> {
         let saved =
-            crate::store::read_json(&home.join("security/execution.json"))?.unwrap_or_default();
+            crate::database::get(&crate::database::open(home)?, "execution")?.unwrap_or_default();
         Ok(Self {
             inner: Mutex::new(Inner {
                 saved,
@@ -233,7 +233,7 @@ impl Execution {
 }
 fn persist(inner: &Inner) -> anyhow::Result<()> {
     if let Some(home) = &inner.home {
-        crate::store::write_json(&home.join("security/execution.json"), &inner.saved)?;
+        crate::database::set(&crate::database::open(home)?, "execution", &inner.saved)?;
     }
     Ok(())
 }

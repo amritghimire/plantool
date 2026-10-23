@@ -63,23 +63,8 @@ fn digest_str(s: &str) -> String {
     digest(s.as_bytes())
 }
 fn connection(home: &Path) -> anyhow::Result<Connection> {
-    let dir = home.join("db");
-    std::fs::create_dir_all(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    let path = dir.join("plantool.db");
-    let db = Connection::open(&path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    db.busy_timeout(Duration::from_secs(5))?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, credential_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER); CREATE TABLE IF NOT EXISTS passkey_setup (id INTEGER PRIMARY KEY CHECK(id=1), code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL);")?;
-    Ok(db)
+    crate::database::initialize(home)?;
+    crate::database::open(home)
 }
 /// Called only by the local `plantool setup` command, never exposed over HTTP.
 pub fn setup_code(home: &Path) -> anyhow::Result<String> {

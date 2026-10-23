@@ -3,6 +3,7 @@ pub mod changes;
 pub mod comments;
 pub mod execution;
 pub mod live;
+pub mod notices;
 pub mod pr;
 pub mod runs;
 pub mod sessions;
@@ -116,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::auth::routes())
         .merge(sessions::routes())
         .merge(execution::routes())
+        .merge(notices::routes())
         .merge(comments::routes())
         .merge(changes::routes())
         .merge(archive::routes())
