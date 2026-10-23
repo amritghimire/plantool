@@ -222,6 +222,19 @@ pub fn authorize(state: &AppState, req: &Request<Body>) -> Result<Option<Authori
         }
     }
 
+    if tail == ["changes", "file"] {
+        let session = state.registry.get_key(&scope.session).ok_or_else(denied)?;
+        let root = crate::git::main_root(&session.session().repo.root);
+        let policy = crate::sandbox::NeverSent::new(&state.runs.execution.rules(&root))
+            .map_err(|_| denied())?;
+        let url = webauthn_rs::prelude::Url::parse(&format!("http://localhost{}", req.uri()))
+            .map_err(|_| denied())?;
+        if url.query_pairs().any(|(key, value)| {
+            key == "path" && policy.matches(std::path::Path::new(value.as_ref()))
+        }) {
+            return Err(denied());
+        }
+    }
     let allowed = match req.method().as_str() {
         "GET" => match tail {
             []

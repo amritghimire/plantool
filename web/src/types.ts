@@ -155,6 +155,7 @@ export type RunStatus = "starting" | "running" | "waiting" | "idle" | "stopped" 
 export type ImplementationMode = "all-at-once" | "step-by-step";
 
 export interface Run {
+  sandboxed?: boolean;
   milestone_key?: string | null;
   plan_sha?: string | null;
   idle_stopped?: boolean;

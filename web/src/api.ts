@@ -45,6 +45,11 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  executionStatus: () => request<{ execution: { stopped: boolean; generation: number }; sandbox_supported: boolean }>("GET", "/api/execution/status"),
+  stopAll: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/stop", {}),
+  resumeExecution: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/resume", {}),
+  neverSent: (repo: string) => request<{ defaults: string[]; patterns: string[] }>("GET", `/api/settings/never-sent?repo=${encodeURIComponent(repo)}`),
+  setNeverSent: (repo: string, patterns: string[]) => request("POST", "/api/settings/never-sent", { repo, patterns }),
   setContext: (key: string, body: { base?: string; branch?: string; workspace?: string; difftool?: string; pause_rule?: { mode: string; rule?: string } }) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/where`, body),
   contextProposal: (key: string, id: string, dismiss: boolean) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/proposals`, { id, dismiss }),
   diffToolSetting: () => request<{ value: string | null; difftool: string | null }>("GET", "/api/settings/difftool"),
@@ -81,7 +86,7 @@ export const api = {
   changes: (key: string, scope?: ChangeScope) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes${scope ? `?scope=${scope}` : ""}`),
   openChanges: (key: string, scope?: ChangeScope) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, { scope: scope ?? null }),
   changesFile: (key: string, path: string, scope?: ChangeScope) => request<FileDiff>("GET", `/api/sessions/${key}/changes/file?path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ""}`),
-  startRun: (key: string, body: { milestone?: string; pause_rule?: { mode: string; rule?: string }; provider: string; stage: string; model?: string; effort?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  startRun: (key: string, body: { sandbox?: boolean; milestone?: string; pause_rule?: { mode: string; rule?: string }; provider: string; stage: string; model?: string; effort?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
   prompt: (key: string, stage: PromptStage, extra?: string, implementationMode?: string, resumeRun?: string) => {
     const query = new URLSearchParams();
     if (extra) query.set("extra", extra);

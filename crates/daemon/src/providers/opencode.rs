@@ -4,7 +4,6 @@ use plantool_core::PermissionMode;
 use serde_json::{json, Map, Value};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc;
 
 fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
@@ -89,8 +88,8 @@ pub async fn run(
         )
         .await;
         let exe = opts.executable.clone().unwrap_or_else(|| "opencode".into());
-        let mut cmd = Command::new(&exe);
-        opts.apply_environment(&mut cmd);
+        let mut cmd = opts.command(&exe)?;
+        opts.apply_environment(&mut cmd, plantool_core::Provider::Ollama);
         cmd.arg("run")
             .arg("--format")
             .arg("json")
@@ -120,8 +119,8 @@ pub async fn run(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd
-            .spawn()
+        let mut child = opts
+            .spawn(&mut cmd)
             .with_context(|| format!("failed to start {}", exe.display()))?;
         let stdout = child.stdout.take().context("OpenCode has no stdout")?;
         let stderr = child.stderr.take().context("OpenCode has no stderr")?;
@@ -227,6 +226,7 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let opts = RunOptions {
             environment: None,
+            launch: None,
             cwd: dir.path().into(),
             prompt: "hello".into(),
             model: Some("qwen3:8b".into()),

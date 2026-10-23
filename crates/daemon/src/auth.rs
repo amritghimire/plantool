@@ -102,6 +102,7 @@ struct Binding {
     action: String,
     target_id: String,
     target_digest: String,
+    execution: Option<crate::execution::Status>,
     policy_digest: String,
     workspace: Option<crate::git::WorkspaceSnapshot>,
     request_body: String,
@@ -189,6 +190,9 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
         return false;
     }
     let path = path.split('?').next().unwrap_or(path);
+    if path == "/api/execution/resume" {
+        return true;
+    }
     if path.starts_with("/api/settings/") {
         return true;
     }
@@ -207,7 +211,8 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
         return true;
     }
     if path.ends_with("/runs") {
-        return body["permission_mode"].as_str().is_some_and(|m| m != "ask")
+        return !body["sandbox"].is_null()
+            || body["permission_mode"].as_str().is_some_and(|m| m != "ask")
             || !body["pause_rule"].is_null()
             || !body["milestone"].is_null()
             || body["implementation_mode"] == "step-by-step"
@@ -234,6 +239,10 @@ pub struct ApprovedAction {
     binding: Binding,
 }
 impl ApprovedAction {
+    pub fn execution(&self) -> Result<&crate::execution::Status, ApiError> {
+        self.binding.execution.as_ref().ok_or_else(denied)
+    }
+
     pub fn workspace(&self) -> Result<&crate::git::WorkspaceSnapshot, ApiError> {
         self.binding.workspace.as_ref().ok_or_else(denied)
     }
@@ -291,6 +300,14 @@ fn make_binding(
         .map_err(|_| denied())?;
     let parts: Vec<_> = decoded.split('/').collect();
     let mut data = json!({"body": body});
+    let execution = if path.starts_with("/api/execution/") || path == "/api/settings/never-sent" {
+        Some(state.runs.execution.status())
+    } else {
+        None
+    };
+    if let Some(execution) = &execution {
+        data["execution"] = json!(execution);
+    }
     let mut workspace = None;
     if parts.get(2) == Some(&"sessions") && parts.len() >= 5 {
         if let Some(s) = state
@@ -354,6 +371,7 @@ fn make_binding(
         action: method.into(),
         target_id: uri.into(),
         target_digest: digest_str(&data.to_string()),
+        execution,
         policy_digest,
         workspace,
         request_body: body.to_string(),
@@ -807,6 +825,7 @@ mod tests {
             action: "POST".into(),
             target_id: "/api/settings/difftool".into(),
             target_digest: "digest".into(),
+            execution: None,
             policy_digest: "digest".into(),
             workspace: None,
             request_body: "null".into(),
