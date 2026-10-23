@@ -69,11 +69,24 @@ pub fn remove_daemon_info(home: &Path) -> std::io::Result<()> {
 
 pub struct SessionStore {
     pub dir: PathBuf,
+    item_id: String,
 }
 impl SessionStore {
     pub fn new(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(dir.join("docs"));
-        Self { dir }
+        let repo = dir.parent().unwrap().file_name().unwrap().to_string_lossy();
+        let slug = dir.file_name().unwrap().to_string_lossy();
+        let external_key = format!("{repo}/{slug}");
+        // Capture the identity once: an old LiveSession must never attach to a
+        // replacement item when the owner reuses a deleted session's slug.
+        let item_id = (|| -> anyhow::Result<String> {
+            let home = dir.ancestors().nth(3).unwrap();
+            let db = crate::database::open(home)?;
+            if let Some(id) = db.query_row("SELECT id FROM work_items WHERE repo_slug=?1 AND slug=?2 AND deleted_at IS NULL", params![repo,slug], |r|r.get::<_,String>(0)).optional()? { return Ok(id) }
+            let used: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1)", [&external_key], |r|r.get(0))?;
+            Ok(if used { uuid::Uuid::new_v4().to_string() } else { external_key.clone() })
+        })().unwrap_or(external_key);
+        Self { dir, item_id }
     }
     pub fn home(&self) -> &Path {
         self.dir
@@ -81,17 +94,9 @@ impl SessionStore {
             .nth(3)
             .expect("session path under home/sessions/project/item")
     }
+    /// Stable database identity; the public session key remains repo/slug.
     pub fn key(&self) -> String {
-        format!(
-            "{}/{}",
-            self.dir
-                .parent()
-                .unwrap()
-                .file_name()
-                .unwrap()
-                .to_string_lossy(),
-            self.dir.file_name().unwrap().to_string_lossy()
-        )
+        self.item_id.clone()
     }
     pub fn db(&self) -> anyhow::Result<rusqlite::Connection> {
         crate::database::open(self.home())

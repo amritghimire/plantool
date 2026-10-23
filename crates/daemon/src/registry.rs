@@ -1806,7 +1806,7 @@ impl LiveSession {
             .runs
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown run"))?;
-        crate::retention::set_pin(self.store.home(), &self.key, id, pinned)?;
+        crate::retention::set_pin(self.store.home(), &self.store.key(), id, pinned)?;
         run.pinned = pinned;
         let run = run.clone();
         self.broadcast(&mut g, LiveEvent::RunUpdated { run });

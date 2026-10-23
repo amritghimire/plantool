@@ -1194,6 +1194,7 @@ exit 1
 
 #[tokio::test]
 async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
+    use plantool_core::DocKind;
     let h = harness();
     let (_, created) = call(
         &h.app,
@@ -1206,6 +1207,13 @@ async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
     .await;
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
+    std::fs::write(
+        live.doc_path(DocKind::Plan),
+        "# Plan\n- [ ] T1: Original task\n",
+    )
+    .unwrap();
+    live.capture_doc(DocKind::Plan).unwrap();
+    let original_sha = live.doc(DocKind::Plan).unwrap().sha;
     let dir = live.store.dir.clone();
     h.state.registry.remove(key, false).unwrap();
     assert!(!dir.exists());
@@ -1218,6 +1226,36 @@ async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
     });
     assert!(result.is_err());
     assert!(!dir.exists());
+    let (_, recreated) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({"slug":"fix-it","cwd":h.repo})),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(recreated["session"]["key"], key);
+    let replacement = h.state.registry.get_key(key).unwrap();
+    assert_ne!(live.store.key(), replacement.store.key());
+    assert!(replacement.state().comments.is_empty());
+    assert!(replacement.doc(DocKind::Plan).is_none());
+    assert!(replacement
+        .store
+        .load_revision(DocKind::Plan, &original_sha)
+        .unwrap()
+        .is_none());
+    assert!(live
+        .store
+        .load_revision(DocKind::Plan, &original_sha)
+        .unwrap()
+        .is_some());
+
+    assert!(live.store.save_meta(&live.session()).is_err());
+    assert_eq!(
+        h.state.registry.get_key(key).unwrap().store.key(),
+        replacement.store.key()
+    );
 }
 
 #[tokio::test]

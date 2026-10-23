@@ -175,11 +175,9 @@ pub fn run(home: &Path, now: i64) -> anyhow::Result<Report> {
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
                 {
-                    let mut parts = item.split('/');
-                    if let (Some(repo), Some(slug), None) =
-                        (parts.next(), parts.next(), parts.next())
-                    {
-                        let file = crate::store::session_dir(home, repo, slug)
+                    let active: Option<(String,String)> = db.query_row("SELECT repo_slug,slug FROM work_items WHERE id=?1 AND deleted_at IS NULL", [&item], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+                    if let Some((repo, slug)) = active {
+                        let file = crate::store::session_dir(home, &repo, &slug)
                             .join("attachments")
                             .join(name);
                         match std::fs::remove_file(file) {
@@ -219,13 +217,13 @@ pub fn run(home: &Path, now: i64) -> anyhow::Result<Report> {
             .collect::<Result<Vec<_>, _>>()?;
         rows
     };
-    for (id, json) in items {
+    for (_id, json) in items {
         let session: plantool_core::Session = serde_json::from_str(&json)?;
         if session.worktree.is_none() {
             continue;
         }
         match cleanup_worktree(home, &session) {
-            Ok(()) => report.cleaned_items.push(id),
+            Ok(()) => report.cleaned_items.push(session.key()),
             Err(e) => report.warnings.push(format!("{}: {e}", session.key())),
         }
     }
