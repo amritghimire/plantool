@@ -181,3 +181,10 @@ it.each(["source", "slides"] as const)("preserves section scope in %s mode", asy
   fireEvent.click(screen.getByText("Comment"));
   await vi.waitFor(() => expect(onAdd).toHaveBeenCalledWith("research", 1, "Section feedback", "note", "section"));
 });
+
+it("renders task progress without changing the approved source object",()=>{
+ const approved={...doc,content:"# Plan\n- [ ] T1: Build it\n",display_content:"# Plan\n- [x] T1: Build it\n"};
+ render(<DocView kind="plan" doc={approved} path={null} comments={[]} actions={actions} onAdd={async()=>{}} mode="rendered" target={null} highlightComment={null} showResolved={false}/>);
+ expect(screen.getByRole("checkbox")).toBeChecked();
+ expect(approved.content).toContain("[ ] T1");
+});

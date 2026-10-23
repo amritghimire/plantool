@@ -41,13 +41,13 @@ export function DocView(p: Props) {
   const setComposing = (line: number | null) => {
     if (line === null && composing !== null) requestAnimationFrame(() => findLineElement(composing)?.focus());
     setComposingState(line);
-    setComposingText(line !== null && p.doc ? (p.doc.content.split("\n")[line - 1] ?? null) : null);
+    setComposingText(line !== null && p.doc ? ((p.doc.display_content ?? p.doc.content).split("\n")[line - 1] ?? null) : null);
     setMovedNote(null);
   };
   const [scope, setScope] = useState<AnchorScope>("line");
   const [slide, setSlide] = useState(0);
-  const blocks = useMemo(() => (p.doc ? collectBlocks(p.doc.content) : []), [p.doc]);
-  const slides = useMemo(() => (p.doc ? splitSlides(p.doc.content, p.doc.headings) : []), [p.doc]);
+  const blocks = useMemo(() => (p.doc ? collectBlocks((p.doc.display_content ?? p.doc.content)) : []), [p.doc]);
+  const slides = useMemo(() => (p.doc ? splitSlides((p.doc.display_content ?? p.doc.content), p.doc.headings) : []), [p.doc]);
   const slidesOn = p.mode === "slides" && slides.length > 0;
   const current = Math.min(slide, Math.max(slides.length - 1, 0));
   const threads = useMemo(() => buildThreads(p.comments, p.showResolved), [p.comments, p.showResolved]);
@@ -76,7 +76,7 @@ export function DocView(p: Props) {
   // composer was opened on, the way saved comments are re-anchored.
   useEffect(() => {
     if (composing === null || composingText === null || !p.doc) return;
-    const lines = p.doc.content.split("\n");
+    const lines = (p.doc.display_content ?? p.doc.content).split("\n");
     if (lines[composing - 1] === composingText) return;
     const matches = lines.map((l, i) => (l === composingText ? i + 1 : 0)).filter(Boolean);
     const draftFrom = `new:${p.kind}:${composing}`;
@@ -196,7 +196,7 @@ export function DocView(p: Props) {
   if (p.mode === "source") {
     return (
       <div className="source-document">{documentComments}<SourceView
-        content={p.doc.content}
+        content={(p.doc.display_content ?? p.doc.content)}
         threads={threads}
         actions={p.actions}
         composing={scope === "document" ? null : composing}
@@ -368,7 +368,7 @@ export function DocView(p: Props) {
     <div className="doc">
       {documentComments}
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {p.doc.content}
+        {(p.doc.display_content ?? p.doc.content)}
       </ReactMarkdown>
       {orphans}
     </div>

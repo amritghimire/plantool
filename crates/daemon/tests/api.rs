@@ -240,7 +240,7 @@ async fn full_session_flow() {
     )
     .await;
     assert_eq!(v["state"]["stage"], "plan-review");
-    assert_eq!(v["docs"][1]["progress"][0]["done"], 1);
+    assert_eq!(v["docs"][1]["progress"][0]["done"], 0);
 
     let live = h.state.registry.get_key(&key).unwrap();
     let mut rx = live.tx.subscribe();
@@ -1724,7 +1724,7 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
     let reloaded = h.state.registry.get_key(imported_key).unwrap();
     assert_eq!(
         reloaded.doc(plantool_core::DocKind::Plan).unwrap().content,
-        updated
+        original
     );
 }
 
@@ -1843,7 +1843,7 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
     let plan = live.doc_path(plantool_core::DocKind::Plan);
     std::fs::write(
         &plan,
-        "# Plan\n\n## Tasks\n### Phase 1: First\n- [ ] One\n### Phase 2: Second\n- [ ] Two\n",
+        "# Plan\n\n## Tasks\n### Phase 1: First\n- [ ] T1: One\n### Phase 2: Second\n- [ ] T2: Two\n",
     )
     .unwrap();
     live.capture_doc(plantool_core::DocKind::Plan).unwrap();
@@ -1862,7 +1862,42 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
     .unwrap();
     let fake = h._tmp.path().join("phase-claude");
     let path = serde_json::to_string(&plan.to_string_lossy()).unwrap();
-    let script = format!("#!/usr/bin/env python3\nimport sys,json,pathlib\np=pathlib.Path({path})\nprint(json.dumps({{'type':'system','subtype':'init','session_id':'phase-session'}}),flush=True)\nfor raw in sys.stdin:\n msg=json.loads(raw)\n if msg.get('type')=='user':\n  text=p.read_text().replace('- [ ]','- [x]',1)\n  p.write_text(text)\n  pathlib.Path('a.txt').write_text('completed '+str(text.count('[x]'))+'\\n')\n  print(json.dumps({{'type':'result','subtype':'success'}}),flush=True)\n");
+    let script = format!(
+        r#"#!/usr/bin/env python3
+import sys,json,pathlib,time
+p=pathlib.Path({path})
+print(json.dumps({{'type':'system','subtype':'init','session_id':'phase-session'}}),flush=True)
+for raw in sys.stdin:
+ msg=json.loads(raw)
+ if msg.get('type')=='user':
+  n=2 if pathlib.Path('a.txt').read_text().startswith('completed 1') else 1
+  pathlib.Path('a.txt').write_text('completed '+str(n)+'\n')
+  p.with_suffix('.report').write_text(str(n))
+  while not p.with_suffix('.ack'+str(n)).exists(): time.sleep(0.01)
+  print(json.dumps({{'type':'result','subtype':'success'}}),flush=True)
+"#
+    );
+    let reported_plan = plan.clone();
+    let reported_session = live.clone();
+    let reports = tokio::spawn(async move {
+        for n in 1..=2 {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while std::fs::read_to_string(reported_plan.with_extension("report"))
+                    .ok()
+                    .as_deref()
+                    != Some(&n.to_string())
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            reported_session
+                .complete_task(&format!("T{n}"), None)
+                .unwrap();
+            std::fs::write(reported_plan.with_extension(format!("ack{n}")), "ok").unwrap();
+        }
+    });
     std::fs::write(&fake, script).unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("PLANTOOL_CLAUDE_PATH", &fake);
@@ -1895,7 +1930,7 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
         assert!(tokio::time::Instant::now() < deadline);
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert_eq!(live.state().milestones[0].completed_tasks, vec!["One"]);
+    assert_eq!(live.state().milestones[0].completed_tasks, vec!["T1: One"]);
     assert_eq!(live.state().milestones[1].status, "pending");
     let path = format!("/api/sessions/{key}/runs/{}/milestone/approve", first.id);
     let (status, _) = call(
@@ -1954,6 +1989,7 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
 
     assert_eq!(live.state().milestones[0].status, "approved");
     assert_eq!(live.state().milestones[1].status, "completed");
+    reports.await.unwrap();
 }
 
 #[tokio::test]
@@ -2043,11 +2079,7 @@ async fn code_comments_follow_a_changed_file_and_reject_stale_lines() {
 async fn accepting_scope_changes_reopens_finished_phases() {
     use plantool_core::{Actor, DocKind, Stage};
     for status in ["approved", "completed"] {
-        for changed in [
-            "- [x] Done\n- [ ] Added\n",
-            "- [ ] Reworded\n",
-            "- [ ] Done\n",
-        ] {
+        for changed in ["- [x] Done\n- [ ] Added\n", "- [ ] Reworded\n"] {
             let h = harness();
             let (_, created) = call(
                 &h.app,
@@ -2086,11 +2118,7 @@ async fn accepting_scope_changes_reopens_finished_phases() {
             live.set_stage(Stage::Approved, Actor::Human).unwrap();
             let first = live.state().milestones[0].clone();
             assert_eq!(first.status, "pending", "{status}: {changed}");
-            let expected = if changed.starts_with("- [x]") {
-                vec!["Done".to_string()]
-            } else {
-                vec![]
-            };
+            let expected: Vec<String> = vec![];
             assert_eq!(first.completed_tasks, expected);
             assert!(first.run_id.is_none());
             assert!(first.base.is_none());

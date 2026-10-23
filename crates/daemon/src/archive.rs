@@ -15,6 +15,7 @@ pub struct Bundle {
     pub revisions: Vec<DocRevision>,
     pub runs: Vec<Run>,
     pub transcripts: BTreeMap<String, String>,
+    pub task_progress: BTreeMap<String, bool>,
 }
 
 pub fn summary(bundle: &Bundle, note: Option<&str>) -> String {
@@ -103,6 +104,7 @@ pub fn export(
     }
     let bundle = Bundle {
         version: 2,
+        task_progress: session.store.task_progress()?,
         session: session.session(),
         state,
         documents,

@@ -309,7 +309,13 @@ impl LiveSession {
                     title: rev.and_then(|r| markdown::title(&r.content)),
                     captured_at: ds.map(|d| d.captured_at.clone()),
                     progress: rev
-                        .map(|r| markdown::progress(&r.content))
+                        .map(|r| {
+                            markdown::progress(
+                                &self
+                                    .progress_content(&r.content)
+                                    .unwrap_or_else(|_| r.content.clone()),
+                            )
+                        })
                         .unwrap_or_default(),
                 }
             })
@@ -422,6 +428,11 @@ impl LiveSession {
             Some(c) => c,
             None => return Ok(None),
         };
+        let content = if kind == DocKind::Plan {
+            plantool_core::tasks::normalize(&content)
+        } else {
+            content
+        };
         let sha = plantool_core::sha256_hex(&content);
         let mut g = self.lock();
         if g.docs.get(&kind).map(|d| d.sha == sha).unwrap_or(false) {
@@ -446,16 +457,9 @@ impl LiveSession {
                     .load_revision(kind, &approved.sha)?
                     .unwrap_or_else(|| old.clone());
                 let change = markdown::classify_plan_change(&baseline, &content);
-                let unticked = markdown::checkboxes(&old).iter().any(|task| {
-                    task.checked
-                        && markdown::checkboxes(&content).iter().any(|next| {
-                            next.phase == task.phase && next.text == task.text && !next.checked
-                        })
-                });
                 g.state.plan_change = Some(change);
-                g.state.plan_revision_pending = g.state.plan_revision_pending
-                    || change == markdown::PlanChange::ScopeChange
-                    || unticked;
+                g.state.plan_revision_pending =
+                    g.state.plan_revision_pending || change == markdown::PlanChange::ScopeChange;
             }
         }
         let mut affected: Vec<&mut Comment> = g
@@ -1650,6 +1654,12 @@ impl Registry {
             }
         }
         store.save_state(&bundle.state)?;
+        for (key, done) in &bundle.task_progress {
+            if !plantool_core::tasks::valid_key(key) {
+                return Err(anyhow::anyhow!("Invalid archived task key").into());
+            }
+            store.db()?.execute("INSERT INTO task_progress(item_id,task_key,status,updated_at) VALUES(?1,?2,?3,?4)",rusqlite::params![store.key(),key,if *done {"done"}else{"pending"},plantool_core::now()]).map_err(anyhow::Error::from)?;
+        }
         store.save_meta(&bundle.session)?;
         let live = LiveSession::open(store)?
             .ok_or_else(|| anyhow::anyhow!("import did not create a session"))?;
@@ -1723,4 +1733,45 @@ pub fn same_repo(s: &Session, c: &plantool_core::Checkout) -> bool {
     let a = std::fs::canonicalize(&s.repo.common_dir).unwrap_or_else(|_| s.repo.common_dir.clone());
     let b = std::fs::canonicalize(&c.common_dir).unwrap_or_else(|_| c.common_dir.clone());
     a == b
+}
+impl LiveSession {
+    pub fn progress_content(&self, content: &str) -> anyhow::Result<String> {
+        Ok(plantool_core::tasks::overlay(
+            content,
+            &self.store.task_progress()?,
+        ))
+    }
+    pub fn complete_task(&self, key: &str, attempt: Option<&str>) -> anyhow::Result<()> {
+        let mut g = self.lock();
+        anyhow::ensure!(
+            !g.state.plan_revision_pending,
+            "Review and approve the changed plan before reporting progress"
+        );
+        self.store.complete_task(key, attempt)?;
+        if let Some(plan) = g.docs.get(&DocKind::Plan).cloned() {
+            let content = self.progress_content(&plan.content)?;
+            for phase in markdown::phases(&content) {
+                if let Some(m) = g.state.milestones.iter_mut().find(|m| m.key == phase.name) {
+                    m.completed_tasks = phase
+                        .tasks
+                        .iter()
+                        .filter(|t| t.checked)
+                        .map(|t| t.text.clone())
+                        .collect();
+                }
+            }
+            self.broadcast(
+                &mut g,
+                LiveEvent::DocRefreshed {
+                    kind: DocKind::Plan,
+                    sha: plan.sha,
+                    lines: anchor::line_count(&content),
+                    reanchored: 0,
+                    outdated: 0,
+                },
+            );
+        }
+        self.persist_state(&g)?;
+        Ok(())
+    }
 }

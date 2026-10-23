@@ -17,6 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report progress against stable keys in an approved plan.
+    Task(commands::task::Args),
     /// Create a one-time code for registering the first browser passkey.
     Setup,
     /// Read global settings (changes belong in the browser).
@@ -58,6 +60,7 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Task(a) => commands::task::run(a),
         Command::Setup => setup(),
         Command::Settings(a) => commands::settings::run(a),
         Command::Export(a) => commands::archive::export(a),

@@ -8,6 +8,7 @@ pub mod pr;
 pub mod runs;
 pub mod sessions;
 pub mod settings;
+pub mod tasks;
 pub mod where_context;
 
 use crate::registry::RegistryError;
@@ -116,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         .route("/shutdown", post(shutdown))
         .merge(crate::auth::routes())
         .merge(sessions::routes())
+        .merge(tasks::routes())
         .merge(execution::routes())
         .merge(notices::routes())
         .merge(comments::routes())

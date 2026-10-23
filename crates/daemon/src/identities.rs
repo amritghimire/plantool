@@ -254,7 +254,8 @@ pub fn authorize(state: &AppState, req: &Request<Body>) -> Result<Option<Authori
         },
         "POST" => matches!(
             tail,
-            ["comments"]
+            ["tasks", _, "done"]
+                | ["comments"]
                 | ["comments", "batch" | "edit"]
                 | ["where"]
                 | ["plan", "propose-revision"]

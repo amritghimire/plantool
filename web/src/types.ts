@@ -216,6 +216,7 @@ export interface Heading {
 }
 
 export interface DocResponse {
+  display_content?: string;
   kind: DocKind;
   sha: string;
   content: string;

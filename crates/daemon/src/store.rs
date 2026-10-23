@@ -155,6 +155,7 @@ impl SessionStore {
             if old["approved"]["sha"].as_str() != Some(&a.sha)
                 || old["approved"]["at"].as_str() != Some(&a.at)
             {
+                tx.execute("UPDATE task_progress SET status='pending',updated_at=?4 WHERE item_id=?1 AND NOT EXISTS(SELECT 1 FROM plan_tasks n JOIN revisions nr ON nr.id=n.revision_id JOIN plan_tasks o ON o.task_key=n.task_key AND o.title=n.title AND o.phase IS n.phase AND o.area IS n.area JOIN revisions oldr ON oldr.id=o.revision_id WHERE nr.item_id=?1 AND oldr.item_id=?1 AND nr.content_sha256=?2 AND oldr.content_sha256=?3 AND n.task_key=task_progress.task_key)",params![self.key(),a.sha,old["approved"]["sha"].as_str().unwrap_or(""),plantool_core::now()])?;
                 let id = uuid::Uuid::new_v4().to_string();
                 tx.execute("INSERT INTO gates(id,item_id,kind,target_digest,target_sha,state,created_at,closed_at) VALUES(?1,?2,'plan',?3,?3,'approved',?4,?4)",params![id,self.key(),a.sha,a.at])?;
                 tx.execute("INSERT INTO decisions(id,gate_id,source,source_event_id,decision,created_at) VALUES(?1,?1,'plantool',?1,'approved',?2)",params![id,a.at])?;
@@ -202,6 +203,12 @@ impl SessionStore {
         crate::artifacts::register(&tx, &sha, rev.content.len())?;
         let id = format!("{}:{}:{}", self.key(), rev.kind, sha);
         tx.execute("INSERT OR IGNORE INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) SELECT ?1,?2,?3,coalesce(max(number),0)+1,?4,'agent',?5 FROM revisions WHERE item_id=?2 AND doc_kind=?3",params![id,self.key(),rev.kind.as_str(),sha,rev.captured_at])?;
+        if rev.kind == DocKind::Plan {
+            let tasks = plantool_core::tasks::parse(&rev.content).map_err(anyhow::Error::msg)?;
+            for task in tasks {
+                tx.execute("INSERT OR IGNORE INTO plan_tasks(id,revision_id,task_key,area,title,phase,review_tag) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![format!("{id}:{}",task.key),id,task.key,task.area,task.title,task.phase,task.review_tag])?;
+            }
+        }
         tx.commit()?;
         Ok(())
     }
@@ -381,5 +388,40 @@ mod live_document_security_tests {
         fs::remove_file(&doc).unwrap();
         fs::write(&doc, "plan").unwrap();
         assert_eq!(read_live_document(&doc).unwrap(), "plan");
+    }
+}
+impl SessionStore {
+    pub fn task_progress(&self) -> anyhow::Result<std::collections::BTreeMap<String, bool>> {
+        let db = self.db()?;
+        let mut q =
+            db.prepare("SELECT task_key,status='done' FROM task_progress WHERE item_id=?1")?;
+        let rows = q
+            .query_map([self.key()], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+    pub fn complete_task(&self, key: &str, attempt: Option<&str>) -> anyhow::Result<()> {
+        anyhow::ensure!(plantool_core::tasks::valid_key(key), "Invalid task key");
+        let mut db = self.db()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2 AND i.deleted_at IS NULL AND i.state IN('approved','implementing','implementation-review'))",params![self.key(),key],|r|r.get(0))?;
+        anyhow::ensure!(
+            valid,
+            "Task must exist in the approved plan of an active implementation"
+        );
+        if let Some(id) = attempt {
+            let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND item_id=?2 AND state IN('starting','running','waiting','idle'))",params![id,self.key()],|r|r.get(0))?;
+            anyhow::ensure!(live, "Attempt is not active for this item");
+        }
+        tx.execute("INSERT INTO task_progress(item_id,task_key,status,updated_by_attempt,updated_at) VALUES(?1,?2,'done',?3,?4) ON CONFLICT(item_id,task_key) DO UPDATE SET status='done',updated_by_attempt=excluded.updated_by_attempt,updated_at=excluded.updated_at",params![self.key(),key,attempt,plantool_core::now()])?;
+        crate::database::audit(
+            &tx,
+            "agent",
+            "task.done",
+            &self.key(),
+            &serde_json::json!({"key":key,"attempt":attempt}),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 }
