@@ -11,6 +11,7 @@ pub mod dispatcher;
 pub mod events;
 pub mod execution;
 pub mod git;
+pub mod github;
 pub mod identities;
 pub mod models;
 pub mod prompts;
