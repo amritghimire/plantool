@@ -1506,3 +1506,102 @@ async fn phase4_sprint_revision_refresh_posts_a_new_snapshot_and_rejects_old_com
         0
     );
 }
+
+#[tokio::test]
+async fn phase4_identical_snapshot_replanning_does_not_deadlock_and_empty_selection_releases_backlog(
+) {
+    let f = Fixture::new();
+    let project = phase4_seed_sprint(&f);
+    let remote = Fake::default();
+    plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    let db = database::open(&f.home).unwrap();
+    db.execute("UPDATE workflow_items SET state_json=json_set(state_json,'$.step','publish_plans') WHERE item_id=?1",[&project]).unwrap();
+    let result = plantool_daemon::scheduler::publish(
+        &f.home,
+        &WorkflowPr {
+            item: project.clone(),
+            thread_id: project.clone(),
+            interrupt_id: "republish".into(),
+            idempotency_key: "republish".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(result["empty"], false);
+    assert_eq!(
+        db.query_row("SELECT state FROM sprints", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "waiting"
+    );
+    plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    assert_eq!(remote.0.lock().unwrap().comments.len(), 1);
+    db.execute("UPDATE workflow_items SET state_json=json_set(state_json,'$.step','publish_plans','$.choices',json('[]')) WHERE item_id=?1",[&project]).unwrap();
+    let result = plantool_daemon::scheduler::publish(
+        &f.home,
+        &WorkflowPr {
+            item: project.clone(),
+            thread_id: project.clone(),
+            interrupt_id: "empty".into(),
+            idempotency_key: "empty".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(result["empty"], true);
+    assert_eq!(
+        workflow::state(&db, &project).unwrap().unwrap()["step"],
+        "project_wait"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM work_items WHERE state='backlog'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3
+    );
+}
+#[test]
+fn phase4_stale_schedule_event_returns_to_wait_without_a_discussion_or_approval() {
+    let f = Fixture::new();
+    let project = phase4_seed_sprint(&f);
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    let event = plantool_daemon::scheduler::event(
+        &tx,
+        "p",
+        "sprint_planning_due",
+        &json!({"week":"2026-W43","schedule":"previous-configuration"}),
+        "stale-configuration",
+    )
+    .unwrap();
+    tx.execute(
+        "UPDATE project_events SET delivered_at='2026-10-24T00:00:00Z' WHERE id=?1",
+        [&event],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let response = plantool_daemon::scheduler::ack(
+        &f.home,
+        &EventAck {
+            project: "p".into(),
+            event_id: event,
+            next_step: Some("discussion".into()),
+            idempotency_key: "stale-configuration".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(response["stale"], true);
+    assert_eq!(
+        workflow::state(&db, &project).unwrap().unwrap()["step"],
+        "project_wait"
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}

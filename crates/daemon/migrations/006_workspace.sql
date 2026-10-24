@@ -9,4 +9,4 @@ CREATE TABLE sprint_snapshots(id TEXT PRIMARY KEY,sprint_id TEXT NOT NULL REFERE
 CREATE TABLE sprint_items(sprint_id TEXT NOT NULL REFERENCES sprints(id),item_id TEXT NOT NULL REFERENCES work_items(id),plan_sha TEXT NOT NULL,estimate TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',PRIMARY KEY(sprint_id,item_id));
 CREATE TABLE milestone_context(gate_id TEXT PRIMARY KEY REFERENCES gates(id),phase_index INTEGER NOT NULL,previous_sha TEXT NOT NULL,pr_number INTEGER,thread_id TEXT NOT NULL,interrupt_id TEXT NOT NULL);
 ALTER TABLE project_settings ADD COLUMN sprint_time TEXT NOT NULL DEFAULT '09:00';
-ALTER TABLE project_settings ADD COLUMN review_globs_json TEXT NOT NULL DEFAULT '["**/migrations/**","**/*auth*","**/api/**",".github/**","**/Cargo.toml","**/package.json","**/pyproject.toml"]';
+ALTER TABLE project_settings ADD COLUMN review_globs_json TEXT NOT NULL DEFAULT '["**/migrations/**","**/*auth*","**/api/**",".github/**","**/Cargo.toml","**/package.json","**/pyproject.toml","**/*auth*/**","**/routes/**","**/contract/**","**/Cargo.lock","**/package-lock.json","**/uv.lock","**/requirements*.txt"]';

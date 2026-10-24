@@ -30,6 +30,17 @@ pub fn due(
         date.iso_week().week()
     )))
 }
+pub fn schedule(
+    db: &Connection,
+    project: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<(String, Option<String>)> {
+    let (day,time,zone):(u32,String,String)=db.query_row("SELECT coalesce(sprint_day,0),sprint_time,coalesce(timezone,'UTC') FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",[project],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    Ok((
+        plantool_core::sha256_hex(&format!("{day}:{time}:{zone}")),
+        due(now, day, &time, &zone)?,
+    ))
+}
 pub fn ensure_project(home: &Path, project: &str) -> anyhow::Result<String> {
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -218,9 +229,19 @@ pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result
             );
             let p: Value = serde_json::from_str(&payload)?;
             let week = p["week"].as_str().context("Week missing")?;
+            let (signature, current) = schedule(tx, &request.project, chrono::Utc::now())?;
+            if p["schedule"] != signature || current.as_deref() != Some(week) {
+                s["step"] = json!("project_wait");
+                s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
+                workflow::save(tx, &item, &s)?;
+                return Ok(
+                    json!({"accepted":false,"stale":true,"request":serde_json::to_value(request)?}),
+                );
+            }
             let sprint = format!("{}:{week}", request.project);
             expire(tx, &request.project, &sprint)?;
             tx.execute("INSERT OR IGNORE INTO sprints(id,project_id,week,state) VALUES(?1,?2,?3,'planning')",params![sprint,request.project,week])?;
+            tx.execute("UPDATE sprints SET state='planning' WHERE id=?1", [&sprint])?;
             s["sprint_id"] = json!(sprint);
             s["week"] = json!(week);
             s["candidates"] = candidates(home, tx, &request.project)?;
@@ -243,6 +264,12 @@ pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result
             s["step"] = json!(next);
         } else if kind == "plan_ready" && next == "sprint_plan" {
             ensure!(s["sprint_id"].is_string(), "No active scheduled sprint");
+            ensure!(
+                schedule(tx, &request.project, chrono::Utc::now())?
+                    .1
+                    .is_some(),
+                "Sprint is not due under current settings"
+            );
             tx.execute(
                 "UPDATE sprints SET state='planning' WHERE id=?1 AND state<>'closed'",
                 [s["sprint_id"].as_str()],
@@ -320,12 +347,25 @@ pub fn publish(home: &Path, request: &plantool_contract::WorkflowPr) -> anyhow::
         );
         let sprint = s["sprint_id"].as_str().context("Sprint missing")?;
         let available = candidates(home, tx, &project)?;
-        let mut snapshot = vec![];
+        let running:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sprint_items WHERE sprint_id=?1 AND state IN('approved','started'))",[sprint],|r|r.get(0))?;
+        let previous: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sprint_snapshots WHERE sprint_id=?1)",
+            [sprint],
+            |r| r.get(0),
+        )?;
         tx.execute("UPDATE work_items SET sprint_id=NULL,state='backlog' WHERE id IN(SELECT item_id FROM sprint_items WHERE sprint_id=?1 AND state='pending')",[sprint])?;
         tx.execute(
             "UPDATE sprint_items SET state='backlog' WHERE sprint_id=?1 AND state='pending'",
             [sprint],
         )?;
+        if s["choices"].as_array().is_some_and(|v| v.is_empty()) && !running && !previous {
+            tx.execute("UPDATE sprints SET state='empty' WHERE id=?1", [sprint])?;
+            s["step"] = json!("project_wait");
+            s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
+            workflow::save(tx, &request.item, &s)?;
+            return Ok(json!({"empty":true}));
+        }
+        let mut snapshot = vec![];
         for choice in s["choices"].as_array().context("Choices missing")? {
             let candidate = available
                 .as_array()
@@ -360,21 +400,33 @@ pub fn publish(home: &Path, request: &plantool_contract::WorkflowPr) -> anyhow::
                 plantool_core::now()
             ],
         )?;
-        dispatcher::enqueue(
-            tx,
-            &request.item,
-            "github.sprint",
-            &json!({"snapshot":id,"sprint":sprint}),
+        let published: bool = tx.query_row(
+            "SELECT comment_id IS NOT NULL FROM sprint_snapshots WHERE id=?1",
+            [&id],
+            |r| r.get(0),
         )?;
+        if !published {
+            dispatcher::enqueue(
+                tx,
+                &request.item,
+                "github.sprint",
+                &json!({"snapshot":id,"sprint":sprint}),
+            )?;
+        }
         tx.execute(
-            "UPDATE sprints SET state='publishing' WHERE id=?1",
-            [sprint],
+            "UPDATE sprints SET state=?2 WHERE id=?1",
+            params![sprint, if published { "waiting" } else { "publishing" }],
         )?;
         s["snapshot_id"] = json!(id);
-        s["step"] = json!("await_sprint_gate");
+        let empty = s["choices"].as_array().is_some_and(|v| v.is_empty());
+        s["step"] = json!(if empty {
+            "project_wait"
+        } else {
+            "await_sprint_gate"
+        });
         s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
         workflow::save(tx, &request.item, &s)?;
-        Ok(json!({"snapshot":id,"publication":"pending"}))
+        Ok(json!({"snapshot":id,"publication":"pending","empty":empty}))
     })
 }
 pub fn start_items(home: &Path, request: &plantool_contract::WorkflowPr) -> anyhow::Result<Value> {
@@ -452,12 +504,13 @@ pub fn tick(home: &Path, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<(
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if let Some(week) = due(now, day, &time, &zone)? {
+            let (signature, _) = schedule(&tx, &project, now)?;
             event(
                 &tx,
                 &project,
                 "sprint_planning_due",
-                &json!({"week":week}),
-                &format!("sprint:{week}"),
+                &json!({"week":week,"schedule":signature}),
+                &format!("sprint:{week}:{signature}"),
             )?;
         }
         if workflow::state(&tx, &item)?.is_some_and(|s| s["frozen"] != true) {

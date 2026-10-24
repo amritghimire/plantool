@@ -69,7 +69,7 @@ async fn save(
         )
         .map_err(anyhow::Error::from)?;
     ensure!(current == body.version, "Project settings changed; reload");
-    let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items WHERE project_id=?1 AND kind='eos' AND github_issue_number IS NOT NULL AND closed_at IS NULL AND state NOT IN('merged','done','backlog'))",[&body.project],|r|r.get(0)).map_err(anyhow::Error::from)?;
+    let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items WHERE project_id=?1 AND kind='eos' AND github_issue_number IS NOT NULL AND closed_at IS NULL AND state NOT IN('merged','done'))",[&body.project],|r|r.get(0)).map_err(anyhow::Error::from)?;
     ensure!(
         !active,
         "Finish or replan active items before changing oversight policy"
