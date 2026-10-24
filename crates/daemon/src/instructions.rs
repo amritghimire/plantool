@@ -38,6 +38,8 @@ pub fn assemble(
     let discussion = request.inputs["step"] == "discussion";
     let skills: &[&str] = if discussion {
         &["discuss", "moderate"]
+    } else if crate::loop_engine::read_step(request.inputs["step"].as_str().unwrap_or("")) {
+        &[] // The loop-specific read-only skill is appended below, without coding/plan instructions.
     } else {
         match request.role.as_str() {
             "cto" => &["research", "architecture", "plan-review"],

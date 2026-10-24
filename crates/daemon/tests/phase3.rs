@@ -2178,3 +2178,48 @@ async fn phase5_urgent_command_rejects_edits_bots_and_replay_without_bypassing_p
         0
     );
 }
+
+#[tokio::test]
+async fn phase5_old_sprint_snapshot_cannot_approve_a_newly_urgent_item() {
+    let f = Fixture::new();
+    phase4_seed_sprint(&f);
+    let remote = Fake::default();
+    plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE work_items SET priority='urgent' WHERE id=?1",
+        [&f.item],
+    )
+    .unwrap();
+    let tracking = db
+        .query_row(
+            "SELECT tracking_issue_number FROM sprints WHERE project_id='p'",
+            [],
+            |r| r.get::<_, u64>(0),
+        )
+        .unwrap();
+    let id = phase4_command(&remote, tracking, "/plantool approve-sprint");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, id)
+        .await
+        .unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM gates WHERE kind='plan' AND state='approved' AND item_id=?1",
+            [&f.item],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM gates WHERE kind='plan' AND state='approved' AND item_id<>?1",
+            [&f.item],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+}

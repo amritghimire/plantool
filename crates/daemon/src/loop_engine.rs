@@ -187,7 +187,7 @@ pub fn wake(tx: &Transaction<'_>, item: &str, next: &str, key: &str) -> anyhow::
     Ok(true)
 }
 pub fn wait(home: &Path, request: &ProjectWait) -> anyhow::Result<Value> {
-    database::inbox_once(home, "loop.wait", &request.idempotency_key, |tx| {
+    let value = database::inbox_once(home, "loop.wait", &request.idempotency_key, |tx| {
         let s = workflow::state(tx, &request.item)?.context("Missing loop item")?;
         ensure!(
             s["step"] == request.kind
@@ -240,8 +240,13 @@ pub fn wait(home: &Path, request: &ProjectWait) -> anyhow::Result<Value> {
                 &format!("retriage:{}", s["sequence"]),
             )?;
         }
-        Ok(json!({"waiting":true}))
-    })
+        Ok(json!({"waiting":true,"request":request}))
+    })?;
+    ensure!(
+        value["request"] == serde_json::to_value(request)?,
+        "Loop wait key reused for changed input"
+    );
+    Ok(value)
 }
 pub fn override_decline(home: &Path, item: &str) -> anyhow::Result<()> {
     let mut db = database::open(home)?;

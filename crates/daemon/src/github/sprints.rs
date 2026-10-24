@@ -245,6 +245,15 @@ pub async fn handle(
         .context("Snapshot missing items")?
     {
         let item = entry["item"].as_str().unwrap();
+        let urgent: bool = tx.query_row(
+            "SELECT coalesce(priority,'')='urgent' FROM work_items WHERE id=?1",
+            [item],
+            |r| r.get(0),
+        )?;
+        // Urgency always needs an item-issue plan decision, even if this older snapshot listed it.
+        if urgent {
+            continue;
+        }
         let current:String=tx.query_row("SELECT content_sha256 FROM revisions WHERE item_id=?1 AND doc_kind='plan' ORDER BY number DESC LIMIT 1",[item],|r|r.get(0))?;
         entries.push((
             item.to_owned(),
