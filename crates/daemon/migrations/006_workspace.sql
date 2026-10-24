@@ -1,0 +1,12 @@
+CREATE UNIQUE INDEX channels_project_name ON channels(project_id,name);
+CREATE UNIQUE INDEX threads_item ON threads(item_id) WHERE item_id IS NOT NULL;
+CREATE UNIQUE INDEX sprints_project_week ON sprints(project_id,week);
+CREATE TABLE discussion_topics(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL REFERENCES threads(id),item_id TEXT NOT NULL REFERENCES work_items(id),state TEXT NOT NULL DEFAULT 'open',round INTEGER NOT NULL DEFAULT 0,speaker TEXT NOT NULL,participants_json TEXT NOT NULL DEFAULT '[]',summary TEXT NOT NULL DEFAULT '',sequence INTEGER NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX discussion_open_thread ON discussion_topics(thread_id) WHERE state='open';
+CREATE TABLE project_events(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at TEXT NOT NULL,delivered_at TEXT);
+CREATE TABLE graph_waiters(item_id TEXT PRIMARY KEY REFERENCES work_items(id),thread_id TEXT NOT NULL,interrupt_id TEXT NOT NULL,kind TEXT NOT NULL);
+CREATE TABLE sprint_snapshots(id TEXT PRIMARY KEY,sprint_id TEXT NOT NULL REFERENCES sprints(id),digest TEXT NOT NULL,payload_json TEXT NOT NULL,comment_id INTEGER,published_at TEXT,created_at TEXT NOT NULL);
+CREATE TABLE sprint_items(sprint_id TEXT NOT NULL REFERENCES sprints(id),item_id TEXT NOT NULL REFERENCES work_items(id),plan_sha TEXT NOT NULL,estimate TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',PRIMARY KEY(sprint_id,item_id));
+CREATE TABLE milestone_context(gate_id TEXT PRIMARY KEY REFERENCES gates(id),phase_index INTEGER NOT NULL,previous_sha TEXT NOT NULL,pr_number INTEGER,thread_id TEXT NOT NULL,interrupt_id TEXT NOT NULL);
+ALTER TABLE project_settings ADD COLUMN sprint_time TEXT NOT NULL DEFAULT '09:00';
+ALTER TABLE project_settings ADD COLUMN review_globs_json TEXT NOT NULL DEFAULT '["**/migrations/**","**/*auth*","**/api/**",".github/**","**/Cargo.toml","**/package.json","**/pyproject.toml"]';

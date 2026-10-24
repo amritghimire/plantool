@@ -23,3 +23,5 @@ pub fn sha256_hex(content: &str) -> String {
 }
 
 pub mod tasks;
+
+pub mod presets;
