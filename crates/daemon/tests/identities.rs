@@ -529,14 +529,21 @@ async fn hosted_provider_tokens_are_injected_and_revoked_on_exit_failure_or_stop
                 None,
             )
             .unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            while !token_file.exists() {
+        // Shell redirection creates the file before printf writes the token.
+        // File existence alone races the writer, particularly on macOS runners.
+        let secret = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                match std::fs::read_to_string(&token_file) {
+                    Ok(secret) if !secret.is_empty() => break secret,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => panic!("could not read provider token fixture: {error}"),
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await
-        .unwrap();
-        let secret = std::fs::read_to_string(&token_file).unwrap();
+        .expect("provider did not publish a nonempty token fixture");
         assert!(!secret.is_empty());
         assert_ne!(secret, previous);
         assert_eq!(
