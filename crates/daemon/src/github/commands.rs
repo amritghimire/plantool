@@ -2,6 +2,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     ApprovePlan(String),
+    ApproveResearch(String),
     RequestChanges(String),
     ApproveSprint,
     ApproveItem(String),
@@ -22,6 +23,12 @@ pub fn parse(body: &str) -> Option<Command> {
     }
     if body == "/plantool urgent" {
         return Some(Command::Urgent);
+    }
+    if let Some(hash) = body.strip_prefix("/plantool approve-research sha256:") {
+        if (12..=64).contains(&hash.len()) && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Some(Command::ApproveResearch(hash.to_ascii_lowercase()));
+        }
+        return None;
     }
     if let Some(hash) = body.strip_prefix("/plantool approve-plan sha256:") {
         if (12..=64).contains(&hash.len()) && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -104,7 +111,7 @@ pub fn verify(
         "Comment predates gate"
     );
     match command {
-        Command::ApprovePlan(hash) => {
+        Command::ApprovePlan(hash) | Command::ApproveResearch(hash) => {
             ensure!(
                 context.place == Place::Issue,
                 "Plan approval belongs on the item issue"

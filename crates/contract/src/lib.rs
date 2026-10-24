@@ -2,8 +2,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub const CONTRACT_VERSION: u32 = 3;
-pub const GRAPH_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 4;
+pub const GRAPH_VERSION: u32 = 3;
 macro_rules! wire {
     ($name:ident {$($field:ident: $ty:ty),* $(,)?}) => {
         #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -91,7 +91,15 @@ wire!(FileProposal {
     body: String,
     idempotency_key: String
 });
+wire!(ProjectWait {
+    item: String,
+    thread_id: String,
+    interrupt_id: String,
+    kind: String,
+    idempotency_key: String
+});
 wire!(EventAck {
+    next_step: Option<String>,
     project: String,
     event_id: String,
     idempotency_key: String
@@ -131,6 +139,14 @@ wire!(ReviewGuide {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoleDetails {
+    Discussion {
+        body: String,
+        decision: Option<String>,
+    },
+    Sprint {
+        items: Vec<SprintChoice>,
+        notes: String,
+    },
     Research {
         markdown: String,
     },
@@ -155,6 +171,10 @@ pub enum RoleDetails {
         reason: String,
     },
 }
+wire!(SprintChoice {
+    item: String,
+    estimate: String
+});
 wire!(DocUpdate {
     path: String,
     content: String
@@ -198,6 +218,7 @@ pub enum Contract {
     ReportResult(RoleResult),
     FileProposal(FileProposal),
     ProjectEventAck(EventAck),
+    ProjectWait(ProjectWait),
     Llm(LlmContext),
     RoleCall(RoleCall),
     WorkflowContext(WorkflowContext),

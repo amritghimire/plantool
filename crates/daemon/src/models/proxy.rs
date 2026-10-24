@@ -155,7 +155,9 @@ pub async fn complete(
             router::allowed(&db, &project)?.contains(&selected.route.provider),
             "Provider is disallowed"
         );
-        let held = if !crate::workflow::coding(&context.role)
+        let held = if (!crate::workflow::coding(&context.role)
+            || crate::workflow::state(&db, &context.item)?
+                .is_some_and(|s| s["step"] == "discussion"))
             && crate::workflow::state(&db, &context.item)?.is_some()
         {
             anyhow::ensure!(

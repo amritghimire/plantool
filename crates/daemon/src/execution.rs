@@ -282,7 +282,7 @@ fn persist(inner: &Inner) -> anyhow::Result<()> {
                 if previous.as_deref() == Some(&value) {
                     continue;
                 }
-                let copied=tx.execute("INSERT INTO project_settings(project_id,version,oversight,allowed_providers_json,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,effective_at,set_by) SELECT project_id,version+1,oversight,allowed_providers_json,?2,sprint_day,scan_time,timezone,retention_json,?3,'browser' FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",rusqlite::params![target,value,plantool_core::now()])?;
+                let copied=tx.execute("INSERT INTO project_settings(project_id,version,oversight,allowed_providers_json,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,effective_at,set_by,sprint_time,review_globs_json) SELECT project_id,version+1,oversight,allowed_providers_json,?2,sprint_day,scan_time,timezone,retention_json,?3,'browser',sprint_time,review_globs_json FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",rusqlite::params![target,value,plantool_core::now()])?;
                 if copied == 0 {
                     tx.execute("INSERT INTO project_settings(project_id,version,never_sent_globs_json,effective_at,set_by) VALUES(?1,1,?2,?3,'browser')",rusqlite::params![target,value,plantool_core::now()])?;
                 }

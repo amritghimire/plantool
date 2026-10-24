@@ -32,7 +32,7 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", true)?;
     let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    ensure!(version <= 5, "Database is newer than this PlanTool version");
+    ensure!(version <= 7, "Database is newer than this PlanTool version");
     if version == 0 {
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // A second connection may have waited for the same initial migration.
@@ -76,6 +76,24 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
         if current < 5 {
             tx.execute_batch(include_str!("../migrations/005_workflow.sql"))?;
             tx.pragma_update(None, "user_version", 5)?;
+        }
+        tx.commit()?;
+    }
+    if version < 6 {
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current < 6 {
+            tx.execute_batch(include_str!("../migrations/006_workspace.sql"))?;
+            tx.pragma_update(None, "user_version", 6)?;
+        }
+        tx.commit()?;
+    }
+    if version < 7 {
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current < 7 {
+            tx.execute_batch(include_str!("../migrations/007_sprint_decisions.sql"))?;
+            tx.pragma_update(None, "user_version", 7)?;
         }
         tx.commit()?;
     }

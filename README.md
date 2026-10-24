@@ -476,7 +476,7 @@ leaves comments as evidence. It does not exercise the deferred PR workflow or ca
 ### Engineering OS work-item agents
 
 New open issues by allowlisted human authors, created after GitHub project setup, start the
-work-item graph directly. This phase adds no triage, sprint scheduler or workspace chat.
+work-item graph directly. Phase 4 adds sprint scheduling and workspace discussions; triage remains deferred.
 The graph dispatches each role, interrupts and resumes with a daemon-validated result:
 CTO research → PM keyed plan → CTO review → GitHub plan gate → approved coding areas →
 conditional DevOps → QA → Reviewer security pass → Docs → App PR and current-head PR gate.
@@ -500,7 +500,36 @@ A new head resets the gate. Main movement rebases and reruns QA/Reviewer; confli
 to implementation. Merge uses `sha=<approved head>` and a permitted repository method;
 GitHub enforces branch protection. Refusals and uncertain outcomes pause for owner review.
 
-The graph/contract versions advance to 2/3; older checkpoint versions are refused rather
+The graph/contract versions advance to 3/4; older checkpoint versions are refused rather
 than silently resumed. Personal continues without Python, worker setup or GitHub credentials.
 See [the native two-approval playground guide](tests/e2e_github/PHASE3_AGENT.md) for later
 installation testing, and [evals](evals/README.md) for five small tasks and offline chain comparison.
+
+### Workspace, sprints and oversight
+
+Engineering OS projects now have #sprint/#general channels and one public thread per item
+in Settings → Workspace. Discussion is serial: mentions select the next role; three
+contribution turns are followed by a PM conclusion (Supervisor if PM participated). Owner
+replies are context only, never approval, and there are no direct messages.
+
+Settings → Project schedule and oversight configures Minimal/Standard/Strict, sprint day,
+local time, IANA timezone and review-rule globs using a fresh passkey. Use Stop All and finish
+active work before changing policy. Existing null schedules default to Monday 09:00 UTC.
+The event-driven project graph never sleeps in a polling node; daemon events resume it.
+PM freely selects/sizes prepared plans. The App creates Sprint YYYY-Www with immutable
+snapshot comments containing versions, full hashes, estimates and recent 28-day throughput.
+On the tracking issue, /plantool approve-sprint approves the latest snapshot; /plantool
+approve <issue-number> selects one item. Only approved items are released; unapproved items
+return to backlog at rollover. This adds no triage, scan or urgent execution.
+
+Minimal retains plan and exact-head PR gates. Standard suggests editable [review] tags for
+risk-matching plans and stops at tagged phases. Editing a pending tag creates a new revision
+and App publication, never an approval. Strict additionally requires a separate GitHub
+/plantool approve-research sha256:<hash-prefix> decision and stops at every phase. Before
+approval, Engineering OS phase headings are normalized to ### for stable task grouping.
+
+At a milestone the App opens a draft PR and posts a commit/compare link. /plantool continue
+and /plantool request-changes <reason> apply only to the current stopped head. The App marks
+the draft ready after the final stop; current-head PR approval and CI remain required.
+Contract/graph versions are now 4/3; incompatible checkpoints fail closed and require repair.
+See [the native three-item sprint guide](tests/e2e_github/PHASE4_SPRINT.md) for real verification.

@@ -1,3 +1,5 @@
+import {OversightSettings} from "./OversightSettings";
+import {Workspace} from "./Workspace";
 import {GithubSettings} from "./GithubSettings";
 import {ModelSettings} from "./ModelSettings";
 import {WorkerSettings} from "./WorkerSettings";
@@ -81,7 +83,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
         <h3>Settings</h3>
         <DiffToolSettings />
-        <NeverSentSettings repos={repos} /><GithubSettings/><WorkerSettings/><ModelSettings/><RetentionSettings />
+        <NeverSentSettings repos={repos} /><GithubSettings/><Workspace/><OversightSettings/><WorkerSettings/><ModelSettings/><RetentionSettings />
         <label>
           Worktree location <span className="muted small">(where session worktrees are created)</span>
           <select value={scope} onChange={(e) => setScope(e.target.value)}>

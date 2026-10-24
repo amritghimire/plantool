@@ -14,3 +14,16 @@ def test_retries_supervisor_and_freeze():
     for _ in range(3): state=route(state,defect);assert state["step"]=="backend"
     state=route(state,defect);assert state["step"]=="supervisor"
     state=route(state,{"outcome":"done","details":{"action":"escalate"}});assert state["frozen"]
+
+def test_strict_research_and_phase_stops_never_become_owner_approvals():
+    from plantool_worker.work_item import route,after_plan
+    from plantool_worker.phases import advance
+    state={"step":"research","preset":"strict","discuss_enabled":True}
+    done={"outcome":"done","findings":[]}
+    assert route(state,done)["step"]=="research_gate"
+    state.update(phases=[{"areas":["backend"],"tagged":False},{"areas":["frontend"],"tagged":False}])
+    state=after_plan(state,True);assert state["step"]=="backend"
+    state["step"]="docs";state=route(state,done);assert state["step"]=="milestone"
+    state=advance(state);assert state["step"]=="frontend" and state["phase_index"]==1
+    state["step"]="docs";state=route(state,done);assert state["step"]=="milestone"
+    assert advance(state)["step"]=="pr"

@@ -261,7 +261,10 @@ async fn run(
         &request.role,
         database::unix_now(),
     )?;
-    if !crate::workflow::coding(&request.role) {
+    if !crate::workflow::coding(&request.role)
+        || request.inputs["step"] == "discussion"
+        || request.inputs["step"] == "sprint_plan"
+    {
         let prompt = crate::instructions::assemble(home, request, id)?;
         database::open(home)?.execute(
             "UPDATE attempts SET state='running',model_route=?2 WHERE id=?1",

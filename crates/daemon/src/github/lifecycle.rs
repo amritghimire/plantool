@@ -9,7 +9,11 @@ use anyhow::{ensure, Context};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
-async fn pages(api: &dyn Api, path: &str, field: Option<&str>) -> anyhow::Result<Vec<Value>> {
+pub(super) async fn pages(
+    api: &dyn Api,
+    path: &str,
+    field: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
     let mut all = vec![];
     for page in 1..=1000 {
         let r = api
@@ -41,7 +45,7 @@ async fn pages(api: &dyn Api, path: &str, field: Option<&str>) -> anyhow::Result
     }
     anyhow::bail!("Lifecycle pagination limit reached")
 }
-async fn write(
+pub(super) async fn write(
     home: &Path,
     api: &dyn Api,
     item: &str,
@@ -163,7 +167,10 @@ pub fn policy_facts(home: &Path, item: &str, head: &str) -> anyhow::Result<bool>
     if s["frozen"] == true || s["step"] != "pr" {
         return Ok(false);
     }
-    Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM workflow_items w JOIN work_items i ON i.id=w.item_id JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE w.item_id=?1 AND w.head_sha=?2 AND w.qa_head=?2 AND w.reviewed_head=?2 AND r.content_sha256=json_extract(w.state_json,'$.plan_sha') AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0 AND EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='plan' AND g.state='approved' AND g.target_digest=r.content_sha256 AND g.policy_version=(SELECT max(version) FROM project_settings WHERE project_id=i.project_id)) AND NOT EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='milestone' AND g.state<>'approved') AND NOT EXISTS(SELECT 1 FROM plan_tasks t LEFT JOIN task_progress p ON p.item_id=i.id AND p.task_key=t.task_key WHERE t.revision_id=r.id AND coalesce(p.status,'pending')<>'done'))",params![item,head],|r|r.get(0))?)
+    if !crate::oversight::valid_gates(&db, item, &s, head)? {
+        return Ok(false);
+    }
+    Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM workflow_items w JOIN work_items i ON i.id=w.item_id JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE w.item_id=?1 AND w.head_sha=?2 AND w.qa_head=?2 AND w.reviewed_head=?2 AND r.content_sha256=json_extract(w.state_json,'$.plan_sha') AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0 AND EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='plan' AND g.state='approved' AND g.target_digest=r.content_sha256 AND g.policy_version=(SELECT max(version) FROM project_settings WHERE project_id=i.project_id)) AND NOT EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='milestone' AND g.state NOT IN('approved','superseded')) AND NOT EXISTS(SELECT 1 FROM plan_tasks t LEFT JOIN task_progress p ON p.item_id=i.id AND p.task_key=t.task_key WHERE t.revision_id=r.id AND coalesce(p.status,'pending')<>'done'))",params![item,head],|r|r.get(0))?)
 }
 pub fn latest_approval(
     db: &rusqlite::Connection,
@@ -248,6 +255,16 @@ fn merged(home: &Path, item: &str, pr: &Value) -> anyhow::Result<()> {
     let mut s = workflow::state(&tx, item)?.unwrap();
     s["step"] = json!("merged");
     workflow::save(&tx, item, &s)?;
+    let project = dispatcher::item(&tx, item)?.0;
+    if workflow::state(&tx, &format!("{project}:project"))?.is_some() {
+        crate::scheduler::event(
+            &tx,
+            &project,
+            "item_closed",
+            &json!({"item":item}),
+            &format!("closed:{item}"),
+        )?;
+    }
     resume(&tx, item, "merged")?;
     database::audit(
         &tx,
@@ -271,7 +288,13 @@ pub fn merge_method(repo: &Value) -> anyhow::Result<&'static str> {
     }
     anyhow::bail!("Repository has no enabled merge method")
 }
-fn rebase(home: &Path, item: &str, root: &Path, new_base: &str) -> anyhow::Result<bool> {
+pub(super) fn rebase(
+    home: &Path,
+    item: &str,
+    root: &Path,
+    new_base: &str,
+    notify: bool,
+) -> anyhow::Result<bool> {
     let db = database::open(home)?;
     let (base, head): (String, String) = db.query_row(
         "SELECT base_sha,head_sha FROM workflow_items WHERE item_id=?1",
@@ -320,6 +343,11 @@ fn rebase(home: &Path, item: &str, root: &Path, new_base: &str) -> anyhow::Resul
         )?;
         tx.execute("UPDATE workflow_items SET base_sha=?2,head_sha=?3,qa_head=NULL,reviewed_head=NULL WHERE item_id=?1",params![item,new_base,next])?;
         s["step"] = json!("qa");
+        if s["phases"].as_array().is_some_and(|p| !p.is_empty()) {
+            crate::oversight::initialize(&mut s);
+            s["last_milestone_sha"] = Value::Null;
+            tx.execute("UPDATE gates SET state='superseded',closed_at=?2 WHERE item_id=?1 AND kind='milestone'",params![item,plantool_core::now()])?;
+        }
         s["rebase_base"] = Value::Null;
         event = "rebased";
     } else {
@@ -337,11 +365,27 @@ fn rebase(home: &Path, item: &str, root: &Path, new_base: &str) -> anyhow::Resul
         s["step"] = json!(owner);
         s["rebase_base"] = json!(new_base);
         s["conflicts"] = json!(conflicts);
+        if let Some(phases) = s["phases"].as_array().filter(|p| !p.is_empty()) {
+            let index = phases
+                .iter()
+                .position(|p| {
+                    p["areas"]
+                        .as_array()
+                        .is_some_and(|a| a.contains(&json!(owner)))
+                })
+                .unwrap_or(s["phase_index"].as_u64().unwrap_or(0) as usize);
+            let areas = phases[index]["areas"].clone();
+            s["phase_index"] = json!(index);
+            s["areas"] = areas;
+            s["rebase_restart"] = json!(true);
+        }
         event = "rebase_conflict";
     }
     tx.execute("UPDATE gates SET state='superseded',closed_at=?2 WHERE item_id=?1 AND kind='pr' AND state IN('open','approved')",params![item,plantool_core::now()])?;
     workflow::save(&tx, item, &s)?;
-    resume(&tx, item, event)?;
+    if notify {
+        resume(&tx, item, event)?;
+    }
     database::audit(
         &tx,
         "daemon",
@@ -352,7 +396,7 @@ fn rebase(home: &Path, item: &str, root: &Path, new_base: &str) -> anyhow::Resul
     tx.commit()?;
     Ok(true)
 }
-async fn push(
+pub(super) async fn push(
     home: &Path,
     api: &dyn Api,
     git: &dyn GitOps,
@@ -438,7 +482,7 @@ pub async fn process_item(
         .fetch(api, root, &repo.full_name, &repo.default_branch)
         .await?;
     if base != current {
-        rebase(home, item, root, &current)?;
+        rebase(home, item, root, &current, true)?;
         return Ok(());
     }
     ensure!(
@@ -522,6 +566,40 @@ pub async fn process_item(
         params![item, n, head],
     )?;
     db.execute("UPDATE outbox SET delivered_at=?2,result_json=?3 WHERE aggregate_id=?1 AND kind='github.pr' AND delivered_at IS NULL",params![item,plantool_core::now(),json!({"number":n}).to_string()])?;
+    if pr["draft"] == true {
+        let node = pr["node_id"]
+            .as_str()
+            .context("Draft PR node identity missing")?;
+        let body = json!({"query":"mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}","variables":{"id":node}});
+        let fresh = api::get(api, &format!("{path}/pulls/{n}")).await?;
+        ensure!(
+            fresh["head"]["sha"] == head,
+            "Draft head changed before ready transition"
+        );
+        let observed = if fresh["draft"] == false {
+            Some(
+                json!({"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}),
+            )
+        } else {
+            None
+        };
+        let ready = write(
+            home,
+            api,
+            item,
+            &format!("pr-ready:{head}"),
+            "POST",
+            "/graphql",
+            body,
+            observed,
+            false,
+        )
+        .await?;
+        ensure!(
+            ready["data"]["markPullRequestReadyForReview"]["pullRequest"]["isDraft"] == false,
+            "Draft ready transition requires reconciliation"
+        );
+    }
     let gate = {
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

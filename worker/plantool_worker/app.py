@@ -78,6 +78,9 @@ def create_app(home: Path, token: str, transport=None):
                 raise RuntimeError("Daemon contract_version/graph_version mismatch")
             async with AsyncSqliteSaver.from_conn_string(str(store.path)) as saver:
                 async def bridge(state: State):
+                    if state.get("workflow",{}).get("project"):
+                        from .project import build_step
+                        return await build_step(daemon,store,state)
                     if state.get("workflow"):
                         from .work_item import build_step
                         return await build_step(daemon,store,state)

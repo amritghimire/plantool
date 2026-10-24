@@ -220,6 +220,8 @@ async fn object(
     Ok(response.body)
 }
 pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
+    crate::workspace::ensure_channels(&database::open(home)?, &repo.project)?;
+
     let base = repo.path()?;
     // Revalidate repository identity and visibility on every sync, including 304s.
     let metadata = object(home, api, repo, &base).await?;
@@ -264,6 +266,8 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
     // Recover a successful publication before consuming approvals posted while
     // the daemon was down. Global comment cursors may already be past them.
     gates::publish(home, api, repo).await?;
+    super::sprints::refresh(home, repo)?;
+    super::sprints::publish(home, api, repo).await?;
     let open_gates = {
         let db = database::open(home)?;
         let mut q=db.prepare("SELECT i.github_issue_number,g.created_at FROM gates g JOIN work_items i ON i.id=g.item_id WHERE i.project_id=?1 AND g.kind='plan' AND g.state='open' ORDER BY g.id")?;
@@ -370,6 +374,9 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         database::open(home)?.execute("INSERT INTO github_objects VALUES(?1,?2,?3) ON CONFLICT(resource,object_id) DO UPDATE SET body_json=excluded.body_json",params![format!("{}:pr_state",repo.repo_id),n.to_string(),state.to_string()])?;
     }
     gates::publish(home, api, repo).await?;
+    super::sprints::refresh(home, repo)?;
+    super::sprints::publish(home, api, repo).await?;
+    super::milestones::publish(home, api, repo, &super::git_ops::AppGit).await?;
     super::lifecycle::process(home, api, repo, &super::git_ops::AppGit).await?;
     database::open(home)?.execute(
         "UPDATE github_repositories SET last_sync_at=?2,last_error=NULL WHERE project_id=?1",

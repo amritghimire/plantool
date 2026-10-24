@@ -8,6 +8,7 @@ pub mod github;
 pub mod live;
 mod models;
 pub mod notices;
+pub mod oversight;
 pub mod pr;
 pub mod retention;
 pub mod runs;
@@ -15,6 +16,7 @@ pub mod sessions;
 pub mod settings;
 pub mod tasks;
 pub mod where_context;
+mod workspace;
 
 use crate::registry::RegistryError;
 use crate::AppState;
@@ -153,6 +155,8 @@ pub fn router(state: AppState) -> Router {
         .merge(tasks::routes())
         .merge(execution::routes())
         .merge(engineering::browser_routes())
+        .merge(workspace::routes())
+        .merge(oversight::routes())
         .merge(models::browser_routes())
         .merge(github::routes())
         .merge(notices::routes())

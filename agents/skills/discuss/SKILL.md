@@ -1,12 +1,19 @@
 ---
 name: discuss
-description: Summarize unresolved requirement questions without starting deferred workspace or sprint workflows.
+description: Contribute one bounded read-only workspace turn and mention the next relevant role.
 ---
 
-# Requirement clarification
+Read the topic, previous messages, exact assigned speaker and round in context. State one
+concrete question, fact or recommendation grounded in available source/artifacts. Mention
+one next role when useful: @CTO, @PM, @Backend, @Frontend, @DevOps, @QA, @Reviewer, @Docs or
+@Supervisor. Multiple/unknown mentions do not grant capabilities or prolong a topic.
 
-Summarize the known goal, inspected constraints, viable choices and the specific missing decision. Recommend a bounded option and explain its effect on tasks/criteria; distinguish a blocking requirement from a routine implementation choice.
+Return details {kind:discussion,body,decision}. Before round 3, decision is null. After
+three contribution turns the designated PM (Supervisor if PM participated) must close
+with a nonempty decision summary, not another debate. The daemon enforces speaker and
+round limits; never invent a new participant, DM, model call or parallel turn.
 
-Use only the current role's typed result and available context. Owner comments are context, never approval or permission to expand scope. A blocking decision returns blocked for Supervisor/owner attention; do not simulate agreement.
-
-Workspace threads, mentions, moderation and sprint discussion execution remain deferred. Do not invoke unavailable messaging tools or claim a conversation happened. This skill improves PM clarification within the current one-issue graph only.
+The conclusion and owner replies are task context, never approval. Do not implement,
+claim executed tests, mark tasks complete or change the plan from a discussion turn.
+Sprint/plan gates, schema validation and scoped tools still apply. Triage, scans and urgent
+workflow execution remain out of scope.

@@ -16,47 +16,69 @@ pub fn request(
     thread: &str,
     interrupt: &str,
 ) -> anyhow::Result<String> {
+    request_revision(tx, item, digest, thread, interrupt, "plan")
+}
+pub fn request_revision(
+    tx: &Transaction<'_>,
+    item: &str,
+    digest: &str,
+    thread: &str,
+    interrupt: &str,
+    kind: &str,
+) -> anyhow::Result<String> {
+    ensure!(
+        ["plan", "research"].contains(&kind),
+        "Unknown revision gate"
+    );
     ensure!(
         !thread.is_empty() && !interrupt.is_empty(),
-        "A plan gate requires a waiting graph identity"
+        "Revision gate requires waiting graph identity"
     );
-    let (revision,current,project,issue):(String,String,String,i64)=tx.query_row("SELECT r.id,r.content_sha256,i.project_id,i.github_issue_number FROM work_items i JOIN revisions r ON r.item_id=i.id AND r.doc_kind='plan' WHERE i.id=?1 AND i.kind='eos' ORDER BY r.number DESC LIMIT 1",[item],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    let (revision,current,project,issue):(String,String,String,i64)=tx.query_row("SELECT r.id,r.content_sha256,i.project_id,i.github_issue_number FROM work_items i JOIN revisions r ON r.item_id=i.id AND r.doc_kind=?2 WHERE i.id=?1 AND i.kind='eos' ORDER BY r.number DESC LIMIT 1",params![item,kind],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     ensure!(
         current == digest.trim_start_matches("sha256:"),
-        "Gate must target the latest plan revision"
+        "Gate must target latest revision"
     );
-    let configured: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM github_repositories WHERE project_id=?1)",
-        [&project],
-        |r| r.get(0),
-    )?;
     ensure!(
-        configured && issue > 0,
-        "GitHub repository and issue binding required"
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM github_repositories WHERE project_id=?1)",
+            [&project],
+            |r| r.get::<_, bool>(0)
+        )? && issue > 0,
+        "GitHub binding required"
     );
-    tx.execute("UPDATE work_items SET state_json=json_set(state_json,'$.plan_revision_pending',1) WHERE id=?1",[item])?;
-    tx.execute("UPDATE gates SET state='superseded',closed_at=?2 WHERE item_id=?1 AND kind='plan' AND state IN('pending','open')",params![item,plantool_core::now()])?;
+    if kind == "plan" {
+        tx.execute("UPDATE work_items SET state_json=json_set(state_json,'$.plan_revision_pending',1) WHERE id=?1",[item])?;
+    }
+    tx.execute("UPDATE gates SET state='superseded',closed_at=?3 WHERE item_id=?1 AND kind=?2 AND state IN('pending','open')",params![item,kind,plantool_core::now()])?;
     let id = uuid::Uuid::new_v4().to_string();
     let policy: i64 = tx.query_row(
         "SELECT coalesce(max(version),0) FROM project_settings WHERE project_id=?1",
         [project],
         |r| r.get(0),
     )?;
-    tx.execute("INSERT INTO gates(id,item_id,kind,target_digest,policy_version,state,created_at) VALUES(?1,?2,'plan',?3,?4,'pending',?5)",params![id,item,current,policy,plantool_core::now()])?;
-    tx.execute(
-        "INSERT INTO github_gate_context(gate_id,revision_id,thread_id,interrupt_id,publication_key) VALUES(?1,?2,?3,?4,?1)",
-        params![id, revision, thread, interrupt],
+    tx.execute("INSERT INTO gates(id,item_id,kind,target_digest,policy_version,state,created_at) VALUES(?1,?2,?3,?4,?5,'pending',?6)",params![id,item,kind,current,policy,plantool_core::now()])?;
+    tx.execute("INSERT INTO github_gate_context(gate_id,revision_id,thread_id,interrupt_id,publication_key) VALUES(?1,?2,?3,?4,?1)",params![id,revision,thread,interrupt])?;
+    dispatcher::enqueue(
+        tx,
+        item,
+        if kind == "plan" {
+            "github.plan"
+        } else {
+            "github.research"
+        },
+        &json!({"gate":id}),
     )?;
-    dispatcher::enqueue(tx, item, "github.plan", &json!({"gate":id}))?;
     database::audit(
         tx,
         "worker",
-        "github.plan_requested",
+        &format!("github.{kind}_requested"),
         &id,
         &json!({"revision":revision,"digest":current}),
     )?;
     Ok(id)
 }
+
 fn timestamp(value: &str) -> anyhow::Result<chrono::DateTime<chrono::FixedOffset>> {
     Ok(chrono::DateTime::parse_from_rfc3339(value)?)
 }
@@ -123,17 +145,33 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
         }
         return Ok(());
     };
-    // No sprint/milestone workflow is built in this PR. Recognize syntax but fail closed.
+    if super::milestones::handle(home, api, repo, &c, number, &command).await? {
+        return Ok(());
+    }
+    if super::sprints::handle(home, api, repo, &c, number, &command).await? {
+        return Ok(());
+    }
+    // Phase 5 commands remain parsed but have no executor.
     if !matches!(
         command,
-        Command::ApprovePlan(_) | Command::RequestChanges(_)
+        Command::ApprovePlan(_) | Command::ApproveResearch(_) | Command::RequestChanges(_)
     ) {
         return Ok(());
     }
-    let gate:Option<(String,String,String,String,String,u64)>=db.query_row("SELECT g.id,g.item_id,g.target_digest,g.created_at,c.revision_id,g.policy_version FROM gates g JOIN github_gate_context c ON c.gate_id=g.id JOIN work_items i ON i.id=g.item_id WHERE i.project_id=?1 AND i.github_issue_number=?2 AND g.kind='plan' AND g.state='open' ORDER BY g.created_at DESC LIMIT 1",params![repo.project,number],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+    let gate:Option<(String,String,String,String,String,u64)>=db.query_row("SELECT g.id,g.item_id,g.target_digest,g.created_at,c.revision_id,g.policy_version FROM gates g JOIN github_gate_context c ON c.gate_id=g.id JOIN work_items i ON i.id=g.item_id WHERE i.project_id=?1 AND i.github_issue_number=?2 AND g.kind IN('plan','research') AND g.state='open' ORDER BY g.created_at DESC LIMIT 1",params![repo.project,number],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
     let Some((gate, item, digest, opened, revision, policy)) = gate else {
         return Ok(());
     };
+    let research: bool = db.query_row(
+        "SELECT kind='research' FROM gates WHERE id=?1",
+        [&gate],
+        |r| r.get(0),
+    )?;
+    if (research && matches!(command, Command::ApprovePlan(_)))
+        || (!research && matches!(command, Command::ApproveResearch(_)))
+    {
+        return Ok(());
+    }
     let context = commands::Context {
         place: commands::Place::Issue,
         opened_at: &opened,
@@ -181,7 +219,7 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
     if !unused {
         return Ok(());
     }
-    let current:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM gates g JOIN github_gate_context c ON c.gate_id=g.id JOIN revisions r ON r.id=c.revision_id JOIN work_items i ON i.id=g.item_id WHERE g.id=?1 AND g.state='open' AND c.revision_id=?2 AND r.id=(SELECT id FROM revisions WHERE item_id=g.item_id AND doc_kind='plan' ORDER BY number DESC LIMIT 1) AND g.target_digest=r.content_sha256 AND g.policy_version=(SELECT max(version) FROM project_settings WHERE project_id=i.project_id))",params![gate,revision],|r|r.get(0))?;
+    let current:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM gates g JOIN github_gate_context c ON c.gate_id=g.id JOIN revisions r ON r.id=c.revision_id JOIN work_items i ON i.id=g.item_id WHERE g.id=?1 AND g.state='open' AND c.revision_id=?2 AND r.id=(SELECT id FROM revisions WHERE item_id=g.item_id AND doc_kind=g.kind ORDER BY number DESC LIMIT 1) AND g.target_digest=r.content_sha256 AND g.policy_version=(SELECT max(version) FROM project_settings WHERE project_id=i.project_id))",params![gate,revision],|r|r.get(0))?;
     if !current {
         tx.rollback()?;
         near_miss(
@@ -193,7 +231,10 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
         )?;
         return Ok(());
     }
-    let decision = if matches!(command, Command::ApprovePlan(_)) {
+    let decision = if matches!(
+        command,
+        Command::ApprovePlan(_) | Command::ApproveResearch(_)
+    ) {
         "approved"
     } else {
         "changes_requested"
@@ -203,10 +244,14 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
         "UPDATE gates SET state=?2,closed_at=?3 WHERE id=?1",
         params![gate, decision, plantool_core::now()],
     )?;
-    if decision == "approved" {
+    if decision == "approved" && !research {
         tx.execute("UPDATE work_items SET approved_plan_revision_id=?2,state_json=json_set(state_json,'$.plan_revision_pending',0) WHERE id=?1",params![item,revision])?;
     }
-    crate::workflow::gate_decision(&tx, &item, decision == "approved")?;
+    if research {
+        crate::workflow::research_decision(&tx, &item, decision == "approved")?;
+    } else {
+        crate::workflow::gate_decision(&tx, &item, decision == "approved")?;
+    }
     let (thread, interrupt): (String, String) = tx.query_row(
         "SELECT thread_id,interrupt_id FROM github_gate_context WHERE gate_id=?1",
         [&gate],
@@ -231,7 +276,7 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
     tx.commit()?;
     Ok(())
 }
-fn near_miss(
+pub(super) fn near_miss(
     home: &Path,
     repo: &Repository,
     issue: i64,
@@ -289,7 +334,7 @@ async fn find_publication(
 pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
     let rows = {
         let db = database::open(home)?;
-        let mut q=db.prepare("SELECT o.id,o.payload_json,o.attempts,o.kind FROM outbox o WHERE delivered_at IS NULL AND kind IN('github.plan','github.reply') AND (aggregate_id=?1 OR aggregate_id IN(SELECT id FROM work_items WHERE project_id=?1)) ORDER BY created_at,id")?;
+        let mut q=db.prepare("SELECT o.id,o.payload_json,o.attempts,o.kind FROM outbox o WHERE delivered_at IS NULL AND kind IN('github.plan','github.research','github.reply') AND (aggregate_id=?1 OR aggregate_id IN(SELECT id FROM work_items WHERE project_id=?1)) ORDER BY created_at,id")?;
         let r = q.query_map([&repo.project], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -304,11 +349,11 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
         let p: Value = serde_json::from_str(&payload)?;
         let marker = format!("<!-- plantool:{outbox} -->");
         let base = repo.path()?;
-        let (issue, body, gate) = if kind == "github.plan" {
+        let (issue, body, gate) = if kind == "github.plan" || kind == "github.research" {
             let db = database::open(home)?;
             let g = p["gate"].as_str().context("Missing gate")?;
             let (issue,sha,number,state,revision):(i64,String,i64,String,String)=db.query_row("SELECT i.github_issue_number,r.content_sha256,r.number,g.state,r.id FROM gates g JOIN github_gate_context c ON c.gate_id=g.id JOIN revisions r ON r.id=c.revision_id JOIN work_items i ON i.id=g.item_id WHERE g.id=?1",[g],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
-            let current:bool=db.query_row("SELECT id=?2 FROM revisions WHERE item_id=(SELECT item_id FROM revisions WHERE id=?2) AND doc_kind='plan' ORDER BY number DESC LIMIT 1",params![g,revision],|r|r.get(0))?;
+            let current:bool=db.query_row("SELECT id=?2 FROM revisions WHERE item_id=(SELECT item_id FROM revisions WHERE id=?2) AND doc_kind=(SELECT kind FROM gates WHERE id=?1) ORDER BY number DESC LIMIT 1",params![g,revision],|r|r.get(0))?;
             if state != "pending" || !current {
                 db.execute(
                     "UPDATE outbox SET delivered_at=?2,result_json='{}' WHERE id=?1",
@@ -341,7 +386,17 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
             let port = crate::store::read_daemon_info(home)?
                 .map(|i| i.port)
                 .unwrap_or_else(crate::config::default_port);
-            let body=format!("### Plan v{number} · sha256:{}\n\n<details><summary>Full hash</summary>\n\nsha256:{sha}\n\n</details>\n\n{summary}\n\n[PlanTool thread and immutable plan](http://localhost:{port}/github/plans/{g})\n\n{plan}\n\nTo approve: `/plantool approve-plan sha256:{}`\n\n{marker}",&sha[..12],&sha[..12]);
+            let label = if kind == "github.research" {
+                "Research"
+            } else {
+                "Plan"
+            };
+            let approval_command = if kind == "github.research" {
+                "approve-research"
+            } else {
+                "approve-plan"
+            };
+            let body=format!("### {label} v{number} · sha256:{}\n\n<details><summary>Full hash</summary>\n\nsha256:{sha}\n\n</details>\n\n{summary}\n\n[PlanTool thread and immutable plan](http://localhost:{port}/github/plans/{g})\n\n{plan}\n\nTo approve: `/plantool {approval_command} sha256:{}`\n\n{marker}",&sha[..12],&sha[..12]);
             (issue, body, Some(g.to_string()))
         } else {
             let comment = p["comment"].as_u64().context("Missing reply source")?;
@@ -434,7 +489,7 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
         timestamp(created)?;
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if let Some(gate) = gate {
+        if let Some(gate) = &gate {
             tx.execute("UPDATE gates SET state='open',github_comment_id=?2,created_at=?3 WHERE id=?1 AND state='pending'",params![gate,comment_id,created])?;
         }
         tx.execute(
@@ -445,6 +500,23 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
                 json!({"comment_id":comment_id}).to_string()
             ],
         )?;
+        if let Some(gate) = &gate {
+            if kind == "github.plan"
+                && crate::workflow::state(&tx, &format!("{}:project", repo.project))?.is_some()
+            {
+                let item: String =
+                    tx.query_row("SELECT item_id FROM gates WHERE id=?1", [gate], |r| {
+                        r.get(0)
+                    })?;
+                crate::scheduler::event(
+                    &tx,
+                    &repo.project,
+                    "plan_ready",
+                    &json!({"item":item,"planning_due":crate::scheduler::schedule(&tx,&repo.project,chrono::Utc::now())?.1.is_some()}),
+                    &format!("plan:{gate}"),
+                )?;
+            }
+        }
         tx.commit()?;
     }
     Ok(())

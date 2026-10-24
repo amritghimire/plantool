@@ -8,3 +8,7 @@ pub mod sync;
 
 pub mod git_ops;
 pub mod lifecycle;
+
+pub mod sprints;
+
+pub mod milestones;

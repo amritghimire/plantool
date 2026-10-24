@@ -95,6 +95,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
+            if let Err(error) = scheduler::tick(&github_home, chrono::Utc::now()) {
+                tracing::warn!("Project scheduler paused: {error}");
+            }
             if let Err(e) = github::sync::tick(&github_home).await {
                 tracing::warn!("GitHub sync: {e}");
             }
@@ -214,3 +217,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let _ = store::remove_daemon_info(&config.home);
     Ok(())
 }
+
+pub mod workspace;
+
+pub mod scheduler;
+
+pub mod oversight;
