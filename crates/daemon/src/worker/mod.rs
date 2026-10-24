@@ -232,19 +232,27 @@ impl WorkerManager {
         #[cfg(unix)]
         {
             let result = async {
-                let mut running = self.running.lock().await;
-                let worker = running
-                    .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("Worker is not running"))?;
-                anyhow::ensure!(
-                    worker.process.child.try_wait()?.is_none(),
-                    "Worker exited; repair required"
-                );
+                let client = {
+                    let mut running = self.running.lock().await;
+                    let worker = running
+                        .as_mut()
+                        .ok_or_else(|| anyhow::anyhow!("Worker is not running"))?;
+                    anyhow::ensure!(
+                        worker.process.child.try_wait()?.is_none(),
+                        "Worker exited; repair required"
+                    );
+                    worker.client.clone()
+                };
                 let url = format!("http://localhost/internal/v1/{path}");
                 let request = if let Some(body) = body {
-                    worker.client.post(url).json(body)
+                    client.post(url).json(body)
                 } else {
-                    worker.client.get(url)
+                    client.get(url)
+                };
+                let request = if path == "role" {
+                    request.timeout(Duration::from_secs(180))
+                } else {
+                    request
                 };
                 let response = request.send().await?;
                 let status = response.status();

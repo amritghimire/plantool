@@ -131,10 +131,7 @@ pub async fn complete(
             !blocked,
             "Quota checkpoint pending; this attempt cannot make another model call"
         );
-        anyhow::ensure!(
-            lease::owns(home, owner)?,
-            "Caller does not hold the coding-run lease"
-        );
+
         let selected: router::Selected = if let Some(route) = route {
             serde_json::from_str(&route)?
         } else {
@@ -158,7 +155,38 @@ pub async fn complete(
             router::allowed(&db, &project)?.contains(&selected.route.provider),
             "Provider is disallowed"
         );
-        (selected, None, Some(attempt.clone()))
+        let held = if !crate::workflow::coding(&context.role)
+            && crate::workflow::state(&db, &context.item)?.is_some()
+        {
+            anyhow::ensure!(
+                crate::workflow::state(&db, &context.item)?.is_some_and(|s| s["frozen"] != true),
+                "Item is frozen"
+            );
+            Some(
+                lease::acquire(
+                    home,
+                    owner,
+                    Some(attempt),
+                    lease::Model {
+                        route: selected.name.clone(),
+                        provider: selected.route.provider.clone(),
+                        model: selected.route.model.clone(),
+                    },
+                    false,
+                    i64::MAX,
+                    execution.clone(),
+                    lifecycle,
+                )
+                .await?,
+            )
+        } else {
+            anyhow::ensure!(
+                lease::owns(home, owner)?,
+                "Caller does not hold the coding-run lease"
+            );
+            None
+        };
+        (selected, held, Some(attempt.clone()))
     } else {
         let current: u64 = db.query_row(
             "SELECT coalesce((SELECT generation FROM item_generations WHERE item_id=?1),0)",

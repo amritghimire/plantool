@@ -16,6 +16,7 @@ pub enum Role {
     Reviewer,
     EosAgent,
     EosReviewer,
+    EosQa,
     Worker,
 }
 #[derive(Debug)]
@@ -52,7 +53,7 @@ impl Sandbox {
             (".claude/.credentials.json", "claude/.credentials.json"),
         ] {
             if role == Role::Worker
-                || (matches!(role, Role::EosAgent | Role::EosReviewer)
+                || (matches!(role, Role::EosAgent | Role::EosReviewer | Role::EosQa)
                     && source != ".codex/auth.json")
             {
                 continue;

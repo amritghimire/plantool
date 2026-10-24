@@ -102,6 +102,7 @@ impl Drop for RunCredential {
 /// Applied to each provider process, including providers that spawn once per turn.
 #[derive(Clone)]
 pub struct RunEnvironment {
+    scope: Option<RunScope>,
     proxy: Option<String>,
     token: String,
     home: PathBuf,
@@ -117,6 +118,10 @@ impl std::fmt::Debug for RunEnvironment {
 impl RunCredential {
     pub fn environment(&self, home: PathBuf, port: u16) -> RunEnvironment {
         RunEnvironment {
+            scope: self
+                .tokens
+                .lookup(&self.secret)
+                .and_then(|entry| entry.scope),
             proxy: None,
             token: self.secret.clone(),
             home,
@@ -140,6 +145,11 @@ impl RunEnvironment {
     }
 
     pub fn apply(&self, command: &mut tokio::process::Command) {
+        if let Some(scope) = &self.scope {
+            command
+                .env("PLANTOOL_ITEM", &scope.session)
+                .env("PLANTOOL_ATTEMPT", &scope.attempt);
+        }
         command
             .env("PLANTOOL_RUN_TOKEN", &self.token)
             .env("PLANTOOL_HOME", &self.home)
@@ -200,7 +210,13 @@ pub fn authorize(state: &AppState, req: &Request<Body>) -> Result<Option<Authori
         return Ok(Some(authorized));
     }
     if req.method() == "POST"
-        && (path == "/v1/chat/completions" || path == "/internal/v1/report_result")
+        && (path == "/v1/chat/completions"
+            || matches!(
+                path,
+                "/internal/v1/report_result"
+                    | "/internal/v1/store_artifact"
+                    | "/internal/v1/task_done"
+            ))
     {
         return Ok(Some(authorized));
     }

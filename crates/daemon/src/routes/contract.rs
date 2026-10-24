@@ -18,6 +18,101 @@ fn worker(
 ) -> Result<(), ApiError> {
     engineering::worker(state, headers, socket.as_deref())
 }
+async fn task_done(
+    State(state): State<AppState>,
+    authorized: Option<Extension<crate::identities::AuthorizedRun>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let auth = authorized.ok_or_else(|| {
+        ApiError(
+            StatusCode::FORBIDDEN,
+            "Scoped attempt token required".into(),
+        )
+    })?;
+    ensure!(body["item"] == auth.scope.session, "Task item mismatch");
+    ensure!(!state.runs.execution.status().stopped, "Stop All is active");
+    let key = body["key"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing task key"))?;
+    let mut db = database::open(&state.config.home)?;
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(anyhow::Error::from)?;
+    let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts a JOIN work_items i ON i.id=a.item_id JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE a.id=?1 AND a.item_id=?2 AND a.state='running' AND t.task_key=?3 AND t.area=a.role AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0)",params![auth.scope.attempt,auth.scope.session,key],|r|r.get(0)).map_err(anyhow::Error::from)?;
+    ensure!(valid, "Task is not approved for this role");
+    tx.execute("INSERT INTO task_progress VALUES(?1,?2,'done',?3,?4) ON CONFLICT(item_id,task_key) DO UPDATE SET status='done',updated_by_attempt=excluded.updated_by_attempt,updated_at=excluded.updated_at",params![auth.scope.session,key,auth.scope.attempt,plantool_core::now()]).map_err(anyhow::Error::from)?;
+    tx.commit().map_err(anyhow::Error::from)?;
+    Ok(Json(json!({"ok":true})))
+}
+async fn workflow_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<WorkflowContext>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    Ok(Json(crate::workflow::context(
+        &state.config.home,
+        &request.item,
+    )?))
+}
+async fn workflow_pr(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    let text = |k: &str| {
+        request[k]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing {k}"))
+    };
+    Ok(Json(crate::workflow::pr_wait(
+        &state.config.home,
+        text("item")?,
+        text("thread_id")?,
+        text("interrupt_id")?,
+    )?))
+}
+async fn store_artifact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    authorized: Option<Extension<crate::identities::AuthorizedRun>>,
+    Json(request): Json<StoreArtifact>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(auth) = authorized {
+        ensure!(
+            auth.scope.attempt == request.attempt_id && auth.scope.session == request.item,
+            "Artifact scope mismatch"
+        );
+    } else {
+        worker(&state, &headers, socket)?;
+    }
+    let db = database::open(&state.config.home)?;
+    let valid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND item_id=?2 AND state IN('starting','running'))",params![request.attempt_id,request.item],|r|r.get(0)).map_err(anyhow::Error::from)?;
+    ensure!(valid, "Inactive artifact attempt");
+    let (_, root) = dispatcher::item(&db, &request.item)?;
+    crate::models::proxy::check_payload(
+        &root,
+        &crate::sandbox::NeverSent::new(&state.runs.execution.rules(&root))?,
+        &json!({"content":request.content}),
+    )?;
+    let sha = crate::artifacts::put(&state.config.home, request.content.as_bytes())?;
+    crate::artifacts::register(&db, &sha, request.content.len())?;
+    db.execute(
+        "INSERT OR IGNORE INTO artifact_refs VALUES('attempt',?1,?2,?3,?4)",
+        params![
+            request.attempt_id,
+            format!("evidence:{sha}"),
+            sha,
+            crate::database::unix_now()
+        ],
+    )
+    .map_err(anyhow::Error::from)?;
+    Ok(Json(json!({"reference":format!("artifact://{sha}")})))
+}
 async fn dispatch(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -238,7 +333,7 @@ async fn proposal(
         "worker.proposal",
         &request.idempotency_key,
         |tx| {
-            let id = uuid::Uuid::new_v4().to_string();
+            let id = crate::workflow::proposal(tx, &request.item, &request.title, &request.body)?;
             database::audit(
                 tx,
                 "worker",
@@ -246,7 +341,7 @@ async fn proposal(
                 &request.item,
                 &json!({"id":id,"title":request.title,"body":request.body}),
             )?;
-            Ok(json!({"proposal_id":id,"publication":"pending Phase 3 GitHub App"}))
+            Ok(json!({"proposal_id":id,"publication":"queued"}))
         },
     )?;
     Ok(Json(value))
@@ -286,6 +381,10 @@ async fn ack(
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/internal/v1/request_dispatch", post(dispatch))
+        .route("/internal/v1/workflow_context", post(workflow_context))
+        .route("/internal/v1/workflow_pr", post(workflow_pr))
+        .route("/internal/v1/store_artifact", post(store_artifact))
+        .route("/internal/v1/task_done", post(task_done))
         .route("/internal/v1/report_result", post(report))
         .route("/internal/v1/request_gate", post(gate))
         .route("/internal/v1/read_artifact", post(read_artifact))

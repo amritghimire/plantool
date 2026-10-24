@@ -26,7 +26,7 @@ async fn status(
     }
     let available = state.runs.worker.availability();
     Ok(Json(
-        json!({"worker":available,"versions":plantool_contract::Health::default(),"sandbox_supported":crate::sandbox::supported()}),
+        json!({"worker":available,"items":crate::workflow::overview(&state.config.home)?,"versions":plantool_contract::Health::default(),"sandbox_supported":crate::sandbox::supported()}),
     ))
 }
 async fn repair(

@@ -4,6 +4,13 @@ description: Research a codebase for a plantool session before planning. Reads t
 user-invocable: true
 ---
 
+## Engineering OS dispatch
+
+Engineering OS CTO: return typed Research details; do not use Personal session stages or wait for browser review.
+
+## Personal workflow
+
+
 # Research (plantool)
 
 Session: $ARGUMENTS

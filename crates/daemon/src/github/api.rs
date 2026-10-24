@@ -10,6 +10,10 @@ pub struct Reply {
     pub next: bool,
 }
 pub trait Api: Send + Sync {
+    fn git_token(&self) -> BoxFuture<'_, anyhow::Result<String>> {
+        Box::pin(async { anyhow::bail!("Git credentials unavailable") })
+    }
+
     fn request<'a>(
         &'a self,
         method: &'a str,
@@ -58,6 +62,15 @@ impl Client {
     }
 }
 impl Api for Client {
+    fn git_token(&self) -> BoxFuture<'_, anyhow::Result<String>> {
+        Box::pin(auth::token(
+            &self.http,
+            &self.base,
+            &self.config,
+            self.keys.as_ref(),
+        ))
+    }
+
     fn request<'a>(
         &'a self,
         method: &'a str,

@@ -13,6 +13,7 @@ pub mod execution;
 pub mod git;
 pub mod github;
 pub mod identities;
+pub mod instructions;
 pub mod models;
 pub mod prompts;
 pub mod providers;
@@ -27,6 +28,7 @@ pub mod store;
 pub mod supervision;
 pub mod watcher;
 pub mod worker;
+pub mod workflow;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

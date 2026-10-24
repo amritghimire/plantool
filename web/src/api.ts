@@ -53,7 +53,7 @@ export const api = {
   modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null}[]}>("GET","/api/settings/models"),
   saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),
   verifyModels: () => request("POST","/api/settings/models/verify",{}),
-  workerStatus: () => request<{worker:{available:boolean;message:string}}>("GET","/api/engineering-os/status"),
+  workerStatus: () => request<{worker:{available:boolean;message:string};items?:{item:string;title:string;state:{step:string;frozen?:boolean};error:string|null;summary:string|null}[]}>("GET","/api/engineering-os/status"),
   repairWorker: () => request<{worker:{available:boolean;message:string}}>("POST","/api/engineering-os/repair", {}),
 
   retentionPolicy: () => request<{transcript_days:number;evidence_days:number;disk_cap_bytes:number}>("GET","/api/settings/retention"),

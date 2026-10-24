@@ -4,6 +4,13 @@ description: Implement an approved plantool plan, reporting task-key progress wi
 user-invocable: true
 ---
 
+## Engineering OS dispatch
+
+Engineering OS: work only in the assigned isolated checkout, store evidence using plantool attempt artifact and report the typed result. GitHub actions belong to the daemon. The Personal workflow below applies only to Personal sessions.
+
+## Personal workflow
+
+
 # Implement (plantool)
 
 Session: $ARGUMENTS

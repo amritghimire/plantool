@@ -103,6 +103,7 @@ impl Fixture {
             findings: vec![],
             next: None,
             review_guide: None,
+            details: None,
         }
     }
 }

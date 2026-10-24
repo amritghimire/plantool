@@ -75,6 +75,11 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
         .map(|name| path(&paths.docs.join(name)).map(|p| format!("(literal {p})")))
         .collect::<anyhow::Result<Vec<_>>>()?
         .join(" ");
+    let docs = if matches!(role, Role::EosQa | Role::EosReviewer | Role::Worker) {
+        String::new()
+    } else {
+        docs
+    };
     let worker_socket = if role == Role::Worker {
         format!(
             "(literal {})",
@@ -83,11 +88,23 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
     } else {
         String::new()
     };
-    let exceptions = format!("{exceptions} {worker_socket} {docs} (literal \"/dev/null\")");
+    let qa = if role == Role::EosQa {
+        let expression = format!(
+            r"^{}(/(tests?|[^/]+/tests?)(/.*)?|/(.*/)?(test_[^/]+\.py|[^/]+(_test\.rs|\.test\.[^/]+|\.spec\.[^/]+))|/\.git/.*)$",
+            regex::escape(&unquoted(&root)?)
+        );
+        format!("(regex #\"{}\")", expression.replace('"', "\\\""))
+    } else {
+        String::new()
+    };
+    let exceptions = format!("{exceptions} {qa} {worker_socket} {docs} (literal \"/dev/null\")");
     let mut text = format!("(version 1)\n(allow default)\n(deny file-link)\n(deny file-write* (require-not (require-any {exceptions})))\n");
     let mut denied = super::read_guard::protected(paths);
     denied.extend(policy.protected_targets(&root)?);
-    if matches!(role, Role::Worker | Role::EosAgent | Role::EosReviewer) {
+    if matches!(
+        role,
+        Role::Worker | Role::EosAgent | Role::EosReviewer | Role::EosQa
+    ) {
         denied.push(home.join(".local/share/opencode"));
         denied.push(home.join(".config/opencode"));
         denied.push(home.join(".claude"));
@@ -110,7 +127,15 @@ pub fn build(paths: &Paths, temp: &Path, role: Role, policy: &NeverSent) -> anyh
             format!("\"{}\"", expression.replace('"', "\\\""))
         ));
     }
-    if !matches!(role, Role::Agent | Role::EosAgent) {
+    if matches!(role, Role::EosAgent | Role::EosQa | Role::EosReviewer) {
+        for protected in [".git/config", ".git/hooks", ".git/objects/info"] {
+            text.push_str(&format!(
+                "(deny file-write* (subpath {}))\n",
+                path(&root.join(protected))?
+            ));
+        }
+    }
+    if !matches!(role, Role::Agent | Role::EosAgent | Role::EosQa) {
         text.push_str(&format!("(deny file-write* (subpath {}))\n", path(&root)?));
     }
     text.push_str("(deny mach-lookup (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.securityd\"))\n");

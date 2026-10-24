@@ -128,6 +128,7 @@ fn daemon_death_reconciles_once_and_a_second_daemon_cannot_mutate_the_same_home(
                     findings: vec![],
                     next: None,
                     review_guide: None,
+                    details: None,
                 },
             )
             .unwrap();
