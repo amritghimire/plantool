@@ -88,6 +88,10 @@ fn remove_transcript(home: &Path, id: &str) -> anyhow::Result<()> {
         |r| r.get(0),
     )?;
     if !pinned {
+        tx.execute(
+            "UPDATE proxy_calls SET state='expired' WHERE attempt_id=?1 AND state='completed'",
+            [id],
+        )?;
         tx.execute("DELETE FROM run_events WHERE attempt_id=?1", [id])?;
         tx.execute(
             "DELETE FROM artifact_refs WHERE owner_type IN('transcript','trace') AND owner_id=?1",

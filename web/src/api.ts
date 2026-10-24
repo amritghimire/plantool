@@ -45,6 +45,12 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null}[]}>("GET","/api/settings/models"),
+  saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),
+  verifyModels: () => request("POST","/api/settings/models/verify",{}),
+  workerStatus: () => request<{worker:{available:boolean;message:string}}>("GET","/api/engineering-os/status"),
+  repairWorker: () => request<{worker:{available:boolean;message:string}}>("POST","/api/engineering-os/repair", {}),
+
   retentionPolicy: () => request<{transcript_days:number;evidence_days:number;disk_cap_bytes:number}>("GET","/api/settings/retention"),
   saveRetentionPolicy: (policy:{transcript_days:number;evidence_days:number;disk_cap_bytes:number}) => request<{ok:boolean}>("POST","/api/settings/retention",policy),
   pinRun: (key:string,id:string,pinned:boolean) => request<{ok:boolean;pinned:boolean}>("POST",`/api/sessions/${key}/runs/${id}/pin`,{pinned}),

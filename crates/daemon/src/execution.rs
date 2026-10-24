@@ -172,16 +172,33 @@ impl Execution {
                 saved,
             )
         };
-        for pid in groups {
-            kill_group(pid);
-        }
         let results = futures::future::join_all(hooks.iter().map(|h| async {
             tokio::time::timeout(std::time::Duration::from_secs(5), h.stop())
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker cancellation/lease cleanup timed out"))?
         }))
         .await;
-        let error = results.into_iter().find_map(Result::err);
+        for pid in groups {
+            kill_group(pid);
+        }
+        let mut error = results.into_iter().find_map(Result::err);
+        let home = self.lock().home.clone();
+        if let Some(home) = home {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                let active = crate::models::lease::current(&home)?;
+                if active.is_none() {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    error = Some(anyhow::anyhow!(
+                        "Model lease is still draining; execution remains stopped"
+                    ));
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        }
         {
             let mut inner = self.lock();
             inner.draining -= 1;
@@ -198,7 +215,7 @@ impl Execution {
         hook: Arc<dyn StopHook>,
     ) -> anyhow::Result<HookRegistration> {
         let mut inner = self.lock();
-        anyhow::ensure!(!inner.saved.status.stopped, "Stop All is active");
+        // Cleanup hooks may be registered while stopped; they grant no execution admission.
         let id = inner.next_hook;
         inner.next_hook += 1;
         inner.hooks.insert(id, hook);

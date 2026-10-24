@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 struct Handle {
+    cancelled: tokio::sync::watch::Sender<bool>,
     activity: std::time::Instant,
     input: mpsc::Sender<RunInput>,
     policy: crate::sandbox::NeverSent,
@@ -18,6 +19,7 @@ struct Handle {
 
 #[derive(Default)]
 pub struct RunManager {
+    pub worker: Arc<crate::worker::WorkerManager>,
     handles: Mutex<HashMap<String, Handle>>,
     pub tokens: Arc<crate::identities::RunTokens>,
     pub execution: Arc<crate::execution::Execution>,
@@ -46,11 +48,20 @@ pub fn next_milestone_context(run: &Run) -> Run {
 impl RunManager {
     pub fn load(home: &std::path::Path) -> anyhow::Result<Self> {
         Ok(Self {
+            worker: Arc::new(crate::worker::WorkerManager::for_home(home)),
             execution: Arc::new(crate::execution::Execution::load(home)?),
             ..Default::default()
         })
     }
     pub async fn stop_inputs(&self) {
+        for handle in self
+            .handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
+            handle.cancelled.send_replace(true);
+        }
         let inputs: Vec<_> = self
             .handles
             .lock()
@@ -304,12 +315,13 @@ impl RunManager {
         } else {
             None
         };
-        let launch = crate::sandbox::launch::Launch::new(
+        let mut launch = crate::sandbox::launch::Launch::new(
             self.execution.clone(),
             version.generation,
             isolation,
             policy.clone(),
         )?;
+        Arc::get_mut(&mut launch).unwrap().attempt = Some((daemon_home.clone(), run.id.clone()));
         let admission = self.execution.admit_version(&version)?;
         let credential = self.tokens.issue(crate::identities::RunScope {
             session: session.key.clone(),
@@ -330,6 +342,7 @@ impl RunManager {
             session.milestone_status(key, "building", &run)?;
         }
         let (in_tx, in_rx) = mpsc::channel::<RunInput>(64);
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
         let (ev_tx, mut ev_rx) = mpsc::channel::<ProviderEvent>(1024);
         self.handles
             .lock()
@@ -337,6 +350,7 @@ impl RunManager {
             .insert(
                 run.id.clone(),
                 Handle {
+                    cancelled: cancel_tx,
                     input: in_tx,
                     generation: version.generation,
                     policy: policy.clone(),
@@ -346,7 +360,13 @@ impl RunManager {
             );
         let opts = RunOptions {
             launch: Some(launch),
-            environment: Some(credential.environment(home, port)),
+            environment: Some(if provider == Provider::Ollama {
+                credential
+                    .environment(home, port)
+                    .with_proxy(format!("http://localhost:{port}/v1"))
+            } else {
+                credential.environment(home, port)
+            }),
             cwd: run.cwd.clone(),
             prompt,
             model,
@@ -508,7 +528,40 @@ impl RunManager {
         }
 
         tokio::spawn(async move {
-            let result = providers::run_provider(provider, opts, in_rx, ev_tx).await;
+            let mut work = Box::pin(async {
+                let _lease = crate::models::lease::acquire(
+                    &daemon_home,
+                    &format!("attempt:{run_id}"),
+                    Some(&run_id),
+                    crate::models::lease::Model {
+                        route: format!("personal:{}", provider.as_str()),
+                        provider: if provider == Provider::Ollama {
+                            "ollama".into()
+                        } else {
+                            provider.as_str().into()
+                        },
+                        model: opts
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| provider.as_str().into()),
+                    },
+                    false,
+                    i64::MAX,
+                    manager.execution.clone(),
+                    &crate::models::lease::Ollama,
+                )
+                .await?;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2700),
+                    providers::run_provider(provider, opts, in_rx, ev_tx),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("45 minute run limit reached; resume from the saved context")
+                })?
+            });
+            let result = tokio::select! {result=&mut work=>result,_=cancel_rx.changed()=>Ok(())};
+            drop(work);
             drop(credential);
             let _ = consumer.await;
             manager
@@ -658,6 +711,15 @@ impl RunManager {
             {
                 crate::providers::attachments::check_policy(text, &handle.roots, &handle.policy)?;
             }
+        }
+        if matches!(input, RunInput::Stop) {
+            let handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
+            let handle = handles
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("run {id} is not running"))?;
+            handle.cancelled.send_replace(true);
+            let _ = handle.input.try_send(RunInput::Stop);
+            return Ok(());
         }
         let tx = self
             .handles

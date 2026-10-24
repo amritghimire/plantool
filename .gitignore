@@ -4,3 +4,6 @@
 /dist
 /.worktrees
 .DS_Store
+/worker/.venv
+/worker/.pytest_cache
+**/__pycache__/

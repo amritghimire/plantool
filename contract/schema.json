@@ -1,0 +1,879 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Contract",
+  "description": "Schema roots include every request and response, not just the graph entrypoints.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Health"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Start"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Resume"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "resume"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Cancel"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "cancel"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Status"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "status"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Dispatch"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "request_dispatch"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/DispatchReply"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "dispatch_reply"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/Gate"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "request_gate"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/ReadArtifact"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "read_artifact"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/ReadTask"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "read_task"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/ReadRepoFile"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "read_repo_file"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/PostMessage"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "post_message"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/RoleResult"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "report_result"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/FileProposal"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "file_proposal"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/EventAck"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "project_event_ack"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/LlmContext"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "llm"
+          ]
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "Artifact": {
+      "type": "object",
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Cancel": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "thread_id"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Check": {
+      "type": "object",
+      "required": [
+        "evidence",
+        "name",
+        "status"
+      ],
+      "properties": {
+        "evidence": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/CheckStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckStatus": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "skipped"
+      ]
+    },
+    "Dispatch": {
+      "type": "object",
+      "required": [
+        "capability",
+        "generation",
+        "idempotency_key",
+        "inputs",
+        "interrupt_id",
+        "item",
+        "plan_sha",
+        "policy_version",
+        "role",
+        "thread_id"
+      ],
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "inputs": true,
+        "interrupt_id": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "plan_sha": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "role": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DispatchReply": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "generation"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventAck": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "idempotency_key",
+        "project"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileProposal": {
+      "type": "object",
+      "required": [
+        "body",
+        "idempotency_key",
+        "item",
+        "title"
+      ],
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Finding": {
+      "type": "object",
+      "required": [
+        "detail",
+        "scope",
+        "severity",
+        "title"
+      ],
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "scope": {
+          "$ref": "#/definitions/FindingScope"
+        },
+        "severity": {
+          "$ref": "#/definitions/Severity"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FindingScope": {
+      "type": "string",
+      "enum": [
+        "in",
+        "out"
+      ]
+    },
+    "Gate": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "item",
+        "kind",
+        "target_digest"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "target_digest": {
+          "type": "string"
+        },
+        "target_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Graph": {
+      "type": "string",
+      "enum": [
+        "project",
+        "work_item"
+      ]
+    },
+    "Health": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "graph_version"
+      ],
+      "properties": {
+        "contract_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "graph_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "LlmContext": {
+      "type": "object",
+      "required": [
+        "generation",
+        "idempotency_key",
+        "item",
+        "role"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Outcome": {
+      "type": "string",
+      "enum": [
+        "done",
+        "needs_fix",
+        "blocked",
+        "failed"
+      ]
+    },
+    "PostMessage": {
+      "type": "object",
+      "required": [
+        "body",
+        "idempotency_key",
+        "item",
+        "thread_id"
+      ],
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadArtifact": {
+      "type": "object",
+      "required": [
+        "item",
+        "sha256"
+      ],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadRepoFile": {
+      "type": "object",
+      "required": [
+        "item",
+        "path"
+      ],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadTask": {
+      "type": "object",
+      "required": [
+        "item",
+        "key"
+      ],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Resume": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "graph_version",
+        "idempotency_key",
+        "interrupt_id",
+        "thread_id",
+        "value"
+      ],
+      "properties": {
+        "contract_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "graph_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "interrupt_id": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "value": true
+      },
+      "additionalProperties": false
+    },
+    "ReviewGuide": {
+      "type": "object",
+      "required": [
+        "same_family_warning"
+      ],
+      "properties": {
+        "same_family_warning": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RoleResult": {
+      "type": "object",
+      "required": [
+        "artifacts",
+        "attempt_id",
+        "checks",
+        "findings",
+        "generation",
+        "item",
+        "outcome",
+        "role",
+        "summary",
+        "tasks_done"
+      ],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Artifact"
+          }
+        },
+        "attempt_id": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Check"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Finding"
+          }
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "item": {
+          "type": "string"
+        },
+        "next": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/definitions/Outcome"
+        },
+        "review_guide": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReviewGuide"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tasks_done": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "Start": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "graph",
+        "graph_version",
+        "idempotency_key",
+        "input",
+        "thread_id"
+      ],
+      "properties": {
+        "contract_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "graph": {
+          "$ref": "#/definitions/Graph"
+        },
+        "graph_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "input": true,
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Status": {
+      "type": "object",
+      "required": [
+        "graph_version",
+        "state",
+        "thread_id"
+      ],
+      "properties": {
+        "graph_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "interrupt_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": true,
+        "state": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -335,3 +335,71 @@ implement instructions are in `agents/skills/{plan,implement}/SKILL.md`.
 `cargo test -p plantool-daemon --test sandbox` executes the section 19 sandbox
 acceptance tests on macOS, including actual file denials and Keychain Mach-service
 denials; CI runs them on macOS. The test file is excluded on other platforms.
+
+## Engineering OS worker bridge
+
+Engineering OS requires macOS and `sandbox-exec`. Its graph is a Phase 2 stub: it can start,
+interrupt, resume and cancel, but the GitHub App and autonomous role workflow are not implemented.
+Personal remains the Rust engine and never downloads or starts Python. Both modes share a single
+model lease, so a hosted coding run or LLM request waits while another holds it. Coding runs
+checkpoint after at most 45 minutes; model changes happen between attempts.
+
+In browser **Settings → Engineering OS**, choose **Repair with passkey** for first setup or
+repair. The binary unpacks its embedded worker and agent instructions under
+`$PLANTOOL_HOME/worker/<version>/`, downloads checksum-verified uv **0.12.23**, and runs
+`uv sync --frozen --no-dev --python 3.12`. Python installs under the same home, not system-wide.
+The worker runs sandboxed on `run/worker.sock`, receives its token through an inherited descriptor,
+and owns only `worker-state/checkpoints.db`. Both sides check contract and graph versions;
+unknown/older checkpoint versions require a migration and are not resumed. Linux and Windows
+show **Engineering OS unavailable**, while Personal continues to work.
+
+**Settings → Model routes and providers** edits the embedded `agents/chains.default.yaml`
+defaults and each project's provider allowlist. Use Stop All before changing policy, save with a
+fresh passkey, resume execution, then **Verify routes with passkey**. Setup checks live catalogs
+without making model calls. Missing model IDs are marked unavailable; explicit IDs are never
+substituted. `auto` routes resolve from the advertised catalog and display their chosen model.
+QA/Reviewer prefer a different model family; an unavoidable match is recorded in the result's
+`review_guide.same_family_warning`.
+
+Remote API keys are read only by the daemon from macOS Keychain generic-password services:
+`plantool/openrouter`, `plantool/ollama-cloud`, and `plantool/opencode-zen`. Add these using
+Keychain Access; no provider keys belong in worker/agent environment variables or chain YAML.
+Codex retains its own subscription auth file and uses the existing app-server adapter under the
+lease. Engineering OS OpenCode uses a custom provider pointing at the daemon's OpenAI-compatible
+proxy, with a scoped run token. It does not inherit legacy OpenCode provider credentials.
+The proxy screens never-sent files, checks the lease/provider policy, counts requests/tokens,
+and records quota resets. OpenRouter's default daily reserve protects Backend, Frontend and
+Reviewer capacity. A quota response checkpoints the current attempt; its next attempt selects a
+lower route. Higher routes become eligible again when their reset window passes.
+
+The daemon commits attempts and outbox entries together; worker deliveries retry with the same
+idempotency key. Results require matching item/role/generation, existing commits and evidence,
+and approved task keys. Agents can inspect/report the result contract:
+
+```bash
+plantool attempt schema
+plantool attempt report --file result.json   # hosted attempt token required
+```
+
+A per-home OS lock prevents a second daemon from changing recovery state.
+A launch barrier prevents a provider from executing before its process identity is recorded.
+After a crash, uncertain attempts become `recovery_needed`; uncertain model requests are not
+replayed. Recovery inspects saved process groups read-only. A surviving agent group fences new
+model work; a surviving worker group fences worker repair only. Stop the orphan using your OS
+process tools, then choose Repair to recheck the fence. Recovery never kills a reused PID.
+Stop All cancels worker graphs durably, revokes tokens, terminates live supervised processes,
+and drains the lease. Resuming requires a fresh passkey and does not restart old work.
+
+The shared types live in `crates/contract`; regenerate checked-in schema/Pydantic models with:
+
+```bash
+scripts/generate-contract.sh
+uv run --project worker --frozen pytest -c worker/pyproject.toml worker/tests
+cargo test -p plantool-daemon --test phase2
+```
+
+CI regenerates and rejects drift. The tests use fake providers, including worker process death,
+replayed dispatch/resume delivery, quota fallback, lease serialization and never-sent screening.
+Nix's dev shell uses the same pinned uv version. `nix build` builds the web assets, Rust binary
+with crane and worker venv with uv2nix from the same `worker/uv.lock`; `nix run` starts the packaged
+CLI. A Nix-built worker uses its packaged Python environment and skips network bootstrap.

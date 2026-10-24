@@ -9,6 +9,7 @@ name = "plantool"
 path = "src/main.rs"
 
 [dependencies]
+plantool-contract = { path = "../contract" }
 plantool-core = { path = "../core" }
 plantool-daemon = { path = "../daemon" }
 serde.workspace = true

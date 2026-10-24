@@ -133,10 +133,25 @@ impl RunOptions {
         &self,
         command: &mut tokio::process::Command,
     ) -> anyhow::Result<crate::execution::ManagedChild> {
-        match &self.launch {
-            Some(launch) => launch.execution.spawn(launch.generation, command),
-            None => std::sync::Arc::new(crate::execution::Execution::default()).spawn(0, command),
+        let child = match &self.launch {
+            Some(launch) => launch.execution.spawn(launch.generation, command)?,
+            None => {
+                std::sync::Arc::new(crate::execution::Execution::default()).spawn(0, command)?
+            }
+        };
+        if let (Some(launch), Some(pid)) = (&self.launch, child.id()) {
+            launch.release(command, pid)?;
         }
+        if let Some((home, id)) = self.launch.as_ref().and_then(|l| l.attempt.as_ref()) {
+            if let Some(pid) = child.id() {
+                let stamp = crate::dispatcher::process_stamp(pid).ok();
+                crate::database::open(home)?.execute(
+                    "UPDATE dispatches SET pid=?2,process_started=?3 WHERE attempt_id=?1",
+                    rusqlite::params![id, pid, stamp],
+                )?;
+            }
+        }
+        Ok(child)
     }
 
     pub fn apply_environment(&self, command: &mut tokio::process::Command, provider: Provider) {

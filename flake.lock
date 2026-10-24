@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "crane": {
+      "locked": {
+        "lastModified": 1764903584,
+        "narHash": "sha256-RSkJtNtx0SEaQiYqsoFoRynwfZLo2OZ9z6rUq1DJR6g=",
+        "type": "tarball",
+        "url": "https://codeload.github.com/ipetkov/crane/tar.gz/2b3a5a88d852575758e1eb6ac9ee677fcd633fc1"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://codeload.github.com/ipetkov/crane/tar.gz/2b3a5a88d852575758e1eb6ac9ee677fcd633fc1"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767313136,
@@ -12,10 +24,54 @@
         "url": "https://codeload.github.com/NixOS/nixpkgs/tar.gz/ac62194c3917d5f474c1a844b6fd6da2db95077d"
       }
     },
+    "pyproject-build-systems": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "pyproject-nix": [
+          "pyproject-nix"
+        ],
+        "uv2nix": [
+          "uv2nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792499785,
+        "narHash": "sha256-mGOkvueuMGSRiD75ccxFzfEvSlIU9ztjFluHMKOtogY=",
+        "type": "tarball",
+        "url": "https://codeload.github.com/pyproject-nix/build-system-pkgs/tar.gz/a17819c85163988e063806ffc4f6d2716bc8ead8"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://codeload.github.com/pyproject-nix/build-system-pkgs/tar.gz/a17819c85163988e063806ffc4f6d2716bc8ead8"
+      }
+    },
+    "pyproject-nix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791657700,
+        "narHash": "sha256-vcCAvhtA7hG+/gOge29hYHy7I/dLkIsr5nLx4sFEQic=",
+        "type": "tarball",
+        "url": "https://codeload.github.com/nix-community/pyproject.nix/tar.gz/ddc400a6883b042646d0940e65971bb7f7e96107"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://codeload.github.com/nix-community/pyproject.nix/tar.gz/ddc400a6883b042646d0940e65971bb7f7e96107"
+      }
+    },
     "root": {
       "inputs": {
+        "crane": "crane",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "pyproject-build-systems": "pyproject-build-systems",
+        "pyproject-nix": "pyproject-nix",
+        "rust-overlay": "rust-overlay",
+        "uv2nix": "uv2nix"
       }
     },
     "rust-overlay": {
@@ -33,6 +89,26 @@
       "original": {
         "type": "tarball",
         "url": "https://codeload.github.com/oxalica/rust-overlay/tar.gz/83dd732f2428827f35d997deae108a2ced5125f4"
+      }
+    },
+    "uv2nix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "pyproject-nix": [
+          "pyproject-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792666911,
+        "narHash": "sha256-UWo7wDPi00YXOI1Io7g4vGKuCSPJ863kHJVDzsgqtoM=",
+        "type": "tarball",
+        "url": "https://codeload.github.com/pyproject-nix/uv2nix/tar.gz/0fdaa03ea3c3c16dbb1fe4d69108f07227a4b42d"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://codeload.github.com/pyproject-nix/uv2nix/tar.gz/0fdaa03ea3c3c16dbb1fe4d69108f07227a4b42d"
       }
     }
   },

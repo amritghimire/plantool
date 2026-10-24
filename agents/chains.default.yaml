@@ -1,0 +1,28 @@
+routes:
+  codex-sol:      {adapter: codex,    provider: openai,       model: gpt-6.1-sol,  budget: {window: provider}}
+  or-minimax-m3:  {adapter: opencode, provider: openrouter,   model: minimax/minimax-m3:free}
+  or-glm-5.2:     {adapter: opencode, provider: openrouter,   model: z-ai/glm-5.2:free}
+  or-laguna-xs:   {adapter: opencode, provider: openrouter,   model: poolside/laguna-xs-2.1:free}
+  or-gemma4-31b:  {adapter: opencode, provider: openrouter,   model: google/gemma-4-31b:free}
+  or-nemotron-s:  {adapter: opencode, provider: openrouter,   model: nvidia/nemotron-3-super:free}
+  ollama-cloud:   {adapter: opencode, provider: ollama-cloud, model: auto}   # best starter model, detected at startup
+  zen-free:       {adapter: opencode, provider: opencode-zen, model: auto}
+  local-devstral: {adapter: opencode, provider: ollama,       model: devstral-small-2}
+  local-qwen38:   {adapter: opencode, provider: ollama,       model: qwen3.8:27b}
+  local-qwen36a3: {adapter: opencode, provider: ollama,       model: qwen3.6:35b-a3b}
+budgets:
+  openrouter:   {window: daily, requests: 1000, reserve_for: [backend, frontend, reviewer], reserve_pct: 50}
+  ollama-cloud: {window: provider}   # move down on quota error
+chains:
+  backend:    [codex-sol, or-minimax-m3, or-glm-5.2, ollama-cloud, local-devstral]
+  frontend:   [codex-sol, or-minimax-m3, or-glm-5.2, ollama-cloud, local-devstral]
+  reviewer:   [codex-sol, or-glm-5.2, or-minimax-m3, ollama-cloud, local-qwen38]
+  cto:        [or-glm-5.2, ollama-cloud, local-qwen38]
+  devops:     [or-laguna-xs, ollama-cloud, local-devstral]
+  qa:         [or-laguna-xs, ollama-cloud, local-devstral]
+  pm:         [or-gemma4-31b, ollama-cloud, local-qwen36a3]
+  supervisor: [or-gemma4-31b, ollama-cloud, local-qwen36a3]
+  docs:       [or-nemotron-s, zen-free, local-qwen36a3]
+diversity:
+  qa:       {different_family_than: [backend, frontend]}
+  reviewer: {different_family_than: [backend, frontend]}

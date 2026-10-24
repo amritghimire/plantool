@@ -12,3 +12,5 @@ pub mod status;
 pub mod update;
 
 pub mod task;
+
+pub mod attempt;

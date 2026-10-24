@@ -33,7 +33,7 @@ fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
     };
     let mut models = Map::new();
     models.insert(model.into(), json!({ "name": model }));
-    json!({
+    let mut value = json!({
         "share": "disabled",
         "provider": { "ollama": {
             "npm": "@ai-sdk/openai-compatible",
@@ -42,7 +42,11 @@ fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
             "models": models
         } },
         "permission": permission
-    })
+    });
+    if let Some(options) = opts.environment.as_ref().and_then(|e| e.proxy_options()) {
+        value["provider"] = json!({"plantool":{"npm":"@ai-sdk/openai-compatible","name":"PlanTool daemon","options":options,"models":{model:{"name":model}}}});
+    }
+    value
 }
 
 pub async fn run(
@@ -95,7 +99,19 @@ pub async fn run(
             .arg("json")
             .arg("--auto")
             .arg("--model")
-            .arg(format!("ollama/{model}"));
+            .arg(format!(
+                "{}/{model}",
+                if opts
+                    .environment
+                    .as_ref()
+                    .and_then(|e| e.proxy_options())
+                    .is_some()
+                {
+                    "plantool"
+                } else {
+                    "ollama"
+                }
+            ));
         if let Some(id) = &session_id {
             cmd.arg("--session").arg(id);
         }

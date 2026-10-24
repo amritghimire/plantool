@@ -358,7 +358,7 @@ impl SessionStore {
 pub fn list_session_dirs(home: &Path) -> anyhow::Result<Vec<(String, String, PathBuf)>> {
     let db = crate::database::open(home)?;
     let mut q =
-        db.prepare("SELECT repo_slug,slug FROM work_items WHERE deleted_at IS NULL ORDER BY id")?;
+        db.prepare("SELECT repo_slug,slug FROM work_items WHERE deleted_at IS NULL AND kind='personal' ORDER BY id")?;
     let rows = q
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;

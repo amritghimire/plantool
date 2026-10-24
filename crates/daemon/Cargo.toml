@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fs2 = "0.4"
 libc = "0.2"
 shlex = "2"
 base64 = "0.22"
@@ -16,6 +17,10 @@ percent-encoding = "2"
 # Keep the standalone release binary independent of a system OpenSSL installation.
 openssl = { version = "0.10", features = ["vendored"] }
 plantool-core = { path = "../core" }
+plantool-contract = { path = "../contract" }
+serde_yaml = "0.9"
+flate2 = "1"
+tar = "0.4"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

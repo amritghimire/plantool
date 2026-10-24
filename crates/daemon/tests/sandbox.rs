@@ -307,3 +307,28 @@ async fn sandbox_can_connect_to_the_daemon_unix_socket() {
     );
     assert_eq!(output.stdout, b"ok");
 }
+#[tokio::test]
+async fn eos_proxy_roles_cannot_read_legacy_provider_keys_and_worker_has_no_model_auth() {
+    let f = Fixture::new();
+    let opencode = f.write(f.paths.owner_home.join(".local/share/opencode/auth.json"));
+    let codex = f.write(f.paths.owner_home.join(".codex/auth.json"));
+    let agent = f.sandbox(Role::EosAgent);
+    assert!(!f
+        .command(&agent, "/bin/cat", &[opencode.to_str().unwrap()])
+        .await
+        .status
+        .success());
+    assert!(!agent.temp_dir().join("data/opencode/auth.json").exists());
+    assert!(f
+        .command(&agent, "/bin/cat", &[codex.to_str().unwrap()])
+        .await
+        .status
+        .success());
+    let worker = f.sandbox(Role::Worker);
+    assert!(!f
+        .command(&worker, "/bin/cat", &[codex.to_str().unwrap()])
+        .await
+        .status
+        .success());
+    assert!(!worker.temp_dir().join("codex/auth.json").exists());
+}

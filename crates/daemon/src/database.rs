@@ -32,7 +32,7 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", true)?;
     let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    ensure!(version <= 1, "Database is newer than this PlanTool version");
+    ensure!(version <= 2, "Database is newer than this PlanTool version");
     if version == 0 {
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // A second connection may have waited for the same initial migration.
@@ -40,6 +40,15 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
         if version == 0 {
             tx.execute_batch(include_str!("../migrations/001_initial.sql"))?;
             tx.pragma_update(None, "user_version", 1)?;
+        }
+        tx.commit()?;
+    }
+    if version < 2 {
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if version < 2 {
+            tx.execute_batch(include_str!("../migrations/002_worker.sql"))?;
+            tx.pragma_update(None, "user_version", 2)?;
         }
         tx.commit()?;
     }
@@ -180,7 +189,7 @@ pub fn reconcile_personal(home: &Path) -> anyhow::Result<()> {
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let ids = {
         let mut q = tx.prepare(
-            "SELECT id,item_id FROM attempts WHERE state IN('starting','running','waiting','idle')",
+            "SELECT id,item_id FROM attempts WHERE state IN('starting','running','waiting','idle') AND item_id IN(SELECT id FROM work_items WHERE kind='personal')",
         )?;
         let rows = q
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
