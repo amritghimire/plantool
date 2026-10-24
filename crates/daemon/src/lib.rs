@@ -225,3 +225,5 @@ pub mod scheduler;
 pub mod oversight;
 
 pub mod loop_engine;
+
+pub mod engineering_view;

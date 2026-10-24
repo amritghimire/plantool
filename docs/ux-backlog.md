@@ -48,9 +48,18 @@ step, recorded graph history, waiting gates, failures and recovery needs. Lead t
 to the next useful action instead of requiring them to inspect settings. Keep setup,
 project operations and Personal sessions clearly separated.
 
+## 6. One-step-at-a-time setup, with resume
+
+Provide setup instructions and controls inside the application, without requiring a README.
+Walk through model tools, GitHub App/project connection, worker installation, model route
+verification, project policies and a first real run. Persist the current step and selected
+project in daemon-owned storage so the owner can close the browser or restart and resume.
+Progress is navigation context, never an approval or a claim that an unverified step passed.
+
 ## PR acceptance criteria
 
 - Dedicated routes for Settings, Engineering OS project operations, work-item activity and Workspace.
+- Guided setup presents one step at a time and resumes its daemon-saved step/project.
 - Global Stop All and execution status integrated into the shared application header.
 - Multiple projects visible/selectable; App credentials can be reused when adding repositories.
 - Owner can see recorded attempts/models, gate waits and graph transitions for an item.

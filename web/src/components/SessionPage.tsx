@@ -1,4 +1,3 @@
-import { AccountMenu } from "./AuthGate";
 import { DecisionSummary } from "./DecisionSummary";
 import { ArchivePanel } from "./ArchivePanel";
 import { WherePanel } from "./WherePanel";
@@ -15,7 +14,6 @@ import { DocView, type ViewMode } from "./DocView";
 import { RunPanel, type RunLine } from "./RunPanel";
 import { Sidebar, docKindOf } from "./Sidebar";
 import { StartRunDialog, type RunStage } from "./StartRunDialog";
-import { ThemeToggle } from "./ThemeToggle";
 import { PrDialog } from "./PrDialog";
 import { AskAgentDialog } from "./AskAgentDialog";
 import type { ThreadActions } from "./Thread";
@@ -412,7 +410,7 @@ export function SessionPage() {
       <div className="page">
         <header className="topbar">
           <Link to="/" className="brand">plantool</Link>
-          <span className="spacer" /><AccountMenu />
+          <span className="spacer" />
         </header>
         <main className="list">
           <p className="error">{error}</p>
@@ -461,7 +459,7 @@ export function SessionPage() {
             </button>
           </div>
         )}
-        <ThemeToggle /><AccountMenu />
+
       </header>
       <Sidebar
         onHandoff={onHandoff}

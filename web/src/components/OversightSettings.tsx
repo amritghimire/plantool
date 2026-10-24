@@ -1,11 +1,11 @@
 import {useState} from "react";
 import {api} from "../api";
 type Data=Awaited<ReturnType<typeof api.oversight>>;
-export function OversightSettings(){
+export function OversightSettings({expanded=false}:{expanded?:boolean}={}){
  const [data,setData]=useState<Data|null>(null);const [project,setProject]=useState<Data["projects"][number]|null>(null);const [rules,setRules]=useState("");const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [tags,setTags]=useState<Record<string,boolean[]>>({});
  const load=async()=>{try{const value=await api.oversight();setData(value);setTags(Object.fromEntries(value.plans.map(p=>[p.item,p.state.phases?.map(v=>v.tagged)??[]])));setError("")}catch(e){setError((e as Error).message)}};
  const action=async(run:()=>Promise<unknown>)=>{setBusy(true);setError("");try{await run();await load()}catch(e){setError((e as Error).message)}finally{setBusy(false)}};
- return <details className="disclosure settings-group form-stack" onToggle={e=>{if(e.currentTarget.open&&!data)void load()}}><summary>Project schedule and oversight</summary>
+ return <details open={expanded?true:undefined} className="disclosure settings-group form-stack" onToggle={e=>{if(e.currentTarget.open&&!data)void load()}}><summary>Project schedule and oversight</summary>
  <p>Presets add gates. Every mode requires plan approval and current-head PR approval on GitHub. Use Stop All before changing project policy; finish active items first.</p><button className="btn" onClick={()=>void load()}>Refresh project policy</button>
  <label>Project<select value={project?.id??""} onChange={e=>{const p=data?.projects.find(p=>p.id===e.target.value)??null;setProject(p);setRules(p?.review_globs.join("\n")??"")}}><option value="">Select a project</option>{data?.projects.map(p=><option key={p.id} value={p.id}>{p.name??p.id}</option>)}</select></label>
  {project&&<><label>Preset<select value={project.preset} onChange={e=>setProject({...project,preset:e.target.value as typeof project.preset})}><option value="minimal">Minimal: plan + PR</option><option value="standard">Standard: tagged milestones</option><option value="strict">Strict: research + every phase</option></select></label>

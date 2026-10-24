@@ -1,7 +1,7 @@
 use super::{actor_from, ApiError};
 use crate::AppState;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Extension, Json, Router,
@@ -81,9 +81,85 @@ async fn health(
     worker(&state, &headers, transport.as_deref())?;
     Ok(Json(plantool_contract::Health::default()))
 }
+async fn projects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    Ok(Json(crate::engineering_view::overview(&state.config.home)?))
+}
+async fn item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    crate::engineering_view::item(&state.config.home, &id)
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))
+}
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetupCursor {
+    step: String,
+    project: Option<String>,
+}
+async fn setup_cursor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    Ok(Json(
+        crate::database::get::<Value>(
+            &crate::database::open(&state.config.home)?,
+            "engineering.setup_cursor",
+        )?
+        .unwrap_or(json!({"step":"welcome","project":null})),
+    ))
+}
+async fn save_cursor(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(cursor): Json<SetupCursor>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    if ![
+        "welcome", "tools", "github", "worker", "models", "policies", "ready",
+    ]
+    .contains(&cursor.step.as_str())
+    {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Unknown setup step".into(),
+        ));
+    }
+    let db = crate::database::open(&state.config.home)?;
+    if let Some(project) = &cursor.project {
+        let valid: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND mode='eos')",
+                [project],
+                |r| r.get(0),
+            )
+            .map_err(anyhow::Error::from)?;
+        if !valid {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "Unknown Engineering OS project".into(),
+            ));
+        }
+    }
+    // Navigation preference only: this never configures policy or grants an approval.
+    let value = serde_json::to_value(cursor).map_err(anyhow::Error::from)?;
+    crate::database::set(&db, "engineering.setup_cursor", &value)?;
+    Ok(Json(value))
+}
 pub fn browser_routes() -> Router<AppState> {
     Router::new()
         .route("/engineering-os/status", get(status))
+        .route("/engineering-os/setup", get(setup_cursor).post(save_cursor))
+        .route("/engineering-os/projects", get(projects))
+        .route("/engineering-os/items/{id}", get(item))
         .route("/engineering-os/repair", post(repair))
 }
 pub fn internal_routes() -> Router<AppState> {
