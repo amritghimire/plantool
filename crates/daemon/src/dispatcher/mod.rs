@@ -28,7 +28,10 @@ pub fn admit(
         .contains(&role),
         "Unknown role"
     );
-    let expected = if ["backend", "frontend", "devops", "docs"].contains(&role) {
+    let managed = crate::workflow::state(&database::open(home)?, &request.item)?.is_some();
+    let expected = if managed {
+        crate::workflow::capability(role)
+    } else if ["backend", "frontend", "devops", "docs"].contains(&role) {
         "write"
     } else {
         "read"
@@ -44,7 +47,11 @@ pub fn admit(
         )?;
         anyhow::ensure!(policy == request.policy_version, "Stale policy version");
         let approved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE i.id=?1 AND r.content_sha256=?2 AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0)",params![request.item,request.plan_sha],|r|r.get(0))?;
-        anyhow::ensure!(approved, "Approved immutable plan required for this hash");
+        let planning = crate::workflow::check(tx, request)?;
+        anyhow::ensure!(
+            approved || planning,
+            "Approved immutable plan required for this hash"
+        );
         let deps:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_deps d JOIN work_items i ON i.id=d.depends_on_id WHERE d.item_id=?1 AND i.state NOT IN('done','merged'))",[&request.item],|r|r.get(0))?;
         anyhow::ensure!(!deps, "Dependencies are incomplete");
         let generation: u64 = tx.query_row(
@@ -116,6 +123,22 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
         item_id == result.item && role == result.role && generation == result.generation,
         "Result scope/generation mismatch"
     );
+    if crate::workflow::state(&db, &result.item)?.is_some() && crate::workflow::coding(&result.role)
+    {
+        let expected: Option<String> = db.query_row(
+            "SELECT git_config_sha FROM dispatches WHERE attempt_id=?1",
+            [&result.attempt_id],
+            |r| r.get(0),
+        )?;
+        if let Some(expected) = expected {
+            anyhow::ensure!(
+                plantool_core::sha256_hex(&std::fs::read_to_string(
+                    Path::new(&worktree).join(".git/config")
+                )?) == expected,
+                "Attempt Git configuration was modified"
+            );
+        }
+    }
     let warning: bool = db.query_row(
         "SELECT same_family_warning FROM dispatches WHERE attempt_id=?1",
         [&result.attempt_id],
@@ -165,6 +188,7 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
             "Invalid finding classification"
         );
     }
+    crate::workflow::validate_result(home, result, Path::new(&worktree))?;
     database::inbox_once(home,"attempt.result",&format!("{}:{}",result.attempt_id,result.generation),|tx|{
         let current:u64=tx.query_row("SELECT generation FROM item_generations WHERE item_id=?1",[&result.item],|r|r.get(0))?;
         anyhow::ensure!(current==result.generation,"Stale result generation");
@@ -177,8 +201,13 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
         for key in &result.tasks_done {
             let approved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2)",params![result.item,key],|r|r.get(0))?;
             anyhow::ensure!(approved,"Result references an unapproved task");
+            if crate::workflow::state(tx,&result.item)?.is_some() {
+                let owned:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2 AND t.area=?3)",params![result.item,key,result.role],|r|r.get(0))?;
+                anyhow::ensure!(owned,"Role cannot complete another area's task");
+            }
             tx.execute("INSERT INTO task_progress VALUES(?1,?2,'done',?3,?4) ON CONFLICT(item_id,task_key) DO UPDATE SET status='done',updated_by_attempt=excluded.updated_by_attempt,updated_at=excluded.updated_at",params![result.item,key,result.attempt_id,plantool_core::now()])?;
         }
+        crate::workflow::record(home,tx,result,Path::new(&worktree))?;
         let (thread,interrupt):(String,String)=tx.query_row("SELECT thread_id,interrupt_id FROM dispatches WHERE attempt_id=?1",[&result.attempt_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         let resume=plantool_contract::Resume{thread_id:thread,interrupt_id:interrupt,value:body.clone(),idempotency_key:format!("result:{}:{}",result.attempt_id,result.generation),contract_version:plantool_contract::CONTRACT_VERSION,graph_version:plantool_contract::GRAPH_VERSION};
         enqueue(tx,&result.item,"worker.resume",&serde_json::to_value(resume)?)?;
@@ -232,6 +261,7 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
                 findings: vec![],
                 next: None,
                 review_guide: None,
+                details: None,
             };
             report(home, &result)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

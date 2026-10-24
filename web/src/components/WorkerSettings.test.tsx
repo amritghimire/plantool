@@ -11,3 +11,9 @@ it("shows repair failure without replacing Personal UI",async()=>{
  await waitFor(()=>expect(screen.getByRole("alert").textContent).toContain("macOS sandbox-exec"));
  expect(screen.getByRole("button",{name:"Repair with passkey"})).toBeEnabled();
 });
+it("shows frozen work-item escalation without offering browser approval",async()=>{
+ vi.mocked(api.workerStatus).mockResolvedValue({worker:{available:true,message:"Worker ready"},items:[{item:"p:1",title:"Scoped issue",state:{step:"escalated",frozen:true},error:"Retry budget exhausted",summary:null}]});
+ render(<WorkerSettings/>);fireEvent.click(screen.getByText("Engineering OS"));
+ await screen.findByText(/Owner attention required; side effects frozen/);expect(screen.getByText(/Retry budget exhausted/)).toBeInTheDocument();
+ expect(screen.queryByRole("button",{name:/approve/i})).not.toBeInTheDocument();
+});

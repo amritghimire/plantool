@@ -206,6 +206,7 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
     if decision == "approved" {
         tx.execute("UPDATE work_items SET approved_plan_revision_id=?2,state_json=json_set(state_json,'$.plan_revision_pending',0) WHERE id=?1",params![item,revision])?;
     }
+    crate::workflow::gate_decision(&tx, &item, decision == "approved")?;
     let (thread, interrupt): (String, String) = tx.query_row(
         "SELECT thread_id,interrupt_id FROM github_gate_context WHERE gate_id=?1",
         [&gate],
@@ -315,6 +316,11 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
                 )?;
                 continue;
             }
+            let gate_item: String =
+                db.query_row("SELECT item_id FROM gates WHERE id=?1", [g], |r| r.get(0))?;
+            if crate::workflow::state(&db, &gate_item)?.is_some_and(|s| s["frozen"] == true) {
+                continue;
+            }
             let plan = String::from_utf8(crate::artifacts::read(home, &sha)?)?;
             let (root,patterns):(String,String)=db.query_row("SELECT p.local_checkout,coalesce((SELECT never_sent_globs_json FROM project_settings WHERE project_id=p.id ORDER BY version DESC LIMIT 1),'[]') FROM projects p WHERE p.id=?1",[&repo.project],|r|Ok((r.get(0)?,r.get(1)?)))?;
             crate::models::proxy::check_payload(
@@ -353,6 +359,11 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
                 source.status
             );
             let issue = p["issue"].as_i64().context("Missing issue")?;
+            if crate::workflow::state(&database::open(home)?, &format!("{}:{issue}", repo.project))?
+                .is_some_and(|s| s["frozen"] == true)
+            {
+                continue;
+            }
             let expected_url = format!("https://api.github.com{base}/issues/{issue}");
             if source.status == 404
                 || !valid_identity(&database::open(home)?, &source.body)

@@ -2,8 +2,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub const CONTRACT_VERSION: u32 = 2;
-pub const GRAPH_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 3;
+pub const GRAPH_VERSION: u32 = 2;
 macro_rules! wire {
     ($name:ident {$($field:ident: $ty:ty),* $(,)?}) => {
         #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -116,7 +116,7 @@ wire!(Check {
     status: CheckStatus,
     evidence: String
 });
-wire!(Finding {severity:Severity, scope:FindingScope, title:String, detail:String, file:Option<String>, line:Option<u32>});
+wire!(Finding {severity:Severity, scope:FindingScope, title:String, detail:String, file:Option<String>, line:Option<u32>, task_key:Option<String>});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -128,7 +128,56 @@ pub enum Outcome {
 wire!(ReviewGuide {
     same_family_warning: bool
 });
-wire!(RoleResult {item:String, role:String, attempt_id:String, generation:u64, outcome:Outcome, summary:String, tasks_done:Vec<String>, artifacts:Vec<Artifact>, checks:Vec<Check>, findings:Vec<Finding>, next:Option<String>, review_guide:Option<ReviewGuide>});
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoleDetails {
+    Research {
+        markdown: String,
+    },
+    Plan {
+        markdown: String,
+        acceptance_criteria: Vec<String>,
+        affected_files: Vec<String>,
+    },
+    Security {
+        commit: String,
+        passed: bool,
+        criteria: Vec<String>,
+    },
+    Docs {
+        body: String,
+        updates: Option<Vec<DocUpdate>>,
+    },
+    Strategy {
+        action: String,
+        owner: Option<String>,
+        task_key: Option<String>,
+        reason: String,
+    },
+}
+wire!(DocUpdate {
+    path: String,
+    content: String
+});
+wire!(RoleCall {
+    request: Dispatch,
+    attempt_id: String,
+    prompt: String
+});
+wire!(WorkflowContext { item: String });
+wire!(WorkflowPr {
+    item: String,
+    thread_id: String,
+    interrupt_id: String,
+    idempotency_key: String
+});
+wire!(StoreArtifact {
+    item: String,
+    attempt_id: String,
+    kind: String,
+    content: String
+});
+wire!(RoleResult {item:String, role:String, attempt_id:String, generation:u64, outcome:Outcome, summary:String, tasks_done:Vec<String>, artifacts:Vec<Artifact>, checks:Vec<Check>, findings:Vec<Finding>, next:Option<String>, review_guide:Option<ReviewGuide>, details:Option<RoleDetails>});
 wire!(LlmContext {item:String, role:String, generation:u64, attempt_id:Option<String>, idempotency_key:String});
 /// Schema roots include every request and response, not just the graph entrypoints.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -150,6 +199,10 @@ pub enum Contract {
     FileProposal(FileProposal),
     ProjectEventAck(EventAck),
     Llm(LlmContext),
+    RoleCall(RoleCall),
+    WorkflowContext(WorkflowContext),
+    WorkflowPr(WorkflowPr),
+    StoreArtifact(StoreArtifact),
 }
 pub fn schema() -> String {
     format!(

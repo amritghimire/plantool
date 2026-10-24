@@ -5,3 +5,6 @@ pub mod commands;
 pub mod gates;
 pub mod setup;
 pub mod sync;
+
+pub mod git_ops;
+pub mod lifecycle;

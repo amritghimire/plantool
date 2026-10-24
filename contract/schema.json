@@ -290,6 +290,78 @@
           ]
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/RoleCall"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "role_call"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/WorkflowContext"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "workflow_context"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/WorkflowPr"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "workflow_pr"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/definitions/StoreArtifact"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "store_artifact"
+          ]
+        }
+      }
     }
   ],
   "definitions": {
@@ -421,6 +493,22 @@
       },
       "additionalProperties": false
     },
+    "DocUpdate": {
+      "type": "object",
+      "required": [
+        "content",
+        "path"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "EventAck": {
       "type": "object",
       "required": [
@@ -496,6 +584,12 @@
         },
         "severity": {
           "$ref": "#/definitions/Severity"
+        },
+        "task_key": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "title": {
           "type": "string"
@@ -750,6 +844,175 @@
       },
       "additionalProperties": false
     },
+    "RoleCall": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "prompt",
+        "request"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/Dispatch"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RoleDetails": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "markdown"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "research"
+              ]
+            },
+            "markdown": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "acceptance_criteria",
+            "affected_files",
+            "kind",
+            "markdown"
+          ],
+          "properties": {
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "affected_files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "plan"
+              ]
+            },
+            "markdown": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "commit",
+            "criteria",
+            "kind",
+            "passed"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string"
+            },
+            "criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "security"
+              ]
+            },
+            "passed": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "body",
+            "kind"
+          ],
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "docs"
+              ]
+            },
+            "updates": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/DocUpdate"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "strategy"
+              ]
+            },
+            "owner": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "task_key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "RoleResult": {
       "type": "object",
       "required": [
@@ -779,6 +1042,16 @@
           "items": {
             "$ref": "#/definitions/Check"
           }
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RoleDetails"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "findings": {
           "type": "array",
@@ -891,6 +1164,66 @@
         },
         "result": true,
         "state": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreArtifact": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "content",
+        "item",
+        "kind"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowContext": {
+      "type": "object",
+      "required": [
+        "item"
+      ],
+      "properties": {
+        "item": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowPr": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "interrupt_id",
+        "item",
+        "thread_id"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "interrupt_id": {
+          "type": "string"
+        },
+        "item": {
           "type": "string"
         },
         "thread_id": {

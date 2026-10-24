@@ -11,16 +11,16 @@ async def fake_daemon(request):
 async def test_version_auth_replay_restart_and_stale_checkpoint(tmp_path):
     token="test-token-"*5
     app=create_app(tmp_path,token,httpx.MockTransport(fake_daemon))
-    headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"2"}
+    headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"3"}
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url="http://localhost",headers=headers) as client:
             assert (await client.get("/internal/v1/health",headers={"x-plantool-worker-token":"forged"})).status_code==403
             assert (await client.get("/internal/v1/health",headers={"x-plantool-contract-version":"99"})).status_code==409
-            start={"thread_id":"p:i","graph":"work_item","input":{},"idempotency_key":"start","contract_version":2,"graph_version":1}
+            start={"thread_id":"p:i","graph":"work_item","input":{},"idempotency_key":"start","contract_version":3,"graph_version":2}
             first=(await client.post("/internal/v1/start",json=start)).json()
             assert first["state"]=="interrupted"
             assert (await client.post("/internal/v1/start",json=start)).json()==first
-            resume={"thread_id":"p:i","interrupt_id":first["interrupt_id"],"value":{"outcome":"done"},"idempotency_key":"resume","contract_version":2,"graph_version":1}
+            resume={"thread_id":"p:i","interrupt_id":first["interrupt_id"],"value":{"outcome":"done"},"idempotency_key":"resume","contract_version":3,"graph_version":2}
             done=(await client.post("/internal/v1/resume",json=resume)).json()
             assert done["state"]=="completed"
             assert (await client.post("/internal/v1/resume",json=resume)).json()==done

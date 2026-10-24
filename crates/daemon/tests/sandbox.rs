@@ -332,3 +332,58 @@ async fn eos_proxy_roles_cannot_read_legacy_provider_keys_and_worker_has_no_mode
         .success());
     assert!(!worker.temp_dir().join("codex/auth.json").exists());
 }
+
+#[tokio::test]
+async fn qa_writes_tests_and_git_objects_but_not_production_or_git_configuration() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.paths.worktree.join("tests")).unwrap();
+    std::fs::create_dir_all(f.paths.worktree.join("src")).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "test"],
+        vec!["config", "user.email", "test@localhost"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&f.paths.worktree)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let qa = f.sandbox(Role::EosQa);
+    assert!(f
+        .command(&qa, "/bin/sh", &["-c", "printf test > tests/qa.rs"])
+        .await
+        .status
+        .success());
+    assert!(!f
+        .command(&qa, "/bin/sh", &["-c", "printf bad > src/contested.rs"])
+        .await
+        .status
+        .success());
+    assert!(!f
+        .command(
+            &qa,
+            "/usr/bin/git",
+            &["config", "credential.helper", "malicious"]
+        )
+        .await
+        .status
+        .success());
+    assert!(f
+        .command(&qa, "/usr/bin/git", &["add", "tests/qa.rs"])
+        .await
+        .status
+        .success());
+    assert!(f
+        .command(&qa, "/usr/bin/git", &["commit", "-qm", "test-only change"])
+        .await
+        .status
+        .success());
+    let reviewer = f.sandbox(Role::EosReviewer);
+    assert!(!f
+        .command(&reviewer, "/bin/sh", &["-c", "printf bad > tests/qa.rs"])
+        .await
+        .status
+        .success());
+}

@@ -73,6 +73,22 @@ class Type15(str, Enum):
     llm = 'llm'
 
 
+class Type16(str, Enum):
+    role_call = 'role_call'
+
+
+class Type17(str, Enum):
+    workflow_context = 'workflow_context'
+
+
+class Type18(str, Enum):
+    workflow_pr = 'workflow_pr'
+
+
+class Type19(str, Enum):
+    store_artifact = 'store_artifact'
+
+
 class Artifact(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -117,6 +133,14 @@ class DispatchReply(BaseModel):
     )
     attempt_id: str
     generation: conint(ge=0)
+
+
+class DocUpdate(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    content: str
+    path: str
 
 
 class EventAck(BaseModel):
@@ -242,6 +266,89 @@ class ReviewGuide(BaseModel):
     same_family_warning: bool
 
 
+class RoleCall(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    attempt_id: str
+    prompt: str
+    request: Dispatch
+
+
+class Kind(str, Enum):
+    research = 'research'
+
+
+class RoleDetails1(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    kind: Kind
+    markdown: str
+
+
+class Kind1(str, Enum):
+    plan = 'plan'
+
+
+class RoleDetails2(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    acceptance_criteria: list[str]
+    affected_files: list[str]
+    kind: Kind1
+    markdown: str
+
+
+class Kind2(str, Enum):
+    security = 'security'
+
+
+class RoleDetails3(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    commit: str
+    criteria: list[str]
+    kind: Kind2
+    passed: bool
+
+
+class Kind3(str, Enum):
+    docs = 'docs'
+
+
+class RoleDetails4(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    body: str
+    kind: Kind3
+    updates: list[DocUpdate] | None = None
+
+
+class Kind4(str, Enum):
+    strategy = 'strategy'
+
+
+class RoleDetails5(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    action: str
+    kind: Kind4
+    owner: str | None = None
+    reason: str
+    task_key: str | None = None
+
+
+class RoleDetails(
+    RootModel[RoleDetails1 | RoleDetails2 | RoleDetails3 | RoleDetails4 | RoleDetails5]
+):
+    root: RoleDetails1 | RoleDetails2 | RoleDetails3 | RoleDetails4 | RoleDetails5
+
+
 class Severity(str, Enum):
     high = 'high'
     medium = 'medium'
@@ -268,6 +375,33 @@ class Status(BaseModel):
     interrupt_id: str | None = None
     result: Any | None = None
     state: str
+    thread_id: str
+
+
+class StoreArtifact(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    attempt_id: str
+    content: str
+    item: str
+    kind: str
+
+
+class WorkflowContext(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    item: str
+
+
+class WorkflowPr(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    idempotency_key: str
+    interrupt_id: str
+    item: str
     thread_id: str
 
 
@@ -346,6 +480,26 @@ class Contract16(BaseModel):
     type: Type15
 
 
+class Contract17(BaseModel):
+    body: RoleCall
+    type: Type16
+
+
+class Contract18(BaseModel):
+    body: WorkflowContext
+    type: Type17
+
+
+class Contract19(BaseModel):
+    body: WorkflowPr
+    type: Type18
+
+
+class Contract20(BaseModel):
+    body: StoreArtifact
+    type: Type19
+
+
 class Check(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -364,6 +518,7 @@ class Finding(BaseModel):
     line: conint(ge=0) | None = None
     scope: FindingScope
     severity: Severity
+    task_key: str | None = None
     title: str
 
 
@@ -374,6 +529,7 @@ class RoleResult(BaseModel):
     artifacts: list[Artifact]
     attempt_id: str
     checks: list[Check]
+    details: RoleDetails | None = None
     findings: list[Finding]
     generation: conint(ge=0)
     item: str
@@ -408,6 +564,10 @@ class Contract(
         | Contract14
         | Contract15
         | Contract16
+        | Contract17
+        | Contract18
+        | Contract19
+        | Contract20
     ]
 ):
     root: (
@@ -427,6 +587,10 @@ class Contract(
         | Contract14
         | Contract15
         | Contract16
+        | Contract17
+        | Contract18
+        | Contract19
+        | Contract20
     ) = Field(
         ...,
         description='Schema roots include every request and response, not just the graph entrypoints.',

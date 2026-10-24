@@ -461,3 +461,35 @@ The opt-in real playground suite and local macOS instructions are in
 [tests/e2e_github/README.md](tests/e2e_github/README.md). It creates and closes a disposable
 issue, checks App publication/forged approval rejection/real owner approval/replay, and
 leaves comments as evidence. It does not exercise the deferred PR workflow or call models.
+
+### Engineering OS work-item agents
+
+New open issues by allowlisted human authors, created after GitHub project setup, start the
+work-item graph directly. This phase adds no triage, sprint scheduler or workspace chat.
+The graph dispatches each role, interrupts and resumes with a daemon-validated result:
+CTO research → PM keyed plan → CTO review → GitHub plan gate → approved coding areas →
+conditional DevOps → QA → Reviewer security pass → Docs → App PR and current-head PR gate.
+In-scope defects return to their owning task's role, with three retries per task and at most
+two Supervisor rounds. Replanning creates a new immutable plan/hash; escalation freezes
+side effects. Settings → Engineering OS shows work-item state, failures and owner attention.
+
+Coding attempts use private checkouts. Reviewer is read-only; QA writes tests only. Agent
+Git configuration/hooks are protected, and the dispatcher checks commits, scope and owned
+artifact evidence. Store test output in `$TMPDIR`, run `plantool attempt artifact --file <log>`,
+and cite the returned artifact:// reference in `plantool attempt report --file <result.json>`.
+`plantool task done <item> T1` records approved task progress. Docs may propose scoped README/CHANGELOG updates; the daemon applies them and reruns
+QA and Reviewer for the resulting head. No role receives App credentials
+or authority to publish, approve or merge. Skills now live entirely under `agents/skills/`.
+
+The daemon supplies commit trailers and App transport credentials through an inherited
+file descriptor, never a URL/argv/environment value. It builds the PR review guide from
+Docs plus recorded models, same-family warnings and filed proposals. `plantool/policy`
+checks the current plan/tasks, QA/security review and owner approval for the exact PR head.
+A new head resets the gate. Main movement rebases and reruns QA/Reviewer; conflicts return
+to implementation. Merge uses `sha=<approved head>` and a permitted repository method;
+GitHub enforces branch protection. Refusals and uncertain outcomes pause for owner review.
+
+The graph/contract versions advance to 2/3; older checkpoint versions are refused rather
+than silently resumed. Personal continues without Python, worker setup or GitHub credentials.
+See [the native two-approval playground guide](tests/e2e_github/PHASE3_AGENT.md) for later
+installation testing, and [evals](evals/README.md) for five small tasks and offline chain comparison.

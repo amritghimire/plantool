@@ -15,13 +15,14 @@ from fastapi import FastAPI, HTTPException, Request
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command, interrupt
-from .models import Start, Resume, Cancel, Dispatch
+from .models import Start, Resume, Cancel, Dispatch, RoleCall, RoleResult
 
 VERSIONS = json.loads(Path(__file__).with_name("versions.json").read_text())
 
 class State(TypedDict, total=False):
     input: dict[str, Any]
     result: Any
+    workflow: dict[str, Any]
 
 class Store:
     def __init__(self, path: Path):
@@ -77,6 +78,9 @@ def create_app(home: Path, token: str, transport=None):
                 raise RuntimeError("Daemon contract_version/graph_version mismatch")
             async with AsyncSqliteSaver.from_conn_string(str(store.path)) as saver:
                 async def bridge(state: State):
+                    if state.get("workflow"):
+                        from .work_item import build_step
+                        return await build_step(daemon,store,state)
                     payload = state.get("input", {})
                     dispatched = None
                     if payload.get("dispatch"):
@@ -90,8 +94,9 @@ def create_app(home: Path, token: str, transport=None):
                 graph = StateGraph(State)
                 graph.add_node("bridge",bridge)
                 graph.add_edge(START,"bridge")
-                graph.add_edge("bridge",END)
+                graph.add_conditional_edges("bridge",lambda s: "bridge" if s.get("workflow") and s["workflow"]["step"] not in ("merged","escalated") else END)
                 app.state.graph = graph.compile(checkpointer=saver)
+                app.state.daemon = daemon
                 yield
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     @app.middleware("http")
@@ -120,44 +125,86 @@ def create_app(home: Path, token: str, transport=None):
     async def start(request: Start):
         versions(request)
         async with lock(request.thread_id):
-            receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
+            receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
             if current and current["state"] == "starting":
-                return store.save(request.thread_id,"recovery_needed",None,{"error":"Start was interrupted before its checkpoint was acknowledged"},request.idempotency_key)
-            if current: return store.save(request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
+                return await asyncio.to_thread(store.save,request.thread_id,"recovery_needed",None,{"error":"Start was interrupted before its checkpoint was acknowledged"},request.idempotency_key)
+            if current: return await asyncio.to_thread(store.save,request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
             identifier = str(uuid4())
             payload = dict(request.input or {})
             if payload.get("dispatch"):
                 payload["dispatch"] = {**payload["dispatch"],"thread_id":request.thread_id,"interrupt_id":identifier}
             # Record identity before dispatch; a retry replays the same request.
-            with store.db() as db:
-                db.execute("INSERT INTO bridge_threads VALUES(?,?,'starting',?,NULL)",(request.thread_id,VERSIONS["graph_version"],identifier))
-            await app.state.graph.ainvoke({"input":payload},{"configurable":{"thread_id":request.thread_id}})
-            return store.save(request.thread_id,"interrupted",identifier,None,request.idempotency_key)
+            def record_start():
+                with store.db() as db:db.execute("INSERT INTO bridge_threads VALUES(?,?,'starting',?,NULL)",(request.thread_id,VERSIONS["graph_version"],identifier))
+            await asyncio.to_thread(record_start)
+            initial={"input":payload}
+            if payload.get("workflow"):
+                context=await app.state.daemon.post("/internal/v1/workflow_context",json={"item":request.thread_id});context.raise_for_status();facts=context.json()
+                initial["workflow"]={**payload["workflow"],"policy_version":facts["policy_version"]}
+            output=await app.state.graph.ainvoke(initial,{"configurable":{"thread_id":request.thread_id}})
+            identifier=store.thread(request.thread_id)["interrupt_id"]
+            return await asyncio.to_thread(store.save,request.thread_id,"interrupted",identifier,output.get("result"),request.idempotency_key)
     @app.post("/internal/v1/resume")
     async def resume(request: Resume):
         versions(request)
         async with lock(request.thread_id):
-            receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
+            receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
             if not current or current["state"] != "interrupted" or current["interrupt_id"] != request.interrupt_id:
                 raise HTTPException(409,"Stale interrupt or cancelled graph")
             snapshot = await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
             if not snapshot.next and "result" in snapshot.values:
-                return store.save(request.thread_id,"completed",None,snapshot.values["result"],request.idempotency_key)
+                return await asyncio.to_thread(store.save,request.thread_id,"completed",None,snapshot.values["result"],request.idempotency_key)
             result = await app.state.graph.ainvoke(Command(resume=request.value),{"configurable":{"thread_id":request.thread_id}})
-            return store.save(request.thread_id,"completed",None,result.get("result"),request.idempotency_key)
+            snapshot=await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
+            waiting=bool(snapshot.next)
+            identifier=store.thread(request.thread_id)["interrupt_id"] if waiting else None
+            return await asyncio.to_thread(store.save,request.thread_id,"interrupted" if waiting else "completed",identifier,result.get("result"),request.idempotency_key)
+    @app.post("/internal/v1/role")
+    async def role(request: RoleCall):
+        key="role:"+request.attempt_id
+        async with lock(key):
+            receipt=await asyncio.to_thread(store.receipt,key,request.model_dump(mode="json"))
+            if receipt is not None: return receipt
+            daemon=app.state.daemon
+            messages=[{"role":"system","content":"Return only the typed RoleResult JSON. Never approve or publish."},{"role":"user","content":request.prompt}]
+            # This is a separate role invocation, not the interrupting workflow node.
+            async def call_role(state):
+                tools=[{"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":{arg:{"type":"string"}},"required":[arg],"additionalProperties":False}}} for name,arg,description in [("read_repo_file","path","Read a regular default-branch file; never-sent files are denied"),("read_artifact","sha256","Read an item-bound immutable artifact")]]
+                for index in range(12):
+                    response=await daemon.post("/v1/chat/completions",json={"plantool":{"item":request.request.item,"role":request.request.role,"generation":request.request.generation,"attempt_id":request.attempt_id,"idempotency_key":f"{key}:{index}"},"messages":messages,"tools":tools,"stream":False,"response_format":{"type":"json_schema","json_schema":{"name":"role_result","schema":RoleResult.model_json_schema()}}})
+                    response.raise_for_status();message=response.json()["choices"][0]["message"]
+                    if message.get("tool_calls"):
+                        messages.append(message)
+                        for call in message["tool_calls"]:
+                            name=call["function"]["name"]
+                            if name not in ("read_repo_file","read_artifact"):raise ValueError("Unknown role capability")
+                            arguments=json.loads(call["function"]["arguments"])
+                            arguments["item"]=request.request.item
+                            reply=await daemon.post(f"/internal/v1/{name}",json=arguments);reply.raise_for_status()
+                            messages.append({"role":"tool","tool_call_id":call["id"],"content":json.dumps(reply.json())})
+                        continue
+                    data=json.loads(message["content"]);data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
+                    return {"result":RoleResult.model_validate(data).model_dump(mode="json")}
+                raise ValueError("Role tool/call budget exhausted")
+            graph=StateGraph(State);graph.add_node("role",call_role);graph.add_edge(START,"role");graph.add_edge("role",END)
+            result=(await graph.compile().ainvoke({}))["result"]
+            def record_role():
+                with store.db() as db:db.execute("UPDATE bridge_inbox SET result=? WHERE id=?",(json.dumps(result),key))
+            await asyncio.to_thread(record_role)
+            return result
     @app.post("/internal/v1/cancel")
     async def cancel(request: Cancel):
         async with lock(request.thread_id):
-            receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
+            receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
             if current and current["state"] in ("completed","cancelled"):
-                return store.save(request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
-            return store.save(request.thread_id,"cancelled",None,None,request.idempotency_key)
+                return await asyncio.to_thread(store.save,request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
+            return await asyncio.to_thread(store.save,request.thread_id,"cancelled",None,None,request.idempotency_key)
     return app
 
 # Token is read from the inherited descriptor, never argv or an environment value.

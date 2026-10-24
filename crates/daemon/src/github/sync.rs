@@ -260,6 +260,7 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         "issues",
     )
     .await?;
+    super::lifecycle::start_new(home, api, repo, &issues).await?;
     // Recover a successful publication before consuming approvals posted while
     // the daemon was down. Global comment cursors may already be past them.
     gates::publish(home, api, repo).await?;
@@ -369,6 +370,7 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         database::open(home)?.execute("INSERT INTO github_objects VALUES(?1,?2,?3) ON CONFLICT(resource,object_id) DO UPDATE SET body_json=excluded.body_json",params![format!("{}:pr_state",repo.repo_id),n.to_string(),state.to_string()])?;
     }
     gates::publish(home, api, repo).await?;
+    super::lifecycle::process(home, api, repo, &super::git_ops::AppGit).await?;
     database::open(home)?.execute(
         "UPDATE github_repositories SET last_sync_at=?2,last_error=NULL WHERE project_id=?1",
         params![repo.project, plantool_core::now()],

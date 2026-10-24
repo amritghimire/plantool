@@ -4,6 +4,13 @@ description: Write a technical implementation plan for a plantool session and re
 user-invocable: true
 ---
 
+## Engineering OS dispatch
+
+Engineering OS PM: return typed Plan details with T<n>: [area] tasks, criteria and explicit literal paths or directory/** scope. Do not wait in a Personal session; the graph requests the GitHub gate.
+
+## Personal workflow
+
+
 # Plan (plantool)
 
 Session: $ARGUMENTS

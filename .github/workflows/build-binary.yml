@@ -28,6 +28,7 @@ jobs:
       - run: scripts/generate-contract.sh
       - run: git diff --exit-code -- contract/schema.json worker/plantool_worker/models.py worker/plantool_worker/versions.json
       - run: uv run --project worker --frozen pytest -c worker/pyproject.toml worker/tests
+      - run: uv run --python 3.12 python evals/compare_chains.py --self-test
 
   nix-check:
     strategy:
