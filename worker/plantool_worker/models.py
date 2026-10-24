@@ -276,83 +276,102 @@ class RoleCall(BaseModel):
 
 
 class Kind(str, Enum):
-    research = 'research'
+    discussion = 'discussion'
 
 
 class RoleDetails1(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
+    body: str
+    decision: str | None = None
     kind: Kind
-    markdown: str
 
 
 class Kind1(str, Enum):
-    plan = 'plan'
-
-
-class RoleDetails2(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    acceptance_criteria: list[str]
-    affected_files: list[str]
-    kind: Kind1
-    markdown: str
+    sprint = 'sprint'
 
 
 class Kind2(str, Enum):
-    security = 'security'
+    research = 'research'
 
 
 class RoleDetails3(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    commit: str
-    criteria: list[str]
     kind: Kind2
-    passed: bool
+    markdown: str
 
 
 class Kind3(str, Enum):
-    docs = 'docs'
+    plan = 'plan'
 
 
 class RoleDetails4(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    body: str
+    acceptance_criteria: list[str]
+    affected_files: list[str]
     kind: Kind3
-    updates: list[DocUpdate] | None = None
+    markdown: str
 
 
 class Kind4(str, Enum):
-    strategy = 'strategy'
+    security = 'security'
 
 
 class RoleDetails5(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    action: str
+    commit: str
+    criteria: list[str]
     kind: Kind4
+    passed: bool
+
+
+class Kind5(str, Enum):
+    docs = 'docs'
+
+
+class RoleDetails6(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    body: str
+    kind: Kind5
+    updates: list[DocUpdate] | None = None
+
+
+class Kind6(str, Enum):
+    strategy = 'strategy'
+
+
+class RoleDetails7(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    action: str
+    kind: Kind6
     owner: str | None = None
     reason: str
     task_key: str | None = None
-
-
-class RoleDetails(
-    RootModel[RoleDetails1 | RoleDetails2 | RoleDetails3 | RoleDetails4 | RoleDetails5]
-):
-    root: RoleDetails1 | RoleDetails2 | RoleDetails3 | RoleDetails4 | RoleDetails5
 
 
 class Severity(str, Enum):
     high = 'high'
     medium = 'medium'
     low = 'low'
+
+
+class SprintChoice(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    estimate: str
+    item: str
 
 
 class Start(BaseModel):
@@ -520,6 +539,37 @@ class Finding(BaseModel):
     severity: Severity
     task_key: str | None = None
     title: str
+
+
+class RoleDetails2(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    items: list[SprintChoice]
+    kind: Kind1
+    notes: str
+
+
+class RoleDetails(
+    RootModel[
+        RoleDetails1
+        | RoleDetails2
+        | RoleDetails3
+        | RoleDetails4
+        | RoleDetails5
+        | RoleDetails6
+        | RoleDetails7
+    ]
+):
+    root: (
+        RoleDetails1
+        | RoleDetails2
+        | RoleDetails3
+        | RoleDetails4
+        | RoleDetails5
+        | RoleDetails6
+        | RoleDetails7
+    )
 
 
 class RoleResult(BaseModel):

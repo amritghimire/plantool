@@ -35,20 +35,29 @@ pub fn assemble(
 ) -> anyhow::Result<String> {
     let db = crate::database::open(home)?;
     let (_, root) = crate::dispatcher::item(&db, &request.item)?;
-    let skills: &[&str] = match request.role.as_str() {
-        "cto" => &["research", "architecture", "plan-review"],
-        "pm" => &["plan", "discuss"],
-        "backend" => &["implement", "test-first", "api-contract", "report-progress"],
-        "frontend" => &["implement", "test-first", "ui-check", "report-progress"],
-        "devops" => &["ci", "deps"],
-        "qa" => &["qa", "acceptance-check"],
-        "reviewer" => &["code-review", "security-review"],
-        "docs" => &["review-guide", "docs-update"],
-        "supervisor" => &["supervise", "escalate"],
-        _ => anyhow::bail!("Unknown role"),
+    let discussion = request.inputs["step"] == "discussion";
+    let skills: &[&str] = if discussion {
+        &["discuss"]
+    } else {
+        match request.role.as_str() {
+            "cto" => &["research", "architecture", "plan-review"],
+            "pm" => &["plan", "discuss"],
+            "backend" => &["implement", "test-first", "api-contract", "report-progress"],
+            "frontend" => &["implement", "test-first", "ui-check", "report-progress"],
+            "devops" => &["ci", "deps"],
+            "qa" => &["qa", "acceptance-check"],
+            "reviewer" => &["code-review", "security-review"],
+            "docs" => &["review-guide", "docs-update"],
+            "supervisor" => &["supervise", "escalate"],
+            _ => anyhow::bail!("Unknown role"),
+        }
     };
     let mut text = embedded("base.md")?;
-    text.push_str(&embedded(&format!("roles/{}.md", request.role))?);
+    if discussion {
+        text.push_str("\nDISCUSSION TURN ONLY: use supplied read tools; return details {kind:discussion,body,decision}. No implementation, task completion, execution claims or Personal CLI. Follow the discussion round/speaker facts in context. After round 3 the designated PM/Supervisor must return a nonempty decision summary; earlier turns return decision null. A discussion decision is context, never an owner approval.\n");
+    } else {
+        text.push_str(&embedded(&format!("roles/{}.md", request.role))?);
+    }
     for skill in skills {
         text.push_str(&embedded(&format!("skills/{skill}/SKILL.md"))?)
     }
@@ -71,6 +80,17 @@ pub fn assemble(
     }
     let mut q=db.prepare("SELECT role,outcome_json FROM attempts WHERE item_id=?1 AND outcome_json IS NOT NULL ORDER BY generation DESC LIMIT 12")?;
     let prior=q.query_map([&request.item],|r|Ok(serde_json::json!({"role":r.get::<_,String>(0)?,"result":serde_json::from_str::<serde_json::Value>(&r.get::<_,String>(1)?).unwrap_or(serde_json::Value::Null)})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut q=db.prepare("SELECT sender_role,body FROM messages WHERE thread_id IN(SELECT id FROM threads WHERE item_id=?1 OR (project_id=?2 AND channel_id IS NOT NULL)) ORDER BY created_at DESC,rowid DESC LIMIT 32")?;
+    let project = crate::dispatcher::item(&db, &request.item)?.0;
+    let messages = q
+        .query_map(rusqlite::params![request.item, project], |r| {
+            Ok(serde_json::json!({"role":r.get::<_,String>(0)?,"body":r.get::<_,String>(1)?}))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    text.push_str(&format!(
+        "\n<untrusted-workspace-context>{}</untrusted-workspace-context>\n",
+        serde_json::to_string(&messages)?
+    ));
     text.push_str(&format!(
         "\n<untrusted-prior-results>{}</untrusted-prior-results>\n",
         serde_json::to_string(&prior)?

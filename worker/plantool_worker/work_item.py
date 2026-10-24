@@ -35,7 +35,7 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         else:
             state["step"] = owner
         return state
-    if step == "research": state["step"] = "plan"
+    if step == "research": state["step"] = "discussion" if state.get("discuss_enabled") else "plan"
     elif step == "plan": state["step"] = "plan_review"
     elif step == "plan_review": state["step"] = "plan_gate"
     elif step == "backend": state["step"] = "frontend" if "frontend" in state.get("areas", []) else ("devops" if state.get("infra_changed") else "qa")
@@ -68,16 +68,22 @@ async def build_step(daemon, store, state):
     import asyncio
     await asyncio.to_thread(waiting)
     context = {"item":item,"thread_id":item,"interrupt_id":identity,"idempotency_key":f"node:{identity}"}
-    if step in STEPS:
-        role = STEPS[step]
+    if step in STEPS or step=="discussion":
+        role = workflow["discussion"]["speaker"] if step=="discussion" else STEPS[step]
         request = Dispatch(item=item,role=role,generation=workflow.get("generation",0)+1,
             inputs={"step":step},plan_sha=workflow.get("plan_sha", ""),
-            policy_version=workflow["policy_version"],capability="write" if role in {"backend","frontend","devops"} else "tests" if role=="qa" else "read",
+            policy_version=workflow["policy_version"],capability="read" if step=="discussion" else "write" if role in {"backend","frontend","devops"} else "tests" if role=="qa" else "read",
             thread_id=item,interrupt_id=identity,idempotency_key=context["idempotency_key"])
         response=await daemon.post("/internal/v1/request_dispatch",json=request.model_dump(mode="json"));response.raise_for_status()
         result=RoleResult.model_validate(interrupt({"attempt":response.json(),"interrupt_id":identity})).model_dump(mode="json")
         facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();facts=facts.json()
-        for key in ["areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
+        if step=="discussion":
+            from .discussion import advance
+            updated=advance(workflow,result)
+            if updated["step"]!=facts["state"]["step"] or (updated["step"]=="discussion" and updated["discussion"]!=facts["state"]["discussion"]):raise RuntimeError("Discussion projection mismatch")
+            updated.update(generation=facts["state"]["generation"],sequence=facts["state"]["sequence"],policy_version=facts["policy_version"])
+            return {"workflow":updated,"result":updated}
+        for key in ["discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
             if key in facts["state"]: workflow[key]=facts["state"][key]
         updated=route(workflow,result)
         if step in {"backend","frontend"} and updated["step"]=="qa" and workflow.get("infra_changed"): updated["step"]="devops"

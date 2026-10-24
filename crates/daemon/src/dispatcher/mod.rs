@@ -29,7 +29,11 @@ pub fn admit(
         "Unknown role"
     );
     let managed = crate::workflow::state(&database::open(home)?, &request.item)?.is_some();
-    let expected = if managed {
+    let discussion = crate::workflow::state(&database::open(home)?, &request.item)?
+        .is_some_and(|s| s["step"] == "discussion");
+    let expected = if discussion {
+        "read"
+    } else if managed {
         crate::workflow::capability(role)
     } else if ["backend", "frontend", "devops", "docs"].contains(&role) {
         "write"

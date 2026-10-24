@@ -214,3 +214,5 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let _ = store::remove_daemon_info(&config.home);
     Ok(())
 }
+
+pub mod workspace;

@@ -869,6 +869,57 @@
         {
           "type": "object",
           "required": [
+            "body",
+            "kind"
+          ],
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "decision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "discussion"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "items",
+            "kind",
+            "notes"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/SprintChoice"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "sprint"
+              ]
+            },
+            "notes": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
             "kind",
             "markdown"
           ],
@@ -1108,6 +1159,22 @@
         "medium",
         "low"
       ]
+    },
+    "SprintChoice": {
+      "type": "object",
+      "required": [
+        "estimate",
+        "item"
+      ],
+      "properties": {
+        "estimate": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "Start": {
       "type": "object",

@@ -220,6 +220,8 @@ async fn object(
     Ok(response.body)
 }
 pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
+    crate::workspace::ensure_channels(&database::open(home)?, &repo.project)?;
+
     let base = repo.path()?;
     // Revalidate repository identity and visibility on every sync, including 304s.
     let metadata = object(home, api, repo, &base).await?;

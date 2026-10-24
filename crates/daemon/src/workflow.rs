@@ -53,6 +53,16 @@ pub fn check(db: &rusqlite::Connection, request: &Dispatch) -> anyhow::Result<bo
         "Item is frozen; owner intervention required"
     );
     let step = s["step"].as_str().context("Missing graph step")?;
+    if step == "discussion" {
+        ensure!(
+            request.role == s["discussion"]["speaker"]
+                && request.inputs["step"] == "discussion"
+                && request.capability == "read"
+                && request.plan_sha == s["plan_sha"].as_str().unwrap_or(""),
+            "Discussion scope/turn mismatch"
+        );
+        return Ok(true);
+    }
     ensure!(
         role(step) == request.role && request.inputs["step"] == step,
         "Graph step/role mismatch"
@@ -91,12 +101,21 @@ pub fn start(
     if exists {
         return Ok(item);
     }
-    let state = json!({"item":item,"step":"research","generation":0,"sequence":0,"plan_sha":"","approved":false,"areas":[],"owners":{},"retries":{},"supervisor_rounds":0,"frozen":false,"issue_body":body});
+    let discussion: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM channels WHERE project_id=?1)",
+        [project],
+        |r| r.get(0),
+    )?;
+    let mut state = json!({"item":item,"step":"research","generation":0,"sequence":0,"plan_sha":"","approved":false,"areas":[],"owners":{},"retries":{},"supervisor_rounds":0,"frozen":false,"issue_body":body});
+    state["discuss_enabled"] = json!(discussion);
     tx.execute("INSERT INTO work_items(id,project_id,kind,title,github_issue_number,state,created_at,repo_slug,slug,session_json) VALUES(?1,?2,'eos',?3,?4,'research',?5,?2,?6,'{}')",params![item,project,title,issue,plantool_core::now(),format!("issue-{issue}")])?;
     tx.execute(
         "INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES(?1,?2,?3,?3)",
         params![item, state.to_string(), base],
     )?;
+    if discussion {
+        crate::workspace::item_thread(&tx, &item)?;
+    }
     let start = plantool_contract::Start {
         thread_id: item.clone(),
         graph: plantool_contract::Graph::WorkItem,
@@ -173,6 +192,12 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
         return Ok(());
     };
     ensure!(s["frozen"] != true, "Item is frozen");
+    if s["step"] == "discussion" {
+        if result.outcome == Outcome::Done {
+            crate::workspace::validate(&s, result)?;
+        }
+        return Ok(());
+    }
     let step = s["step"].as_str().context("Missing step")?;
     ensure!(role(step) == result.role, "Unexpected role result");
     if coding(&result.role) {
@@ -337,6 +362,11 @@ pub fn record(
     let step = s["step"].as_str().unwrap_or("").to_owned();
     s["generation"] = json!(result.generation);
     s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
+    if step == "discussion" {
+        crate::workspace::record(tx, result, &mut s)?;
+        save(tx, &result.item, &s)?;
+        return Ok(());
+    }
     if let Some(commit) = result.artifacts.iter().rev().find(|a| a.kind == "commit") {
         tx.execute(
             "UPDATE workflow_items SET head_sha=?2 WHERE item_id=?1",
@@ -676,6 +706,13 @@ pub fn record(
         .filter(|f| f.scope == plantool_contract::FindingScope::Out)
     {
         proposal(tx, &result.item, &f.title, &f.detail)?;
+    }
+    if step == "research"
+        && result.outcome == Outcome::Done
+        && s["discuss_enabled"] == true
+        && s["step"] == "plan"
+    {
+        crate::workspace::begin(tx, &result.item, &mut s, "plan", &result.summary)?;
     }
     save(tx, &result.item, &s)?;
     database::audit(tx, "daemon", "workflow.projected", &result.item, &s)?;
