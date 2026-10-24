@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import ssl
 from typing import Any, TypedDict
 from uuid import uuid4
 import httpx
@@ -70,7 +71,16 @@ def create_app(home: Path, token: str, transport=None):
     store = Store(home/"worker-state/checkpoints.db")
     @asynccontextmanager
     async def lifespan(app):
-        async with httpx.AsyncClient(transport=transport or httpx.AsyncHTTPTransport(uds=str(home/"run/daemon.sock")), base_url="http://localhost", headers={"x-plantool-run-token":token,"x-plantool-contract-version":str(VERSIONS["contract_version"])}, timeout=60) as daemon:
+        # This client only speaks HTTP over the daemon Unix socket. HTTPX's default
+        # SSL setup reads certifi/cacert.pem even for HTTP, which the worker sandbox
+        # correctly denies. A strict context avoids that unused CA-file read without
+        # disabling certificate verification. Ignore proxy/CA environment settings.
+        daemon_transport = transport if transport is not None else httpx.AsyncHTTPTransport(
+            uds=str(home/"run/daemon.sock"),
+            verify=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+            trust_env=False,
+        )
+        async with httpx.AsyncClient(transport=daemon_transport, trust_env=False, base_url="http://localhost", headers={"x-plantool-run-token":token,"x-plantool-contract-version":str(VERSIONS["contract_version"])}, timeout=60) as daemon:
             # Both processes must agree before a checkpoint or model is touched.
             health = await daemon.get("/internal/v1/health")
             health.raise_for_status()
