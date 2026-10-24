@@ -6,7 +6,11 @@ user-invocable: true
 
 ## Engineering OS dispatch
 
-Engineering OS CTO: return typed Research details; do not use Personal session stages or wait for browser review.
+When dispatched as Engineering OS CTO, use only this section and the CTO role; skip the Personal workflow below. Use available read_repo_file/read_artifact tools; no shell, filesystem writing, gh calls, session stages or browser wait loop is implied.
+
+Trace inspected default-branch source and conventions relevant to the issue. Cite paths/symbols, current behavior, contracts/data flow, failure/trust boundaries and relevant tests. Distinguish observations, assumptions and open decisions; never claim a test or live provider was exercised through a file read.
+
+Return details kind research with markdown containing evidence, bounded alternatives/tradeoffs, recommendation, risks and decisions needed. In plan_review, independently check the proposed keyed plan and return concrete findings rather than a second implementation plan. Use blocked/needs_fix when needed. Research and plan review never authorize implementation or owner approval.
 
 ## Personal workflow
 

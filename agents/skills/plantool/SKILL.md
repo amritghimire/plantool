@@ -5,6 +5,16 @@ description: Drive a plantool session (research → plan → implement) from the
 
 # plantool
 
+## Engineering OS dispatch
+
+If this is a daemon-dispatched Engineering OS role, follow its base/role instructions and
+the Engineering OS branch of the relevant skill. Use only supplied read tools or scoped
+attempt artifact/report/task-done commands. Do not run the Personal session stages, gh
+commands or browser wait loops below. A run token by itself does not identify the mode;
+use the actual dispatch context.
+
+## Personal session reference
+
 plantool shows your research and plan documents in the user's **browser** with inline comments,
 a stage stepper, and a live view of your run. You drive it through the `plantool session …` CLI
 against a local daemon (Unix socket `~/.plantool/run/daemon.sock`, override `PLANTOOL_HOME`; browser `http://localhost:41200`). Everything you write shows
