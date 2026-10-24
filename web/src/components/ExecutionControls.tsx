@@ -16,8 +16,9 @@ export function ExecutionControls() {
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
-  return <div className="toolbar" aria-label="Execution controls">
-    <button className="btn danger" disabled={busy} onClick={() => void act(false)}>Stop All</button>
+  return <div className="execution-controls" aria-label="Execution controls">
+    <button className="btn danger" disabled={busy} onClick={() => void act(false)} title="Stop all projects and Personal runs">Stop All</button>
+    {stopped === false && <span className="execution-state">Execution enabled</span>}
     {stopped && <><span role="status">Execution stopped. Runs stay stopped until you start them again.</span><button className="btn" disabled={busy} onClick={() => void act(true)}>Resume execution with passkey</button></>}
     {error && <p role="alert">{error}</p>}
   </div>;

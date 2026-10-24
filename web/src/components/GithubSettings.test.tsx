@@ -7,7 +7,7 @@ beforeEach(()=>{vi.clearAllMocks();vi.mocked(api.githubSettings).mockResolvedVal
 it("shows numeric approvers and surfaces setup preflight warnings, clearing the key",async()=>{
  vi.mocked(api.configureGithub).mockResolvedValue({preflight:{warnings:["Require at least one approving review"]}});
  render(<GithubSettings/>);fireEvent.click(screen.getByText("GitHub App setup"));await screen.findByText("amritghimire (16842655)");
- for(const [label,value] of [["App ID","1"],["Installation ID","2"],["Repository (owner/name)","o/r"],["Local checkout (absolute path)","/repo"],["RSA private key (PEM; leave empty to reuse Keychain)","test-key"]])fireEvent.change(screen.getByLabelText(label),{target:{value}});
+ for(const [label,value] of [["App ID","1"],["Installation ID","2"],["Repository (owner/name)","o/r"],["Project checkout (absolute path)","/repo"],["RSA private key (PEM; leave empty to reuse Keychain)","test-key"]])fireEvent.change(screen.getByLabelText(label),{target:{value}});
  fireEvent.click(screen.getByRole("button",{name:"Connect with passkey and run preflight"}));await screen.findByText("Require at least one approving review");expect(screen.getByLabelText("RSA private key (PEM; leave empty to reuse Keychain)")).toHaveValue("");
  expect(api.configureGithub).toHaveBeenCalledWith({app_id:1,installation_id:2,repo:"o/r",checkout:"/repo",private_key:"test-key"});
 });

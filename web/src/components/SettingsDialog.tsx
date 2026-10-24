@@ -1,11 +1,3 @@
-import {LoopSettings} from "./LoopSettings";
-import {OversightSettings} from "./OversightSettings";
-import {Workspace} from "./Workspace";
-import {GithubSettings} from "./GithubSettings";
-import {ModelSettings} from "./ModelSettings";
-import {WorkerSettings} from "./WorkerSettings";
-import { RetentionSettings } from "./RetentionSettings";
-import { NeverSentSettings } from "./NeverSentSettings";
 import { DiffToolSettings } from "./DiffToolSettings";
 import { useEffect, useState } from "react";
 import { api } from "../api";
@@ -13,7 +5,7 @@ import type { RepoInfo, WorktreeDirSetting } from "../types";
 
 const GLOBAL = "";
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ onClose, embedded=false }: { onClose: () => void; embedded?:boolean }) {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [scope, setScope] = useState<string>(GLOBAL);
   const [setting, setSetting] = useState<WorktreeDirSetting | null>(null);
@@ -80,11 +72,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
-        <h3>Settings</h3>
+    <div className={embedded?"settings-editor":"modal-backdrop"} onClick={embedded?undefined:onClose}>
+      <div className={embedded?"form-stack":"modal form-stack"} role={embedded?undefined:"dialog"} aria-modal={embedded?undefined:true} aria-label="Settings" onClick={(e) => e.stopPropagation()}>
+        <h2>Personal and worktrees</h2>
         <DiffToolSettings />
-        <NeverSentSettings repos={repos} /><GithubSettings/><Workspace/><OversightSettings/><LoopSettings/><WorkerSettings/><ModelSettings/><RetentionSettings />
         <label>
           Worktree location <span className="muted small">(where session worktrees are created)</span>
           <select value={scope} onChange={(e) => setScope(e.target.value)}>
@@ -113,9 +104,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="composer-actions button-row dialog-actions">
           {saved && <span className="muted small" role="status">Saved</span>}
           <span className="spacer" />
-          <button className="btn ghost" onClick={onClose} type="button">
-            Close
-          </button>
+          {!embedded&&<button className="btn ghost" onClick={onClose} type="button">Close</button>}
           <button className="btn" disabled={busy || !setting || !(scope ? setting.repo?.value : setting.global)} onClick={() => void save(null)} type="button">
             Reset
           </button>

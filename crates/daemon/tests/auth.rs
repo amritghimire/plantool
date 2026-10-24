@@ -1117,3 +1117,102 @@ async fn github_preflight_refresh_requires_a_fresh_assertion() {
         StatusCode::PRECONDITION_REQUIRED
     );
 }
+
+#[tokio::test]
+async fn engineering_activity_and_setup_cursor_are_owner_only_and_cursor_is_not_approval() {
+    let h = harness();
+    let db = plantool_daemon::database::open(&h.state.config.home).unwrap();
+    db.execute("INSERT INTO projects VALUES('ux-project','owner/repo',44,'/checkout','eos','private','now')",[]).unwrap();
+    let progress = json!({"step":"worker","project":"ux-project"});
+    for path in [
+        "/api/engineering-os/projects",
+        "/api/engineering-os/setup",
+        "/api/engineering-os/items/unknown",
+    ] {
+        assert_eq!(
+            raw(&h.app, "GET", path, Value::Null, None, None)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/engineering-os/setup",
+            progress.clone(),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let browser = Browser::register(&h.app, &h.state.config.home).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/engineering-os/setup",
+            progress.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        value(
+            raw(
+                &h.app,
+                "GET",
+                "/api/engineering-os/setup",
+                Value::Null,
+                Some(&browser.cookie),
+                None
+            )
+            .await
+        )
+        .await,
+        progress
+    );
+    let reopened = plantool_daemon::database::open(&h.state.config.home).unwrap();
+    assert_eq!(
+        plantool_daemon::database::get::<Value>(&reopened, "engineering.setup_cursor").unwrap(),
+        Some(progress)
+    );
+    assert_eq!(
+        reopened
+            .query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/engineering-os/setup",
+            json!({"step":"approve","project":"ux-project"}),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/engineering-os/setup",
+            json!({"step":"worker","project":"wrong"}),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
