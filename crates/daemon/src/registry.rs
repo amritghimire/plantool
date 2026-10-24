@@ -309,7 +309,13 @@ impl LiveSession {
                     title: rev.and_then(|r| markdown::title(&r.content)),
                     captured_at: ds.map(|d| d.captured_at.clone()),
                     progress: rev
-                        .map(|r| markdown::progress(&r.content))
+                        .map(|r| {
+                            markdown::progress(
+                                &self
+                                    .progress_content(&r.content)
+                                    .unwrap_or_else(|_| r.content.clone()),
+                            )
+                        })
                         .unwrap_or_default(),
                 }
             })
@@ -359,6 +365,7 @@ impl LiveSession {
         g.state.updated_at = plantool_core::now();
         let seq = g.state.seq;
         let entry = match &event {
+            LiveEvent::TaskProgress { task_key } => Some(("task", format!("{task_key} completed"))),
             LiveEvent::DocRefreshed { kind, .. } => Some(("document", format!("{kind} revised"))),
             LiveEvent::StageChanged { to, .. } => Some(("step", format!("Step changed to {to}"))),
             LiveEvent::CommentAdded { comment } => Some((
@@ -422,6 +429,11 @@ impl LiveSession {
             Some(c) => c,
             None => return Ok(None),
         };
+        let content = if kind == DocKind::Plan {
+            plantool_core::tasks::normalize(&content)
+        } else {
+            content
+        };
         let sha = plantool_core::sha256_hex(&content);
         let mut g = self.lock();
         if g.docs.get(&kind).map(|d| d.sha == sha).unwrap_or(false) {
@@ -446,16 +458,16 @@ impl LiveSession {
                     .load_revision(kind, &approved.sha)?
                     .unwrap_or_else(|| old.clone());
                 let change = markdown::classify_plan_change(&baseline, &content);
-                let unticked = markdown::checkboxes(&old).iter().any(|task| {
-                    task.checked
-                        && markdown::checkboxes(&content).iter().any(|next| {
-                            next.phase == task.phase && next.text == task.text && !next.checked
-                        })
-                });
                 g.state.plan_change = Some(change);
-                g.state.plan_revision_pending = g.state.plan_revision_pending
-                    || change == markdown::PlanChange::ScopeChange
-                    || unticked;
+                g.state.plan_revision_pending =
+                    g.state.plan_revision_pending || change == markdown::PlanChange::ScopeChange;
+            } else if matches!(
+                g.state.stage,
+                Stage::Approved | Stage::Implementing | Stage::ImplementationReview | Stage::Done
+            ) {
+                // Skipping planning authorizes drafting a plan, not its new scope.
+                g.state.plan_change = Some(markdown::PlanChange::ScopeChange);
+                g.state.plan_revision_pending = true;
             }
         }
         let mut affected: Vec<&mut Comment> = g
@@ -602,6 +614,13 @@ impl LiveSession {
             ));
         }
         if to == Stage::Approved {
+            if let Some(plan) = g.docs.get(&DocKind::Plan) {
+                let tasks = plantool_core::tasks::parse(&plan.content)
+                    .map_err(|e| RegistryError::ReviewBlocked(e))?;
+                if tasks.len() != markdown::checkboxes(&plan.content).len() {
+                    return Err(RegistryError::ReviewBlocked("Assign a unique T<n> key to every plan task before approving (for example: - [ ] T1: Build the endpoint)".into()));
+                }
+            }
             let blockers = plantool_core::review::owner_blockers(&g.state.comments);
             let reason = reason.filter(|r| !r.trim().is_empty());
             if !blockers.is_empty() && reason.is_none() {
@@ -1269,9 +1288,10 @@ impl LiveSession {
         self.lock().runs.get(id).cloned()
     }
 
-    pub fn upsert_run(&self, run: Run, event: fn(Run) -> LiveEvent) -> anyhow::Result<()> {
+    pub fn upsert_run(&self, mut run: Run, event: fn(Run) -> LiveEvent) -> anyhow::Result<()> {
         let mut g = self.lock();
         self.store.save_run(&run)?;
+        run.pinned = crate::retention::pinned(self.store.home(), &run.id)?;
         g.runs.insert(run.id.clone(), run.clone());
         self.broadcast(&mut g, event(run));
         Ok(())
@@ -1279,6 +1299,10 @@ impl LiveSession {
 
     pub fn remove_run(&self, id: &str) -> anyhow::Result<bool> {
         let mut g = self.lock();
+        anyhow::ensure!(
+            !g.runs.get(id).is_some_and(|r| r.pinned),
+            "Unpin this run before deleting its transcript"
+        );
         if g.runs.remove(id).is_none() {
             return Ok(false);
         }
@@ -1378,8 +1402,10 @@ pub struct Registry {
 
 impl Registry {
     pub fn load(home: PathBuf) -> anyhow::Result<Registry> {
+        crate::database::initialize(&home)?;
+        crate::artifacts::sweep_orphans(&home, crate::database::unix_now())?;
         let mut map = BTreeMap::new();
-        for (_, _, dir) in store::list_session_dirs(&home) {
+        for (_, _, dir) in store::list_session_dirs(&home)? {
             match LiveSession::open(SessionStore::new(dir.clone())) {
                 Ok(Some(s)) => {
                     map.insert(s.key.clone(), s);
@@ -1562,6 +1588,7 @@ impl Registry {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(key);
+        live.store.remove()?;
         std::fs::remove_dir_all(&live.store.dir)
             .map_err(|e| anyhow::anyhow!("removing {}: {e}", live.store.dir.display()))?;
         Ok(session)
@@ -1608,6 +1635,7 @@ impl Registry {
             &bundle.session.repo_slug,
             &bundle.session.slug,
         ));
+        store.save_meta(&bundle.session)?;
         for revision in &bundle.revisions {
             store.save_revision(revision)?;
         }
@@ -1616,18 +1644,46 @@ impl Registry {
                 .map_err(anyhow::Error::from)?;
             store.save_revision(doc)?;
         }
+        let ids: std::collections::HashMap<String, String> = bundle
+            .runs
+            .iter()
+            .map(|r| (r.id.clone(), uuid::Uuid::new_v4().simple().to_string()))
+            .collect();
+        bundle.transcripts = bundle
+            .transcripts
+            .into_iter()
+            .filter_map(|(id, content)| ids.get(&id).map(|new| (new.clone(), content)))
+            .collect();
+        for milestone in &mut bundle.state.milestones {
+            milestone.run_id = milestone
+                .run_id
+                .as_ref()
+                .and_then(|id| ids.get(id))
+                .cloned();
+        }
         for run in &mut bundle.runs {
+            run.id = ids[&run.id].clone();
             run.cwd = bundle.session.cwd().clone();
             run.status = plantool_core::RunStatus::Stopped;
             run.milestone_review = None;
             run.milestone_pending = false;
             store.save_run(run)?;
+            if run.pinned {
+                crate::retention::set_pin(store.home(), &store.key(), &run.id, true)?;
+            }
         }
         for (id, content) in &bundle.transcripts {
-            store::write_atomic(&store.run_log_path(id), content.as_bytes())
-                .map_err(anyhow::Error::from)?;
+            for line in content.lines().filter(|l| !l.trim().is_empty()) {
+                store.append_run_event(id, line)?;
+            }
         }
         store.save_state(&bundle.state)?;
+        for (key, done) in &bundle.task_progress {
+            if !plantool_core::tasks::valid_key(key) {
+                return Err(anyhow::anyhow!("Invalid archived task key").into());
+            }
+            store.db()?.execute("INSERT INTO task_progress(item_id,task_key,status,updated_at) VALUES(?1,?2,?3,?4)",rusqlite::params![store.key(),key,if *done {"done"}else{"pending"},plantool_core::now()]).map_err(anyhow::Error::from)?;
+        }
         store.save_meta(&bundle.session)?;
         let live = LiveSession::open(store)?
             .ok_or_else(|| anyhow::anyhow!("import did not create a session"))?;
@@ -1701,4 +1757,66 @@ pub fn same_repo(s: &Session, c: &plantool_core::Checkout) -> bool {
     let a = std::fs::canonicalize(&s.repo.common_dir).unwrap_or_else(|_| s.repo.common_dir.clone());
     let b = std::fs::canonicalize(&c.common_dir).unwrap_or_else(|_| c.common_dir.clone());
     a == b
+}
+impl LiveSession {
+    pub fn progress_content(&self, content: &str) -> anyhow::Result<String> {
+        Ok(plantool_core::tasks::overlay(
+            content,
+            &self.store.task_progress()?,
+        ))
+    }
+    pub fn complete_task(&self, key: &str, attempt: Option<&str>) -> anyhow::Result<()> {
+        let mut g = self.lock();
+        anyhow::ensure!(
+            !g.state.plan_revision_pending,
+            "Review and approve the changed plan before reporting progress"
+        );
+        self.store.complete_task(key, attempt)?;
+        if let Some(plan) = g.docs.get(&DocKind::Plan).cloned() {
+            let content = self.progress_content(&plan.content)?;
+            for phase in markdown::phases(&content) {
+                if let Some(m) = g.state.milestones.iter_mut().find(|m| m.key == phase.name) {
+                    m.completed_tasks = phase
+                        .tasks
+                        .iter()
+                        .filter(|t| t.checked)
+                        .map(|t| t.text.clone())
+                        .collect();
+                }
+            }
+            self.broadcast(
+                &mut g,
+                LiveEvent::TaskProgress {
+                    task_key: key.into(),
+                },
+            );
+        }
+        self.persist_state(&g)?;
+        Ok(())
+    }
+}
+
+impl LiveSession {
+    pub fn reload_metadata(&self) -> anyhow::Result<()> {
+        if let Some(session) = self.store.load_meta()? {
+            let mut g = self.lock();
+            g.session = session.clone();
+            self.broadcast(&mut g, LiveEvent::SessionUpdated { session });
+        }
+        Ok(())
+    }
+}
+impl LiveSession {
+    pub fn pin_run(&self, id: &str, pinned: bool) -> anyhow::Result<()> {
+        let mut g = self.lock();
+        let run = g
+            .runs
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown run"))?;
+        crate::retention::set_pin(self.store.home(), &self.store.key(), id, pinned)?;
+        run.pinned = pinned;
+        let run = run.clone();
+        self.broadcast(&mut g, LiveEvent::RunUpdated { run });
+        Ok(())
+    }
 }

@@ -8,7 +8,7 @@ pub mod stage;
 pub use model::*;
 pub use stage::{transition, Actor, StageError};
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const DEFAULT_PORT: u16 = 41200;
 
 pub fn now() -> String {
@@ -21,3 +21,5 @@ pub fn sha256_hex(content: &str) -> String {
     h.update(content.as_bytes());
     format!("{:x}", h.finalize())
 }
+
+pub mod tasks;

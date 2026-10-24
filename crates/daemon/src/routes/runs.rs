@@ -724,6 +724,10 @@ async fn upload_attachment(
         .await
         .map_err(anyhow::Error::from)?;
     let path = dir.join(name);
+    s.store.save_evidence(
+        &format!("attachment:{}", path.file_name().unwrap().to_string_lossy()),
+        &body,
+    )?;
     tokio::fs::write(&path, body)
         .await
         .map_err(anyhow::Error::from)?;

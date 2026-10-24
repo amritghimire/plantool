@@ -17,11 +17,11 @@ pub const SKILLS: [Shipped; 4] = [
     },
     Shipped {
         name: "plan",
-        content: include_str!("../../../../skills/plan/SKILL.md"),
+        content: include_str!("../../../../agents/skills/plan/SKILL.md"),
     },
     Shipped {
         name: "implement",
-        content: include_str!("../../../../skills/implement/SKILL.md"),
+        content: include_str!("../../../../agents/skills/implement/SKILL.md"),
     },
 ];
 

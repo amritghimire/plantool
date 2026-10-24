@@ -3,10 +3,13 @@ pub mod changes;
 pub mod comments;
 pub mod execution;
 pub mod live;
+pub mod notices;
 pub mod pr;
+pub mod retention;
 pub mod runs;
 pub mod sessions;
 pub mod settings;
+pub mod tasks;
 pub mod where_context;
 
 use crate::registry::RegistryError;
@@ -105,6 +108,34 @@ async fn shutdown(
     Ok(Json(json!({ "ok": true })))
 }
 
+// Bootstrap is owner-terminal maintenance, never browser or run-token authority.
+async fn owner_setup_code(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    transport: Option<axum::Extension<crate::socket::SocketTransport>>,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    #[cfg(unix)]
+    if transport.is_none() {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Owner setup requires the local daemon socket".into(),
+        ));
+    }
+    #[cfg(not(unix))]
+    let _ = transport;
+    if headers.contains_key("origin")
+        || headers.contains_key("cookie")
+        || !state.runs.execution.can_shutdown(&headers)
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Owner terminal credential required".into(),
+        ));
+    }
+    let code = crate::auth::setup_code(&state.config.home)?;
+    Ok(([("cache-control", "no-store")], Json(json!({"code":code}))))
+}
+
 async fn spa(uri: Uri) -> Response {
     crate::assets::serve(&uri)
 }
@@ -115,12 +146,15 @@ pub fn router(state: AppState) -> Router {
         .route("/shutdown", post(shutdown))
         .merge(crate::auth::routes())
         .merge(sessions::routes())
+        .merge(tasks::routes())
         .merge(execution::routes())
+        .merge(notices::routes())
         .merge(comments::routes())
         .merge(changes::routes())
         .merge(archive::routes())
         .merge(live::routes())
         .merge(runs::routes())
+        .merge(retention::routes())
         .merge(settings::routes())
         .merge(where_context::routes())
         .merge(pr::routes());
@@ -128,6 +162,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api", api)
         .route("/health", get(health))
         .route("/shutdown", post(shutdown))
+        .route("/owner/setup-code", post(owner_setup_code))
         .fallback(spa)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

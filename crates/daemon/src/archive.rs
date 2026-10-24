@@ -15,6 +15,7 @@ pub struct Bundle {
     pub revisions: Vec<DocRevision>,
     pub runs: Vec<Run>,
     pub transcripts: BTreeMap<String, String>,
+    pub task_progress: BTreeMap<String, bool>,
 }
 
 pub fn summary(bundle: &Bundle, note: Option<&str>) -> String {
@@ -84,18 +85,9 @@ pub fn export(
     }
     if revisions {
         for kind in DocKind::ALL {
-            let dir = session.store.dir.join("revisions").join(kind.as_str());
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries {
-                    let path = entry?.path();
-                    if path.extension().and_then(|p| p.to_str()) != Some("md") {
-                        continue;
-                    }
-                    if let Some(sha) = path.file_stem().and_then(|p| p.to_str()) {
-                        if let Some(doc) = session.doc_revision(kind, sha)? {
-                            saved.insert((kind, sha.into()), doc);
-                        }
-                    }
+            for sha in session.store.revision_shas(kind)? {
+                if let Some(doc) = session.doc_revision(kind, &sha)? {
+                    saved.insert((kind, sha), doc);
                 }
             }
         }
@@ -104,14 +96,15 @@ pub fn export(
     let mut logs = BTreeMap::new();
     if transcripts {
         for run in &runs {
-            let path = session.store.run_log_path(&run.id);
-            if path.is_file() {
-                logs.insert(run.id.clone(), std::fs::read_to_string(path)?);
+            let text = session.store.transcript(&run.id)?;
+            if !text.is_empty() {
+                logs.insert(run.id.clone(), text);
             }
         }
     }
     let bundle = Bundle {
-        version: 1,
+        version: 2,
+        task_progress: session.store.task_progress()?,
         session: session.session(),
         state,
         documents,
@@ -165,8 +158,12 @@ pub fn decode(bytes: &[u8]) -> anyhow::Result<Bundle> {
     if content.len() > 64 * 1024 * 1024 {
         anyhow::bail!("archive is too large");
     }
-    let bundle: Bundle = serde_json::from_str(&content)?;
-    if bundle.version != 1 {
+    let value: serde_json::Value = serde_json::from_str(&content)?;
+    if value["version"].as_u64() != Some(2) {
+        anyhow::bail!("Unsupported archive version; v0 archives cannot be imported into the clean-break database");
+    }
+    let bundle: Bundle = serde_json::from_value(value)?;
+    if bundle.version != 2 {
         anyhow::bail!("unsupported archive version");
     }
     if !crate::registry::valid_slug(&bundle.session.slug) {

@@ -5,11 +5,11 @@ Research, plan and implement with your coding agent, and review each step in you
 plantool gives the research → plan → implement loop a shared surface. You open a **session** for a
 piece of work on a repo; the agent writes the research and the plan; you read them in a local web
 UI, comment on any line, and watch the agent revise while you read. Only you can approve the plan. This guards against honest mistakes, not a hostile agent.
-Once it is approved the agent implements, ticking the plan's checkboxes live, and you review the
+Once it is approved the agent implements, reports task completion, and you review the
 changes in [difftool](https://github.com/skshetry/difftool) or your `git difftool`.
 
 - **Any repo, nothing written into it.** Documents live in
-  `~/.plantool/sessions/<repo>/<slug>/` (`research.md`, `plan.md`, …), captured with full history.
+  `~/.plantool/sessions/<repo>/<slug>/docs/` (`research.md`, `plan.md`, …), captured with full history.
 - **Inline comments on documents.** Click a paragraph, a list item or a source line. Comments follow
   their line when the file changes and are marked *outdated* instead of lost.
 - **Read it as slides.** The Slides view shows one heading per slide with an outline, keyboard
@@ -88,12 +88,14 @@ new → researching → research-review → planning → plan-review → approve
 The agent moves the stage forward up to `plan-review`, and from `approved` on. You set `approved`
 and `done`. Writing `research.md` or `plan.md` advances the stage automatically.
 
-A finished session can be dropped from the bottom of the sidebar (documents, comments and
-transcripts are deleted; the git worktree only if you say so). Only the browser can do this.
+A finished session can be dropped from the bottom of the sidebar. It disappears from the board;
+permanent revision, approval, audit and run-summary records remain in SQLite. Only the browser can do this.
+Unpinned transcripts follow the retention policy; explicit worktree removal still requires confirmation.
 
 Steps can be skipped from the sidebar: start planning without research, or skip planning and
 approve straight away. In that case the agent first writes a task list to
-`plan.md` from the brief and works through it phase by phase, so progress still shows.
+`plan.md` from the brief with stable task keys, then waits for you to approve that revision
+before reporting progress or implementing it.
 
 ## Commands
 
@@ -105,7 +107,8 @@ approve straight away. In that case the agent first writes a task list to
 | `plantool research\|plan\|implement <ref> [--provider claude\|codex] [--model <m>] [--no-worktree] [--resume <run\|last>]` | Start a hosted run; implement runs work in a git worktree unless told otherwise; `--resume` continues an earlier run's provider session with its context. Other providers and elevated permissions are started in the browser. |
 | `plantool critique <ref>` | Have an agent critically review the research or plan and post findings as anchored comments (also the "Review with agent" button) |
 | `plantool changes <ref>` | Open the change review in difftool or `git difftool` |
-| `plantool status [stale\|<stage>\|<text>]` | Progress from the plan's checkboxes |
+| `plantool status [stale\|<stage>\|<text>]` | Approved plan progress |
+| `plantool task done <ref> T3` | Report completion of a task in the approved plan |
 | `plantool skill [research\|plan\|implement]` | Print the agent instructions, or one stage skill, for any agent to read inline |
 | `plantool skill install [--agent claude\|codex] [--dir <d>] [--force]` | Optional: write the skills as slash commands (`/plantool-research <ref>` …). Nothing is installed unless you ask |
 | `plantool daemon start\|stop\|restart\|status`, `plantool serve` | The background daemon; `restart` picks up an upgraded binary and refuses while runs are live unless `--force` |
@@ -127,6 +130,7 @@ plantool session comment apply --session <ref> --input batch.json
 plantool session watch --session <ref> --since <seq> --timeout 600     # block until you act
 plantool session goto --session <ref> --kind plan --match "<line text>"
 plantool session stage --session <ref> --set planning
+plantool task done <ref> T3                                          # approved task key
 ```
 
 ## Configuration
@@ -204,9 +208,11 @@ Stored stage names and old CLI commands remain compatible.
 Comment on a line, section, or whole document. Choose note, blocker, question, suggestion,
 or change approach. An agent can propose a resolution; the owner resolves the thread.
 Open owner blockers stop ordinary plan approval. A recorded reason allows an override.
-Approval pins the plan revision. Task additions, removals, rewording, unticking, and phase
-renaming require acceptance of the revised plan before another build run. Checkbox progress
-and other edits show a revision banner. Compare with the approved or last-viewed revision.
+Approval pins the immutable plan revision and its SHA-256 hash. Tasks use stable keys such as
+`- [ ] T3: Add the endpoint`. Agents call `plantool task done <ref> T3`; progress lives separately
+in SQLite and the browser overlays it on the approved revision. Checkbox-only draft edits are
+ignored. Task additions, removals, rewording and phase renaming need a new plan approval before
+building continues. Compare the current draft with the approved or last-viewed revision.
 
 Each named plan phase has its own run and diff window. Choose the next phase in the run
 dialog or `plantool implement <session> --milestone "Phase 2: UI"`. All-at-once proceeds
@@ -229,6 +235,31 @@ Reconnect reloads state; a disconnected tab says its view may be stale. Activity
 markers help you return after a break. Setup checks Claude and Codex sign-in; Copilot has no
 noninteractive status command, so its sign-in status is shown as unverified unless a token
 is available. Use the setup command and Re-check, or copy the prompt into a terminal agent.
+
+## Storage and upgrading to v0.1
+
+Personal mode runs entirely in the Rust daemon: no Python, worker or GitHub App is required.
+SQLite at `$PLANTOOL_HOME/db/plantool.db` owns sessions, comments, approvals, task progress,
+settings and runs. Connections use WAL, foreign keys and a 5-second busy timeout. Immutable
+revisions, evidence and NDJSON transcript chunks live at `artifacts/<sha256>`; live drafts live
+under `sessions/<repo>/<slug>/docs/`. The daemon publishes files before committing their rows
+and sweeps unreferenced files older than one hour at startup. Do not edit the database directly.
+Prompt override files and Git configuration remain live owner inputs, with snapshots in SQLite.
+
+The first v0.1 start moves an old-layout home to the sibling
+`<home>.v0-backup-<unix-ts>` (normally `~/.plantool.v0-backup-<unix-ts>`) and starts fresh.
+Nothing is imported. Run `plantool setup` again to enroll a fresh passkey, then sign in to see
+the backup banner; dismissing it persists across restarts. Keep the backup for reference.
+v0 session archives are rejected; v0.1 archives can still be exported and restored below.
+
+Retention runs at startup and daily. Transcripts/traces remain for 30 days after an item
+closes; local evidence remains for 90 days after merge, or forever for failed/recovery items.
+Pin a run in its run panel to keep it forever. Audit, decisions, gates, revisions, workspace
+messages and run summaries are permanent. Clean owned worktrees and local branches are removed
+after merge or decline; dirty or adopted worktrees are kept with a warning.
+Settings → Retention changes the periods and default 20 GiB disk cap with fresh passkey
+confirmation. Over the cap, oldest unpinned inactive transcripts are removed first; protected
+records can leave usage above the cap. Pinning/unpinning also requires fresh confirmation.
 
 ## Portable sessions
 
@@ -296,6 +327,10 @@ execution with passkey** requires a fresh assertion and never restarts old runs.
 In Settings → Never-sent files, add project-relative globs (`*`, `**`, `?`);
 stop execution before saving, then approve the change with your passkey.
 These owner-only rules live outside the repository. Defaults cannot be removed.
+
+`cargo test -p plantool --test personal_no_python` exercises the Personal CLI and browser
+approval flow with Python, uv, gh and workers absent from the daemon’s PATH. The plan and
+implement instructions are in `agents/skills/{plan,implement}/SKILL.md`.
 
 `cargo test -p plantool-daemon --test sandbox` executes the section 19 sandbox
 acceptance tests on macOS, including actual file denials and Keychain Mach-service

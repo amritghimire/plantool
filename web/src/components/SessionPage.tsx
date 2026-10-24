@@ -182,6 +182,11 @@ export function SessionPage() {
         case "thread-resolution":
           setComments((c) => c.map((x) => (e.ids.includes(x.id) || (x.parent && e.ids.includes(x.parent)) ? { ...x, resolved: e.resolved } : x)));
           break;
+        case "task-progress":
+          void loadDoc("plan");
+          void api.session(key).then(setView).catch(()=>{});
+          toast(`${e.task_key} completed`);
+          break;
         case "doc-refreshed":
           void loadDoc(e.kind);
           void api.session(key).then(setView).catch(() => {});

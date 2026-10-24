@@ -227,6 +227,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
         <span className="muted small">{run.model ?? ""}</span>
         <span className="spacer" />
         <span className="muted small">{run.status}</span>
+        <button className="btn ghost" disabled={busy} onClick={()=>{setBusy(true);void api.pinRun(sessionKey,run.id,!run.pinned).catch((e:Error)=>setErr(e.message)).finally(()=>setBusy(false))}} type="button">{run.pinned ? "Unpin run" : "Pin run"}</button>
         {live ? (
           <select
             className="permission-select" aria-label="Run permissions"

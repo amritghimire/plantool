@@ -99,7 +99,7 @@ jobs:
           cargo test -p plantool-daemon execution::tests
           cargo test -p plantool-daemon --test sandbox
           cargo test -p plantool-daemon --test identities --test provider_attachments
-          cargo test -p plantool --test agent_cli
+          cargo test -p plantool --test agent_cli --test personal_no_python
       - name: Package
         shell: bash
         env:

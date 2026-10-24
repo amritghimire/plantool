@@ -57,9 +57,9 @@ Work that is in scope but cannot be pinned down until a blocking question is ans
 
 ## Acceptance criteria
 ### Must have
-- [ ] …
+- …
 ### Must not
-- [ ] … does not regress
+- … does not regress
 
 ## Approach
 **Takeaway in one line**, then the proposed flow when it needs explanation.
@@ -77,10 +77,12 @@ Unit, integration, manual.
 
 ## Tasks
 ### Phase 1: <name>
-- [ ] task
+- [ ] T1: [Backend] First concrete step
 ### Phase 2: <name>
-- [ ] task
+- [ ] T2: [QA] Verify the result
 ```
+
+Every implementation task must have a unique stable `T<n>` key, such as `- [ ] T3: Add the endpoint`. Keep keys when moving or rewording the same task; never renumber existing tasks or reuse a removed key. Optional area labels (`[Backend]`, `[Frontend]`, `[QA]`, `[DevOps]`) follow the colon; add `[review]` to a task requiring review. Keep acceptance criteria as ordinary bullets rather than unkeyed task checkboxes.
 
 The Todo checkboxes are the tasks the implementation works through, one at a time, and they
 drive the progress bars, so make each one a concrete, verifiable step. For small work the plan
@@ -116,3 +118,5 @@ If no decisions remain, say so. The browser shows these sections as review cards
 Include `### Affected files` with a Markdown table whose first column is `Path`.
 Use repository-relative paths in backticks and `dir/*` for a whole directory. The Changes
 view uses this table for a heuristic drift check; it does not prove that tasks are complete.
+
+Approved plan revisions are immutable. Implementers report progress with `plantool task done <session-ref> T3`; they do not tick plan checkboxes. Added, removed or reworded tasks and renamed phases create a new revision needing browser approval. Checkbox-only edits are ignored.

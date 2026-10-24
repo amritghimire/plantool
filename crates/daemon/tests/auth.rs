@@ -73,7 +73,7 @@ async fn session(h: &Harness, slug: &str) -> String {
     let s = h.state.registry.get_key(&key).unwrap();
     std::fs::write(
         s.doc_path(plantool_core::DocKind::Plan),
-        "# Plan\n- [ ] task\n",
+        "# Plan\n- [ ] T1: task\n",
     )
     .unwrap();
     s.capture_doc(plantool_core::DocKind::Plan).unwrap();
@@ -739,6 +739,11 @@ async fn provider_output_does_not_invalidate_unrelated_confirmations() {
     let route = format!("/api/sessions/{key}/where");
     let body = json!({"difftool":"built-in"});
     let proof = browser.proof(&h.app, "POST", &route, body.clone()).await;
+    let run = serde_json::from_value(json!({"id":"background","provider":"codex","stage":"new","cwd":s.session().cwd(),"status":"running","started_at":plantool_core::now()})).unwrap();
+    s.upsert_run(run, |run| plantool_daemon::events::LiveEvent::RunStarted {
+        run,
+    })
+    .unwrap();
     s.append_run_event(
         "background",
         1,
@@ -861,4 +866,67 @@ exit 1
             assert_eq!(git(&bare, &["rev-parse", "refs/heads/feature"]), approved);
         }
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bootstrap_database_write_requires_the_owner_socket_credential() {
+    let mut h = harness();
+    h.state.runs = Arc::new(plantool_daemon::runs::RunManager::load(&h.state.config.home).unwrap());
+    let app = routes::router(h.state.clone());
+    let socket = plantool_daemon::socket::router(h.state.clone());
+    let credential =
+        std::fs::read_to_string(h.state.config.home.join("security/lifecycle-token")).unwrap();
+    let request = |credential: &str, origin: bool| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/owner/setup-code")
+            .header("host", "localhost:41300")
+            .header("x-plantool-lifecycle", credential);
+        if origin {
+            request = request.header("origin", "http://localhost:41300");
+        }
+        request.body(Body::empty()).unwrap()
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(request(&credential, false))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        socket
+            .clone()
+            .oneshot(request("forged", false))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        socket
+            .clone()
+            .oneshot(request(&credential, true))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let response = socket
+        .clone()
+        .oneshot(request(&credential, false))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(value(response).await["code"].as_str().is_some());
+    Browser::register(&app, &h.state.config.home).await;
+    assert!(!socket
+        .oneshot(request(&credential, false))
+        .await
+        .unwrap()
+        .status()
+        .is_success());
 }

@@ -17,6 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report progress against stable keys in an approved plan.
+    Task(commands::task::Args),
     /// Create a one-time code for registering the first browser passkey.
     Setup,
     /// Read global settings (changes belong in the browser).
@@ -58,6 +60,7 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Task(a) => commands::task::run(a),
         Command::Setup => setup(),
         Command::Settings(a) => commands::settings::run(a),
         Command::Export(a) => commands::archive::export(a),
@@ -88,7 +91,7 @@ fn setup() -> anyhow::Result<()> {
     let c = client::Client::bare(plantool_daemon::config::default_port());
     c.ensure_daemon()?;
     let _: serde_json::Value = reqwest::blocking::Client::builder().no_proxy().build()?.get(format!("{}/api/auth/status", c.base)).send()?.error_for_status()?.json().map_err(|_| anyhow::anyhow!("The running daemon does not support passkeys. Run `plantool daemon restart` with this binary first."))?;
-    let code = plantool_daemon::auth::setup_code(&client::home())?;
+    let code = c.setup_code()?;
     println!("One-time setup code (expires in 10 minutes): {code}");
     let url = format!("{}/setup", c.base);
     println!("Open {url} and enter the code to register your passkey.");

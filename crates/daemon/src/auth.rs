@@ -63,25 +63,10 @@ fn digest_str(s: &str) -> String {
     digest(s.as_bytes())
 }
 fn connection(home: &Path) -> anyhow::Result<Connection> {
-    let dir = home.join("db");
-    std::fs::create_dir_all(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    let path = dir.join("plantool.db");
-    let db = Connection::open(&path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    db.busy_timeout(Duration::from_secs(5))?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS passkeys (id TEXT PRIMARY KEY, credential_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER); CREATE TABLE IF NOT EXISTS passkey_setup (id INTEGER PRIMARY KEY CHECK(id=1), code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL);")?;
-    Ok(db)
+    crate::database::initialize(home)?;
+    crate::database::open(home)
 }
-/// Called only by the local `plantool setup` command, never exposed over HTTP.
+/// Daemon-only bootstrap write, requested by the owner-terminal socket endpoint.
 pub fn setup_code(home: &Path) -> anyhow::Result<String> {
     let mut db = connection(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -190,7 +175,7 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
         return false;
     }
     let path = path.split('?').next().unwrap_or(path);
-    if path == "/api/execution/resume" {
+    if path == "/api/execution/resume" || path.ends_with("/pin") {
         return true;
     }
     if path.starts_with("/api/settings/") {
@@ -307,6 +292,18 @@ fn make_binding(
     };
     if let Some(execution) = &execution {
         data["execution"] = json!(execution);
+    }
+    if path == "/api/settings/retention" || path.ends_with("/pin") {
+        data["retention"] = serde_json::to_value(
+            crate::retention::policy(&state.config.home).map_err(|_| denied())?,
+        )
+        .map_err(|_| denied())?;
+    }
+    if path.ends_with("/pin") {
+        if let Some(id) = parts.get(6) {
+            data["pinned"] =
+                json!(crate::retention::pinned(&state.config.home, id).map_err(|_| denied())?);
+        }
     }
     let mut workspace = None;
     if parts.get(2) == Some(&"sessions") && parts.len() >= 5 {

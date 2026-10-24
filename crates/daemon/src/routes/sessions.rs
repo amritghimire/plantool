@@ -214,17 +214,37 @@ async fn get_doc(
     let kind = parse_kind(&kind)?;
     let rev = match &q.sha {
         Some(sha) => s.doc_revision(kind, sha)?,
-        None => s.doc(kind),
+        None => {
+            let saved = s.state();
+            if kind == DocKind::Plan && !saved.plan_revision_pending {
+                if let Some(approved) = saved.approved {
+                    s.doc_revision(kind, &approved.sha)?
+                } else {
+                    s.doc(kind)
+                }
+            } else {
+                s.doc(kind)
+            }
+        }
     };
     let path = s.doc_path(kind);
     match rev {
-        Some(r) => Ok(Json(json!({
-            "kind": r.kind, "sha": r.sha, "content": r.content, "captured_at": r.captured_at, "path": path,
-            "lines": plantool_core::anchor::line_count(&r.content),
-            "headings": plantool_core::markdown::headings(&r.content),
-            "checkboxes": plantool_core::markdown::checkboxes(&r.content),
-            "progress": plantool_core::markdown::progress(&r.content),
-        }))),
+        Some(r) => {
+            let displayed = if kind == DocKind::Plan
+                && s.state().approved.as_ref().is_some_and(|a| a.sha == r.sha)
+            {
+                s.progress_content(&r.content)?
+            } else {
+                r.content.clone()
+            };
+            Ok(Json(json!({
+                "kind": r.kind, "sha": r.sha, "content": r.content, "display_content": displayed, "captured_at": r.captured_at, "path": path,
+                "lines": plantool_core::anchor::line_count(&r.content),
+                "headings": plantool_core::markdown::headings(&r.content),
+                "checkboxes": plantool_core::markdown::checkboxes(&r.content),
+                "progress": plantool_core::markdown::progress(&displayed),
+            })))
+        }
         None => Err(ApiError(
             StatusCode::NOT_FOUND,
             format!("no {kind} document yet; write it to {}", path.display()),

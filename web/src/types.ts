@@ -155,6 +155,7 @@ export type RunStatus = "starting" | "running" | "waiting" | "idle" | "stopped" 
 export type ImplementationMode = "all-at-once" | "step-by-step";
 
 export interface Run {
+  pinned?: boolean;
   sandboxed?: boolean;
   milestone_key?: string | null;
   plan_sha?: string | null;
@@ -216,6 +217,7 @@ export interface Heading {
 }
 
 export interface DocResponse {
+  display_content?: string;
   kind: DocKind;
   sha: string;
   content: string;
@@ -270,6 +272,7 @@ export type LiveEvent =
   | { type: "comment-updated"; seq: number; comment: Comment }
   | { type: "comment-removed"; seq: number; ids: string[] }
   | { type: "thread-resolution"; seq: number; ids: string[]; resolved: boolean }
+  | { type: "task-progress"; seq:number; task_key:string }
   | { type: "doc-refreshed"; seq: number; kind: DocKind; sha: string; lines: number; reanchored: number; outdated: number }
   | { type: "stage-changed"; seq: number; from: Stage; to: Stage; actor: Actor }
   | { type: "session-updated"; seq: number; session: Session }

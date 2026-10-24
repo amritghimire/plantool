@@ -206,10 +206,14 @@ impl RunManager {
             let tasks = plan
                 .as_ref()
                 .and_then(|p| {
-                    plantool_core::markdown::phases(&p.content)
-                        .into_iter()
-                        .find(|p| &p.name == key)
-                        .map(|p| p.tasks)
+                    plantool_core::markdown::phases(
+                        &session
+                            .progress_content(&p.content)
+                            .unwrap_or_else(|_| p.content.clone()),
+                    )
+                    .into_iter()
+                    .find(|p| &p.name == key)
+                    .map(|p| p.tasks)
                 })
                 .unwrap_or_default();
             let scope = tasks
@@ -234,6 +238,7 @@ impl RunManager {
         };
         let sandboxed = sandbox.unwrap_or_else(|| previous_run.is_some_and(|r| r.sandboxed));
         let run = Run {
+            pinned: false,
             sandboxed,
             execution_generation: version.generation,
             milestone_key,
@@ -287,7 +292,7 @@ impl RunManager {
                         .ok_or_else(|| anyhow::anyhow!("owner home is unavailable"))?,
                     daemon_home: daemon_home.clone(),
                     worktree: sess.cwd().clone(),
-                    docs: session.store.dir.clone(),
+                    docs: session.store.dir.join("docs"),
                 },
                 if stage_name == "critique" {
                     crate::sandbox::Role::Reviewer
@@ -420,10 +425,14 @@ impl RunManager {
                             let complete = consumer_session
                                 .doc(plantool_core::DocKind::Plan)
                                 .is_some_and(|p| {
-                                    plantool_core::markdown::phases(&p.content)
-                                        .iter()
-                                        .find(|p| &p.name == key)
-                                        .is_some_and(|p| p.tasks.iter().all(|t| t.checked))
+                                    plantool_core::markdown::phases(
+                                        &consumer_session
+                                            .progress_content(&p.content)
+                                            .unwrap_or_else(|_| p.content.clone()),
+                                    )
+                                    .iter()
+                                    .find(|p| &p.name == key)
+                                    .is_some_and(|p| p.tasks.iter().all(|t| t.checked))
                                 });
                             if !complete {
                                 continue;

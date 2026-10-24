@@ -56,6 +56,16 @@ fn describe(
     let example = root
         .as_deref()
         .map(|r| git::resolve_worktree_dir(r, template, "<slug>"));
+    crate::database::set(
+        &crate::database::open(&state.config.home)?,
+        &format!(
+            "worktree_setting:{}",
+            root.as_ref()
+                .map(|p| p.to_string_lossy())
+                .unwrap_or_default()
+        ),
+        &json!({"global":global,"local":local}),
+    )?;
     Ok(json!({
         "key": git::WORKTREE_DIR_KEY,
         "default": git::DEFAULT_WORKTREE_DIR,
@@ -152,6 +162,11 @@ async fn set_difftool(
         &["config", "--global", "plantool.difftool", &body.value],
     )
     .map_err(|e| bad_request(e.to_string()))?;
+    crate::database::set(
+        &crate::database::open(&state.config.home)?,
+        "difftool_setting",
+        &body.value,
+    )?;
     Ok(get_difftool(State(state)).await)
 }
 

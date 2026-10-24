@@ -1586,7 +1586,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plantool"
-version = "0.0.14"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1605,11 +1605,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "webauthn-authenticator-rs",
+ "webauthn-rs",
 ]
 
 [[package]]
 name = "plantool-core"
-version = "0.0.14"
+version = "0.1.0-alpha.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1621,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "plantool-daemon"
-version = "0.0.14"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "axum",
