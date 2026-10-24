@@ -6,7 +6,13 @@ user-invocable: true
 
 ## Engineering OS dispatch
 
-Engineering OS PM: return typed Plan details with T<n>: [area] tasks, criteria and explicit literal paths or directory/** scope. Do not wait in a Personal session; the graph requests the GitHub gate.
+When dispatched as Engineering OS PM, use only this section and the PM role; skip the Personal workflow below. Return details kind plan with markdown, acceptance_criteria (strings) and affected_files (strings). Do not use session stages, gh, a browser wait loop or standalone filesystem writes.
+
+Use stable tasks such as `- [ ] T1: [backend] Validate the scoped endpoint` under a named phase. Use lowercase backend/frontend/devops/qa/docs areas; retain keys for unchanged tasks and never reuse removed keys. Put [review] tags on relevant phases/tasks without enabling later milestone execution.
+
+Name criteria AC1, AC2, etc. Each criterion must identify its task/owner, observable behavior, negative case when relevant and command or native procedure. For example: `AC1 (T1, backend): malformed input is rejected; verify with the repository's focused API test`. Select real commands from inspected repo conventions, not imaginary tests.
+
+Affected files must be bounded literals or directory/** prefixes. Include README.md/CHANGELOG.md as explicit literals only when Docs should update them. State dependencies, assumptions, risks and blocking decisions. A blocked decision is not a license to invent requirements. CTO review and the owner GitHub gate are graph steps; done never means approved. Replanning creates a new revision/hash needing fresh approval.
 
 ## Personal workflow
 

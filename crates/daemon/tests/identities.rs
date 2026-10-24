@@ -452,7 +452,27 @@ async fn stale_socket_recovery_never_unlinks_regular_files_or_symlinks() {
     std::fs::create_dir(home.join("run")).unwrap();
     let path = plantool_daemon::socket::path(home);
     let old = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    // A duplicate models a listener inherited by a concurrently forked command.
+    // CLOEXEC closes it at exec, not at fork: dropping `old` alone is not proof
+    // that the socket is stale. Startup must still refuse a live duplicate.
+    let inherited = old.try_clone().unwrap();
     drop(old);
+    assert!(plantool_daemon::socket::bind(home).await.is_err());
+    drop(inherited);
+    // Other tests launch subprocesses in parallel. Establish fixture readiness
+    // rather than racing their fork/exec window or retrying production startup.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match tokio::net::UnixStream::connect(&path).await {
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => break,
+                Ok(stream) => drop(stream),
+                Err(error) => panic!("unexpected stale fixture error: {error}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("fixture listener remained live after its owners were closed");
     let (listener, file) = plantool_daemon::socket::bind(home).await.unwrap();
     drop(listener);
     drop(file);

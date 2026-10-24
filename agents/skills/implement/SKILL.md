@@ -6,7 +6,11 @@ user-invocable: true
 
 ## Engineering OS dispatch
 
-Engineering OS: work only in the assigned isolated checkout, store evidence using plantool attempt artifact and report the typed result. GitHub actions belong to the daemon. The Personal workflow below applies only to Personal sessions.
+When dispatched as Engineering OS, use only this section and the assigned role; skip the Personal workflow below. Confirm immutable plan/hash, current isolated checkout, assigned owned T-keys, approved paths and prior defects. Never modify plan wording, checkboxes or role permissions.
+
+Inspect existing contracts/callers and follow repo conventions. For relevant bugs, demonstrate the failure and verified repair with a focused test; keep unrelated improvements out. If a necessary change exceeds scope, return needs_fix/blocked for Supervisor/replan instead of editing the plan.
+
+Run meaningful checks within sandbox limits. Store logs under TMPDIR, publish with `plantool attempt artifact --file <log>`, make a local commit and use `plantool task done <item> T<n>` only for verified owned tasks. Report full typed RoleResult through `plantool attempt report --file <result.json>` with exact HEAD, actual evidence and explicit limitations. Missing native/provider access is not a passing check. No pushes, PRs, GitHub comments, merges or direct credentials.
 
 ## Personal workflow
 
