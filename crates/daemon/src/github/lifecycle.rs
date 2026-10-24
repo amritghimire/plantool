@@ -650,6 +650,18 @@ pub async fn process_item(
     if refusal {
         return Ok(());
     }
+    let final_head = api::get(api, &format!("{path}/pulls/{n}")).await?;
+    let final_reviews = pages(api, &format!("{path}/pulls/{n}/reviews"), None).await?;
+    if final_head["head"]["sha"] != head
+        || latest_approval(&database::open(home)?, &final_reviews, &head, &opened)?.is_none()
+        || !policy_facts(home, item, &head)?
+    {
+        db.execute(
+            "UPDATE gates SET state='open',closed_at=NULL WHERE id=?1",
+            [&gate],
+        )?;
+        return Ok(());
+    }
     let result = write(
         home,
         api,

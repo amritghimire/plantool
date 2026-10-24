@@ -335,6 +335,24 @@
       ],
       "properties": {
         "body": {
+          "$ref": "#/definitions/WorkflowPr"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "workflow_pr"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
           "$ref": "#/definitions/StoreArtifact"
         },
         "type": {
@@ -471,6 +489,22 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "DocUpdate": {
+      "type": "object",
+      "required": [
+        "content",
+        "path"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -929,6 +963,15 @@
               "enum": [
                 "docs"
               ]
+            },
+            "updates": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/DocUpdate"
+              }
             }
           },
           "additionalProperties": false
@@ -1160,6 +1203,30 @@
       ],
       "properties": {
         "item": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowPr": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "interrupt_id",
+        "item",
+        "thread_id"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "interrupt_id": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "thread_id": {
           "type": "string"
         }
       },

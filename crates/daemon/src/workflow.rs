@@ -256,9 +256,8 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
                 ensure!(
                     t.area
                         .as_deref()
-                        .is_some_and(
-                            |a| ["backend", "frontend", "devops", "qa", "docs"].contains(&a)
-                        ),
+                        .is_some_and(|a| ["backend", "frontend", "devops", "qa", "docs", "docs"]
+                            .contains(&a)),
                     "Every task requires a supported area"
                 );
             }
@@ -297,7 +296,7 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
             );
         }
         "docs" => {
-            let Some(RoleDetails::Docs { body }) = &result.details else {
+            let Some(RoleDetails::Docs { body, .. }) = &result.details else {
                 anyhow::bail!("Docs review guide required")
             };
             for heading in [
@@ -346,8 +345,8 @@ pub fn record(
     }
     if let Some(RoleDetails::Research { markdown }) = &result.details {
         ensure!(
-            step == "research",
-            "Only the CTO research step may publish research"
+            ["research", "plan_review"].contains(&step.as_str()),
+            "Only CTO steps may publish research"
         );
         let sha = crate::artifacts::put(home, markdown.as_bytes())?;
         crate::artifacts::register(tx, &sha, markdown.len())?;
@@ -399,6 +398,9 @@ pub fn record(
                 ],
             )?;
         }
+        // Progress belongs to the task wording and area in its approved revision.
+        // A replan must never inherit completion for a changed or removed task.
+        tx.execute("UPDATE task_progress SET status='pending',updated_at=?3 WHERE item_id=?1 AND NOT EXISTS(SELECT 1 FROM plan_tasks n JOIN plan_tasks o ON o.task_key=n.task_key AND o.title=n.title AND o.phase IS n.phase AND o.area IS n.area JOIN work_items i ON i.approved_plan_revision_id=o.revision_id WHERE i.id=?1 AND n.revision_id=?2 AND n.task_key=task_progress.task_key)",params![result.item,revision,plantool_core::now()])?;
         s["owners"] = json!(owners);
         s["areas"] = json!(areas);
         s["plan_sha"] = json!(sha);
@@ -422,9 +424,9 @@ pub fn record(
             Some(RoleDetails::Strategy { action, owner, .. })
                 if rounds <= 2
                     && action == "retry"
-                    && owner
-                        .as_deref()
-                        .is_some_and(|o| ["backend", "frontend", "devops", "qa"].contains(&o)) =>
+                    && owner.as_deref().is_some_and(|o| {
+                        ["backend", "frontend", "devops", "qa", "docs"].contains(&o)
+                    }) =>
             {
                 s["step"] = json!(owner)
             }
@@ -461,7 +463,7 @@ pub fn record(
         } else {
             owner
                 .as_deref()
-                .filter(|o| ["backend", "frontend", "devops", "qa"].contains(o))
+                .filter(|o| ["backend", "frontend", "devops", "qa", "docs"].contains(o))
                 .unwrap_or("supervisor")
         });
     } else {
@@ -559,7 +561,109 @@ pub fn record(
             )?;
         }
     }
-    if let Some(RoleDetails::Docs { body }) = &result.details {
+    s["docs_changed"] = json!(false);
+    if let Some(RoleDetails::Docs {
+        updates: Some(updates),
+        ..
+    }) = &result.details
+    {
+        ensure!(
+            step == "docs",
+            "Only Docs may propose documentation updates"
+        );
+        if !updates.is_empty() {
+            let (_, root) = dispatcher::item(tx, &result.item)?;
+            let head: String = tx.query_row(
+                "SELECT head_sha FROM workflow_items WHERE item_id=?1",
+                [&result.item],
+                |r| r.get(0),
+            )?;
+            std::fs::create_dir_all(home.join("worktrees"))?;
+            let temp = tempfile::tempdir_in(home.join("worktrees"))?;
+            let checkout = temp.path().join("docs");
+            crate::git::git(
+                &root,
+                &[
+                    "clone",
+                    "--no-hardlinks",
+                    "--no-checkout",
+                    &root.to_string_lossy(),
+                    &checkout.to_string_lossy(),
+                ],
+            )?;
+            crate::git::git(&checkout, &["checkout", "--detach", &head])?;
+            let rules = crate::execution::Execution::load(home)?.rules(&root);
+            let policy = crate::sandbox::NeverSent::new(&rules)?;
+            for update in updates {
+                ensure!(
+                    ["README.md", "CHANGELOG.md"].contains(&update.path.as_str()),
+                    "Docs updates are limited to README.md and CHANGELOG.md"
+                );
+                ensure!(
+                    s["affected_files"]
+                        .as_array()
+                        .is_some_and(|p| p.contains(&json!(update.path))),
+                    "Documentation path is outside approved scope"
+                );
+                policy.check(Path::new(""), Path::new(&update.path))?;
+                crate::models::proxy::check_payload(
+                    &root,
+                    &policy,
+                    &json!({"content":update.content}),
+                )?;
+                let file = checkout.join(&update.path);
+                ensure!(
+                    !file
+                        .symlink_metadata()
+                        .is_ok_and(|m| m.file_type().is_symlink()),
+                    "Documentation target is a symlink"
+                );
+                std::fs::write(file, &update.content)?;
+            }
+            crate::git::git(&checkout, &["add", "--", "README.md", "CHANGELOG.md"]).or_else(
+                |_| {
+                    let paths = updates.iter().map(|u| u.path.as_str()).collect::<Vec<_>>();
+                    let mut args = vec!["add", "--"];
+                    args.extend(paths);
+                    crate::git::git(&checkout, &args)
+                },
+            )?;
+            if !crate::git::git(&checkout, &["diff", "--cached", "--name-only"])?.is_empty() {
+                let message=format!("Docs: approved documentation updates\n\nPlanTool-Item: {}\nPlanTool-Plan: sha256:{}\nPlanTool-Attempt: {}",result.item,s["plan_sha"].as_str().unwrap(),result.attempt_id);
+                crate::git::git(
+                    &checkout,
+                    &[
+                        "-c",
+                        "core.hooksPath=/dev/null",
+                        "-c",
+                        "user.name=PlanTool",
+                        "-c",
+                        "user.email=plantool@localhost",
+                        "commit",
+                        "-m",
+                        &message,
+                    ],
+                )?;
+                let next = crate::git::git(&checkout, &["rev-parse", "HEAD"])?;
+                crate::git::git(
+                    &root,
+                    &[
+                        "fetch",
+                        "--no-tags",
+                        "--no-write-fetch-head",
+                        &checkout.to_string_lossy(),
+                        &next,
+                    ],
+                )?;
+                tx.execute("UPDATE workflow_items SET head_sha=?2,qa_head=NULL,reviewed_head=NULL WHERE item_id=?1",params![result.item,next])?;
+                s["docs_changed"] = json!(true);
+                let rounds = s["docs_rounds"].as_u64().unwrap_or(0) + 1;
+                s["docs_rounds"] = json!(rounds);
+                s["step"] = json!(if rounds <= 2 { "qa" } else { "supervisor" });
+            }
+        }
+    }
+    if let Some(RoleDetails::Docs { body, .. }) = &result.details {
         ensure!(step == "docs", "Only Docs may write the review guide");
         tx.execute(
             "UPDATE workflow_items SET docs_body=?2 WHERE item_id=?1",
@@ -593,20 +697,39 @@ pub fn proposal(
 }
 
 pub fn pr_wait(home: &Path, item: &str, thread: &str, interrupt: &str) -> anyhow::Result<Value> {
-    let mut db = database::open(home)?;
-    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let s = state(&tx, item)?.context("No item graph")?;
-    ensure!(
-        s["step"] == "pr" && s["frozen"] != true,
-        "Item is not eligible to publish a PR"
-    );
-    let payload = json!({"item":item,"thread_id":thread,"interrupt_id":interrupt});
-    let id = dispatcher::enqueue(&tx, item, "github.pr", &payload)?;
-    tx.execute("INSERT OR IGNORE INTO workflow_actions(id,item_id,kind,payload_json) VALUES(?1,?2,'github.pr',?3)",params![id,item,payload.to_string()])?;
-    tx.commit()?;
-    Ok(json!({"intent":id}))
+    pr_request(
+        home,
+        &plantool_contract::WorkflowPr {
+            item: item.into(),
+            thread_id: thread.into(),
+            interrupt_id: interrupt.into(),
+            idempotency_key: format!("{thread}:{interrupt}"),
+        },
+    )
 }
-
+pub fn pr_request(home: &Path, request: &plantool_contract::WorkflowPr) -> anyhow::Result<Value> {
+    let digest = plantool_core::sha256_hex(&serde_json::to_string(request)?);
+    let value = database::inbox_once(home, "worker.pr", &request.idempotency_key, |tx| {
+        let s = state(tx, &request.item)?.context("No item graph")?;
+        ensure!(
+            s["step"] == "pr" && s["frozen"] != true,
+            "Item is not eligible to publish a PR"
+        );
+        ensure!(
+            !request.thread_id.is_empty() && !request.interrupt_id.is_empty(),
+            "Waiting graph identity required"
+        );
+        let payload = json!({"item":request.item,"thread_id":request.thread_id,"interrupt_id":request.interrupt_id});
+        let id = dispatcher::enqueue(tx, &request.item, "github.pr", &payload)?;
+        tx.execute("INSERT OR IGNORE INTO workflow_actions(id,item_id,kind,payload_json) VALUES(?1,?2,'github.pr',?3)",params![id,request.item,payload.to_string()])?;
+        Ok(json!({"intent":id,"digest":digest}))
+    })?;
+    ensure!(
+        value["digest"] == digest,
+        "PR idempotency key reused for changed input"
+    );
+    Ok(value)
+}
 pub fn overview(home: &Path) -> anyhow::Result<Vec<Value>> {
     let db = database::open(home)?;
     let mut q=db.prepare("SELECT w.item_id,i.title,w.state_json,w.last_error,(SELECT json_extract(outcome_json,'$.summary') FROM attempts WHERE item_id=i.id ORDER BY generation DESC LIMIT 1) FROM workflow_items w JOIN work_items i ON i.id=w.item_id ORDER BY i.created_at DESC")?;

@@ -47,3 +47,21 @@ async def test_every_role_dispatch_interrupt_resume_and_both_gates(tmp_path):
             assert facts['step']=='merged'
             assert order==['cto','pm','cto','backend','qa','reviewer','docs']
             assert len(seen)==7
+
+@pytest.mark.asyncio
+async def test_llm_role_scope_and_cached_result_use_no_real_provider(tmp_path):
+    calls=[]
+    async def daemon(request):
+        if request.url.path.endswith('/health'):return httpx.Response(200,json=VERSIONS)
+        assert request.url.path=='/v1/chat/completions'
+        data=json.loads(request.content);calls.append(data)
+        claim={"item":"forged","role":"pm","attempt_id":"wrong","generation":999,"outcome":"done","summary":"Read relevant files","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":None,"review_guide":None,"details":{"kind":"research","markdown":"Architecture evidence"}}
+        return httpx.Response(200,json={"choices":[{"message":{"content":json.dumps(claim)}}]})
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon));headers={"x-plantool-worker-token":'t'*40,"x-plantool-contract-version":str(VERSIONS['contract_version'])}
+    payload={"request":{"item":"p:1","role":"cto","generation":1,"inputs":{"step":"research"},"plan_sha":"","policy_version":1,"capability":"read","idempotency_key":"dispatch:1","thread_id":"p:1","interrupt_id":"i1"},"attempt_id":"a1","prompt":"Research only"}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers=headers) as client:
+            one=await client.post('/internal/v1/role',json=payload);assert one.status_code==200,one.text
+            two=await client.post('/internal/v1/role',json=payload);assert one.json()==two.json()
+            assert one.json()['item']=='p:1' and one.json()['role']=='cto' and one.json()['attempt_id']=='a1' and one.json()['generation']==1
+            assert len(calls)==1 and calls[0]['plantool']['attempt_id']=='a1'

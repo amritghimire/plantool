@@ -60,19 +60,12 @@ async fn workflow_pr(
     State(state): State<AppState>,
     headers: HeaderMap,
     socket: Option<Extension<crate::socket::SocketTransport>>,
-    Json(request): Json<Value>,
+    Json(request): Json<WorkflowPr>,
 ) -> Result<Json<Value>, ApiError> {
     worker(&state, &headers, socket)?;
-    let text = |k: &str| {
-        request[k]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing {k}"))
-    };
-    Ok(Json(crate::workflow::pr_wait(
+    Ok(Json(crate::workflow::pr_request(
         &state.config.home,
-        text("item")?,
-        text("thread_id")?,
-        text("interrupt_id")?,
+        &request,
     )?))
 }
 async fn store_artifact(

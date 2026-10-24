@@ -146,6 +146,7 @@ pub enum RoleDetails {
     },
     Docs {
         body: String,
+        updates: Option<Vec<DocUpdate>>,
     },
     Strategy {
         action: String,
@@ -154,12 +155,22 @@ pub enum RoleDetails {
         reason: String,
     },
 }
+wire!(DocUpdate {
+    path: String,
+    content: String
+});
 wire!(RoleCall {
     request: Dispatch,
     attempt_id: String,
     prompt: String
 });
 wire!(WorkflowContext { item: String });
+wire!(WorkflowPr {
+    item: String,
+    thread_id: String,
+    interrupt_id: String,
+    idempotency_key: String
+});
 wire!(StoreArtifact {
     item: String,
     attempt_id: String,
@@ -190,6 +201,7 @@ pub enum Contract {
     Llm(LlmContext),
     RoleCall(RoleCall),
     WorkflowContext(WorkflowContext),
+    WorkflowPr(WorkflowPr),
     StoreArtifact(StoreArtifact),
 }
 pub fn schema() -> String {

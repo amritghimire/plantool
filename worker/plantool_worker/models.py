@@ -82,6 +82,10 @@ class Type17(str, Enum):
 
 
 class Type18(str, Enum):
+    workflow_pr = 'workflow_pr'
+
+
+class Type19(str, Enum):
     store_artifact = 'store_artifact'
 
 
@@ -129,6 +133,14 @@ class DispatchReply(BaseModel):
     )
     attempt_id: str
     generation: conint(ge=0)
+
+
+class DocUpdate(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    content: str
+    path: str
 
 
 class EventAck(BaseModel):
@@ -313,6 +325,7 @@ class RoleDetails4(BaseModel):
     )
     body: str
     kind: Kind3
+    updates: list[DocUpdate] | None = None
 
 
 class Kind4(str, Enum):
@@ -380,6 +393,16 @@ class WorkflowContext(BaseModel):
         extra='forbid',
     )
     item: str
+
+
+class WorkflowPr(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    idempotency_key: str
+    interrupt_id: str
+    item: str
+    thread_id: str
 
 
 class Contract1(BaseModel):
@@ -468,8 +491,13 @@ class Contract18(BaseModel):
 
 
 class Contract19(BaseModel):
-    body: StoreArtifact
+    body: WorkflowPr
     type: Type18
+
+
+class Contract20(BaseModel):
+    body: StoreArtifact
+    type: Type19
 
 
 class Check(BaseModel):
@@ -539,6 +567,7 @@ class Contract(
         | Contract17
         | Contract18
         | Contract19
+        | Contract20
     ]
 ):
     root: (
@@ -561,6 +590,7 @@ class Contract(
         | Contract17
         | Contract18
         | Contract19
+        | Contract20
     ) = Field(
         ...,
         description='Schema roots include every request and response, not just the graph entrypoints.',

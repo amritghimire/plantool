@@ -19,7 +19,7 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
             state.update(step="escalated", frozen=True)
         elif directive.get("action") == "replan":
             state.update(step="plan", approved=False)
-        elif directive.get("action") == "retry" and directive.get("owner") in {"backend","frontend","devops","qa"}:
+        elif directive.get("action") == "retry" and directive.get("owner") in {"backend","frontend","devops","qa","docs"}:
             state["step"] = directive["owner"]
         else:
             state.update(step="escalated", frozen=True)
@@ -30,7 +30,7 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         retries[key] = retries.get(key, 0) + 1
         state["retries"] = retries
         owner = state.get("owners", {}).get(key)
-        if retries[key] > 3 or any(f.get("severity") == "high" for f in findings) or owner not in {"backend","frontend","devops","qa"}:
+        if retries[key] > 3 or any(f.get("severity") == "high" for f in findings) or owner not in {"backend","frontend","devops","qa","docs"}:
             state["step"] = "supervisor"
         else:
             state["step"] = owner
@@ -43,7 +43,7 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     elif step == "devops": state["step"] = "qa"
     elif step == "qa": state["step"] = "reviewer"
     elif step == "reviewer": state["step"] = "docs"
-    elif step == "docs": state["step"] = "pr"
+    elif step == "docs": state["step"] = ("qa" if state.get("docs_rounds",0)<=2 else "supervisor") if state.get("docs_changed") else "pr"
     else: raise ValueError(f"Invalid role step {step}")
     return state
 
@@ -77,7 +77,7 @@ async def build_step(daemon, store, state):
         response=await daemon.post("/internal/v1/request_dispatch",json=request.model_dump(mode="json"));response.raise_for_status()
         result=RoleResult.model_validate(interrupt({"attempt":response.json(),"interrupt_id":identity})).model_dump(mode="json")
         facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();facts=facts.json()
-        for key in ["areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry"]:
+        for key in ["areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
             if key in facts["state"]: workflow[key]=facts["state"][key]
         updated=route(workflow,result)
         if step in {"backend","frontend"} and updated["step"]=="qa" and workflow.get("infra_changed"): updated["step"]="devops"

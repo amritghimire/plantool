@@ -125,48 +125,49 @@ def create_app(home: Path, token: str, transport=None):
     async def start(request: Start):
         versions(request)
         async with lock(request.thread_id):
-            receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
+            receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
             if current and current["state"] == "starting":
-                return store.save(request.thread_id,"recovery_needed",None,{"error":"Start was interrupted before its checkpoint was acknowledged"},request.idempotency_key)
-            if current: return store.save(request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
+                return await asyncio.to_thread(store.save,request.thread_id,"recovery_needed",None,{"error":"Start was interrupted before its checkpoint was acknowledged"},request.idempotency_key)
+            if current: return await asyncio.to_thread(store.save,request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
             identifier = str(uuid4())
             payload = dict(request.input or {})
             if payload.get("dispatch"):
                 payload["dispatch"] = {**payload["dispatch"],"thread_id":request.thread_id,"interrupt_id":identifier}
             # Record identity before dispatch; a retry replays the same request.
-            with store.db() as db:
-                db.execute("INSERT INTO bridge_threads VALUES(?,?,'starting',?,NULL)",(request.thread_id,VERSIONS["graph_version"],identifier))
+            def record_start():
+                with store.db() as db:db.execute("INSERT INTO bridge_threads VALUES(?,?,'starting',?,NULL)",(request.thread_id,VERSIONS["graph_version"],identifier))
+            await asyncio.to_thread(record_start)
             initial={"input":payload}
             if payload.get("workflow"):
                 context=await app.state.daemon.post("/internal/v1/workflow_context",json={"item":request.thread_id});context.raise_for_status();facts=context.json()
                 initial["workflow"]={**payload["workflow"],"policy_version":facts["policy_version"]}
             output=await app.state.graph.ainvoke(initial,{"configurable":{"thread_id":request.thread_id}})
             identifier=store.thread(request.thread_id)["interrupt_id"]
-            return store.save(request.thread_id,"interrupted",identifier,output.get("result"),request.idempotency_key)
+            return await asyncio.to_thread(store.save,request.thread_id,"interrupted",identifier,output.get("result"),request.idempotency_key)
     @app.post("/internal/v1/resume")
     async def resume(request: Resume):
         versions(request)
         async with lock(request.thread_id):
-            receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
+            receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
             if not current or current["state"] != "interrupted" or current["interrupt_id"] != request.interrupt_id:
                 raise HTTPException(409,"Stale interrupt or cancelled graph")
             snapshot = await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
             if not snapshot.next and "result" in snapshot.values:
-                return store.save(request.thread_id,"completed",None,snapshot.values["result"],request.idempotency_key)
+                return await asyncio.to_thread(store.save,request.thread_id,"completed",None,snapshot.values["result"],request.idempotency_key)
             result = await app.state.graph.ainvoke(Command(resume=request.value),{"configurable":{"thread_id":request.thread_id}})
             snapshot=await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
             waiting=bool(snapshot.next)
             identifier=store.thread(request.thread_id)["interrupt_id"] if waiting else None
-            return store.save(request.thread_id,"interrupted" if waiting else "completed",identifier,result.get("result"),request.idempotency_key)
+            return await asyncio.to_thread(store.save,request.thread_id,"interrupted" if waiting else "completed",identifier,result.get("result"),request.idempotency_key)
     @app.post("/internal/v1/role")
     async def role(request: RoleCall):
         key="role:"+request.attempt_id
         async with lock(key):
-            receipt=store.receipt(key,request.model_dump(mode="json"))
+            receipt=await asyncio.to_thread(store.receipt,key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             daemon=app.state.daemon
             messages=[{"role":"system","content":"Return only the typed RoleResult JSON. Never approve or publish."},{"role":"user","content":request.prompt}]
@@ -191,17 +192,19 @@ def create_app(home: Path, token: str, transport=None):
                 raise ValueError("Role tool/call budget exhausted")
             graph=StateGraph(State);graph.add_node("role",call_role);graph.add_edge(START,"role");graph.add_edge("role",END)
             result=(await graph.compile().ainvoke({}))["result"]
-            with store.db() as db: db.execute("UPDATE bridge_inbox SET result=? WHERE id=?",(json.dumps(result),key))
+            def record_role():
+                with store.db() as db:db.execute("UPDATE bridge_inbox SET result=? WHERE id=?",(json.dumps(result),key))
+            await asyncio.to_thread(record_role)
             return result
     @app.post("/internal/v1/cancel")
     async def cancel(request: Cancel):
         async with lock(request.thread_id):
-            receipt = store.receipt(request.idempotency_key,request.model_dump(mode="json"))
+            receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
             if current and current["state"] in ("completed","cancelled"):
-                return store.save(request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
-            return store.save(request.thread_id,"cancelled",None,None,request.idempotency_key)
+                return await asyncio.to_thread(store.save,request.thread_id,current["state"],current["interrupt_id"],current["result"],request.idempotency_key)
+            return await asyncio.to_thread(store.save,request.thread_id,"cancelled",None,None,request.idempotency_key)
     return app
 
 # Token is read from the inherited descriptor, never argv or an environment value.

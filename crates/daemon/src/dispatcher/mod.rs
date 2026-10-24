@@ -201,6 +201,10 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
         for key in &result.tasks_done {
             let approved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2)",params![result.item,key],|r|r.get(0))?;
             anyhow::ensure!(approved,"Result references an unapproved task");
+            if crate::workflow::state(tx,&result.item)?.is_some() {
+                let owned:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2 AND t.area=?3)",params![result.item,key,result.role],|r|r.get(0))?;
+                anyhow::ensure!(owned,"Role cannot complete another area's task");
+            }
             tx.execute("INSERT INTO task_progress VALUES(?1,?2,'done',?3,?4) ON CONFLICT(item_id,task_key) DO UPDATE SET status='done',updated_by_attempt=excluded.updated_by_attempt,updated_at=excluded.updated_at",params![result.item,key,result.attempt_id,plantool_core::now()])?;
         }
         crate::workflow::record(home,tx,result,Path::new(&worktree))?;
