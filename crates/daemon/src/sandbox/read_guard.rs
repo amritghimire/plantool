@@ -4,6 +4,7 @@ pub fn protected(paths: &Paths) -> Vec<PathBuf> {
     let home = &paths.owner_home;
     let mut out = vec![
         home.join(".ssh"),
+        home.join(".ollama"),
         home.join(".config/gh"),
         home.join(".gitconfig"),
         home.join(".git-credentials"),
@@ -159,6 +160,16 @@ pub fn session_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ollama_signin_credentials_are_protected_for_every_role() {
+        let paths = Paths {
+            owner_home: "/owner".into(),
+            daemon_home: "/daemon".into(),
+            worktree: "/repo".into(),
+            docs: "/docs".into(),
+        };
+        assert!(protected(&paths).contains(&PathBuf::from("/owner/.ollama")));
+    }
     #[test]
     fn configured_credential_store_paths_are_protected_without_running_helpers() {
         let t = tempfile::tempdir().unwrap();

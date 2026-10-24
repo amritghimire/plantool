@@ -1024,3 +1024,86 @@ fn next_attempt_uses_verified_wip_without_crossing_a_plan_revision() {
         default
     );
 }
+
+#[tokio::test]
+async fn personal_cloud_model_retains_remote_allowlist_and_lease_checks() {
+    let f = Fixture::new();
+    let attempt = dispatcher::admit(&f.home, &f.request(1), 0)
+        .unwrap()
+        .attempt_id;
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE attempts SET state='running' WHERE id=?1",
+        [&attempt],
+    )
+    .unwrap();
+    db.execute("INSERT INTO runs_summary(attempt_id,provider,model) VALUES(?1,'ollama-cloud','remote:cloud')",[&attempt]).unwrap();
+    db.execute("INSERT INTO project_settings(project_id,version,allowed_providers_json,effective_at,set_by) VALUES(?1,1,'[\"ollama\"]','now','test')",[&f.project]).unwrap();
+    let context = plantool_contract::LlmContext {
+        item: f.item.clone(),
+        role: "backend".into(),
+        generation: 1,
+        attempt_id: Some(attempt.clone()),
+        idempotency_key: "personal-cloud".into(),
+    };
+    let gateway = FakeGateway {
+        calls: AtomicUsize::new(0),
+        status: 200,
+        catalog: vec![],
+    };
+    let lifecycle = FakeLifecycle::default();
+    let execution = Arc::new(plantool_daemon::execution::Execution::default());
+    let owner = format!("attempt:{attempt}");
+    let body = json!({"model":"untrusted-local-override","messages":[]});
+    assert!(proxy::complete(
+        &f.home,
+        &owner,
+        &context,
+        body.clone(),
+        execution.clone(),
+        &gateway,
+        &lifecycle
+    )
+    .await
+    .is_err());
+    assert_eq!(gateway.calls.load(Ordering::SeqCst), 0);
+    db.execute("INSERT INTO project_settings(project_id,version,allowed_providers_json,effective_at,set_by) VALUES(?1,2,'[\"ollama-cloud\"]','now','test')",[&f.project]).unwrap();
+    assert!(
+        proxy::complete(
+            &f.home,
+            &owner,
+            &context,
+            body.clone(),
+            execution.clone(),
+            &gateway,
+            &lifecycle
+        )
+        .await
+        .is_err(),
+        "Cloud access still needs the global lease"
+    );
+    let _lease = lease::acquire(
+        &f.home,
+        &owner,
+        Some(&attempt),
+        lease::Model {
+            route: "personal:ollama-cloud".into(),
+            provider: "ollama-cloud".into(),
+            model: "remote:cloud".into(),
+        },
+        false,
+        0,
+        execution.clone(),
+        &lifecycle,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        proxy::complete(&f.home, &owner, &context, body, execution, &gateway, &lifecycle)
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    assert_eq!(gateway.calls.load(Ordering::SeqCst), 1);
+}

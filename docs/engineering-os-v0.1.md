@@ -439,7 +439,7 @@ The daemon serves an **OpenAI-compatible `/v1/chat/completions` endpoint** on th
 
 1. checks that the caller holds the lease;
 2. picks the route from the chain;
-3. injects the provider's API key (OpenRouter and Ollama Cloud keys live in the Keychain, never in agent environments);
+3. uses native authentication: Codex through CLI/app-server, local and cloud Ollama through signed-in loopback Ollama without a PlanTool API key, and OpenRouter/OpenCode Zen through daemon-held Keychain keys (never agent environments);
 4. counts requests and tokens against `budgets`;
 5. maps quota errors to move-down events.
 

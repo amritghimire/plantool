@@ -13,22 +13,23 @@ pub trait Gateway: Send + Sync {
     fn chat<'a>(&'a self, provider: &'a str, body: Value) -> BoxFuture<'a, anyhow::Result<Reply>>;
 }
 pub struct HttpGateway;
+pub(crate) async fn ollama_provider(model: &str) -> anyhow::Result<&'static str> {
+    super::ollama::Connection::configured()?
+        .provider(model)
+        .await
+}
+
 fn base(provider: &str) -> anyhow::Result<String> {
-    if provider == "ollama" {
-        return Ok(format!("{}/v1", crate::providers::ollama_base_url()));
-    }
     Ok(match provider {
         "openrouter" => "https://openrouter.ai/api/v1",
-        "ollama-cloud" => "https://ollama.com/v1",
         "opencode-zen" => "https://opencode.ai/zen/v1",
-        "ollama" => "http://localhost:11434/v1",
         _ => anyhow::bail!("Provider is CLI-only or unknown"),
     }
     .to_string())
 }
 #[cfg(target_os = "macos")]
 fn key(provider: &str) -> anyhow::Result<Option<String>> {
-    if provider == "ollama" {
+    if matches!(provider, "ollama" | "ollama-cloud") {
         return Ok(None);
     }
     let out = std::process::Command::new("/usr/bin/security")
@@ -47,7 +48,7 @@ fn key(provider: &str) -> anyhow::Result<Option<String>> {
 }
 #[cfg(not(target_os = "macos"))]
 fn key(provider: &str) -> anyhow::Result<Option<String>> {
-    if provider == "ollama" {
+    if matches!(provider, "ollama" | "ollama-cloud") {
         Ok(None)
     } else {
         anyhow::bail!("Provider keys require macOS Keychain")
@@ -81,6 +82,11 @@ async fn codex_models() -> anyhow::Result<Vec<String>> {
 impl Gateway for HttpGateway {
     fn models<'a>(&'a self, provider: &'a str) -> BoxFuture<'a, anyhow::Result<Vec<String>>> {
         Box::pin(async move {
+            if matches!(provider, "ollama" | "ollama-cloud") {
+                return super::ollama::Connection::configured()?
+                    .models(provider)
+                    .await;
+            }
             if provider == "openai" {
                 return codex_models().await;
             }
@@ -103,6 +109,11 @@ impl Gateway for HttpGateway {
     }
     fn chat<'a>(&'a self, provider: &'a str, body: Value) -> BoxFuture<'a, anyhow::Result<Reply>> {
         Box::pin(async move {
+            if matches!(provider, "ollama" | "ollama-cloud") {
+                return super::ollama::Connection::configured()?
+                    .chat(provider, body)
+                    .await;
+            }
             let client = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(180))
@@ -114,46 +125,51 @@ impl Gateway for HttpGateway {
                 request = request.bearer_auth(key)
             }
             let response = request.send().await?;
-            let status = response.status().as_u16();
-            let content_type = response
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("application/json")
-                .to_string();
-            let reset = response
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<i64>().ok())
-                .map(|s| crate::database::unix_now() + s)
-                .or_else(|| {
-                    response
-                        .headers()
-                        .get("x-ratelimit-reset")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse().ok())
-                });
-            anyhow::ensure!(
-                response
-                    .content_length()
-                    .is_none_or(|n| n <= 16 * 1024 * 1024),
-                "Provider response too large"
-            );
-            let bytes = response.bytes().await?;
-            anyhow::ensure!(
-                bytes.len() <= 16 * 1024 * 1024,
-                "Provider response too large"
-            );
-            Ok(Reply {
-                status,
-                body: String::from_utf8(bytes.to_vec())?,
-                content_type,
-                reset,
-            })
+            self::response(response).await
         })
     }
 }
+// Shared bounded response handling preserves quota headers for every transport.
+pub(super) async fn response(response: reqwest::Response) -> anyhow::Result<Reply> {
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    let reset = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .map(|s| crate::database::unix_now() + s)
+        .or_else(|| {
+            response
+                .headers()
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok())
+        });
+    anyhow::ensure!(
+        response
+            .content_length()
+            .is_none_or(|n| n <= 16 * 1024 * 1024),
+        "Provider response too large"
+    );
+    let bytes = response.bytes().await?;
+    anyhow::ensure!(
+        bytes.len() <= 16 * 1024 * 1024,
+        "Provider response too large"
+    );
+    Ok(Reply {
+        status,
+        body: String::from_utf8(bytes.to_vec())?,
+        content_type,
+        reset,
+    })
+}
+
 pub async fn verify(
     home: &std::path::Path,
     gateway: &dyn Gateway,
@@ -209,4 +225,13 @@ pub async fn verify(
     )?;
     tx.commit()?;
     Ok(Value::Object(results))
+}
+
+#[cfg(test)]
+mod credential_tests {
+    #[test]
+    fn ollama_uses_service_login_without_daemon_api_keys() {
+        assert!(super::key("ollama").unwrap().is_none());
+        assert!(super::key("ollama-cloud").unwrap().is_none());
+    }
 }

@@ -529,17 +529,31 @@ impl RunManager {
 
         tokio::spawn(async move {
             let mut work = Box::pin(async {
+                // Personal uses the same local Ollama service. Preserve its cloud
+                // model support while recording the actual provider for policy and lease.
+                let model_provider = if provider == Provider::Ollama {
+                    crate::models::gateway::ollama_provider(
+                        opts.model
+                            .as_deref()
+                            .ok_or_else(|| anyhow::anyhow!("Select an installed Ollama model"))?,
+                    )
+                    .await?
+                } else {
+                    provider.as_str()
+                };
+                if provider == Provider::Ollama {
+                    crate::database::open(&daemon_home)?.execute(
+                        "UPDATE runs_summary SET provider=?2 WHERE attempt_id=?1",
+                        rusqlite::params![run_id, model_provider],
+                    )?;
+                }
                 let _lease = crate::models::lease::acquire(
                     &daemon_home,
                     &format!("attempt:{run_id}"),
                     Some(&run_id),
                     crate::models::lease::Model {
                         route: format!("personal:{}", provider.as_str()),
-                        provider: if provider == Provider::Ollama {
-                            "ollama".into()
-                        } else {
-                            provider.as_str().into()
-                        },
+                        provider: model_provider.into(),
                         model: opts
                             .model
                             .clone()
