@@ -63,6 +63,7 @@ async fn sandbox_denies_secret_files_never_sent_files_and_outside_writes() {
     let mut denied = Vec::new();
     for name in [
         ".ssh/id_fixture",
+        ".ollama/id_ed25519",
         ".config/gh/hosts.yml",
         ".gitconfig",
         ".git-credentials",

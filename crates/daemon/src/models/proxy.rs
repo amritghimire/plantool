@@ -135,16 +135,16 @@ pub async fn complete(
         let selected: router::Selected = if let Some(route) = route {
             serde_json::from_str(&route)?
         } else {
-            let model: String = db.query_row(
-                "SELECT model FROM runs_summary WHERE attempt_id=?1 AND provider='ollama'",
+            let (model, provider): (String, String) = db.query_row(
+                "SELECT model,provider FROM runs_summary WHERE attempt_id=?1 AND provider IN('ollama','ollama-cloud')",
                 [attempt],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?,r.get(1)?)),
             )?;
             router::Selected {
-                name: "personal:ollama".into(),
+                name: format!("personal:{provider}"),
                 route: router::Route {
                     adapter: "opencode".into(),
-                    provider: "ollama".into(),
+                    provider,
                     model,
                     budget: None,
                 },

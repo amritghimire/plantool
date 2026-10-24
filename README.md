@@ -338,8 +338,8 @@ denials; CI runs them on macOS. The test file is excluded on other platforms.
 
 ## Engineering OS worker bridge
 
-Engineering OS requires macOS and `sandbox-exec`. Its graph is a Phase 2 stub: it can start,
-interrupt, resume and cancel, but the GitHub App and autonomous role workflow are not implemented.
+Engineering OS requires macOS and `sandbox-exec`. Its checkpointed work-item graph runs
+roles through owner plan/PR gates; see the work-item agents section below.
 Personal remains the Rust engine and never downloads or starts Python. Both modes share a single
 model lease, so a hosted coding run or LLM request waits while another holds it. Coding runs
 checkpoint after at most 45 minutes; model changes happen between attempts.
@@ -361,9 +361,20 @@ substituted. `auto` routes resolve from the advertised catalog and display their
 QA/Reviewer prefer a different model family; an unavoidable match is recorded in the result's
 `review_guide.same_family_warning`.
 
-Remote API keys are read only by the daemon from macOS Keychain generic-password services:
-`plantool/openrouter`, `plantool/ollama-cloud`, and `plantool/opencode-zen`. Add these using
-Keychain Access; no provider keys belong in worker/agent environment variables or chain YAML.
+Ollama local and cloud routes both connect through the installed local Ollama service
+(default port 11434; `OLLAMA_HOST` must be loopback). Run `ollama signin` on the daemon host
+for cloud access, pull the desired model references, then verify routes in Settings.
+PlanTool sends no Ollama API key and never reads Ollama's login files. The old
+`plantool/ollama-cloud` Keychain entry is unused; remove it manually if desired.
+
+Cloud references are discovered from `/api/tags` and remain the remote `ollama-cloud`
+provider for allowlist, quota and audit purposes. Local-only `ollama` routes reject cloud
+models and renamed remote aliases before sending prompts. Model chains and fallback order
+are unchanged. See [native provider setup](docs/ollama-native-transport.md).
+
+OpenRouter and OpenCode Zen API keys are read only by the daemon from macOS Keychain services
+`plantool/openrouter` and `plantool/opencode-zen`. Add these using Keychain Access;
+no provider keys belong in worker/agent environment variables or chain YAML.
 Codex retains its own subscription auth file and uses the existing app-server adapter under the
 lease. Engineering OS OpenCode uses a custom provider pointing at the daemon's OpenAI-compatible
 proxy, with a scoped run token. It does not inherit legacy OpenCode provider credentials.
