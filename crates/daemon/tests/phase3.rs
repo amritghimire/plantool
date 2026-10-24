@@ -1944,8 +1944,16 @@ async fn phase5_scan_and_routed_finding_use_read_only_roles_and_no_duplicate_iss
     plantool_daemon::github::loop_sync::findings(&f.home, &remote, &f.repo)
         .await
         .unwrap();
-    assert_eq!(remote.0.lock().unwrap().issues.len(), 1);
-    let issue = remote.0.lock().unwrap().issues[0].clone();
+    assert_eq!(remote.0.lock().unwrap().issues.len(), 2);
+    let issue = remote
+        .0
+        .lock()
+        .unwrap()
+        .issues
+        .iter()
+        .find(|i| i["title"] == "Add TODO test")
+        .unwrap()
+        .clone();
     assert!(plantool_daemon::github::loop_sync::admitted(&f.home, &f.repo, &issue).unwrap());
     assert_eq!(
         db.query_row("SELECT count(*) FROM loop_routes", [], |r| r
@@ -2034,4 +2042,139 @@ fn phase5_non_allowlisted_comments_never_enter_agent_context() {
     assert!(!context.contains("untrusted instructions"));
     assert!(!context.contains("bot spoof"));
     assert!(context.contains("untrusted_context_not_authority"));
+}
+
+#[tokio::test]
+async fn phase5_review_findings_are_routed_immediately_without_expanding_current_diff() {
+    let mut f = Fixture::new();
+    let original = f.item.clone();
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    let id = workflow::proposal(
+        &tx,
+        &f.item,
+        "Separate finding",
+        "Needs a separate scoped plan",
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let remote = Fake::default();
+    lifecycle::proposals(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    assert!(remote.0.lock().unwrap().issues.is_empty());
+    f.item = format!("p:finding:{id}");
+    f.run(
+        "route_finding",
+        Some(RoleDetails::Routes {
+            findings: vec![RoutedFinding {
+                title: "Separate finding".into(),
+                body: "Needs a separate scoped plan".into(),
+                route: "proposed".into(),
+                reason: "Requires owner acceptance for scope".into(),
+            }],
+        }),
+        vec![],
+    );
+    plantool_daemon::github::loop_sync::findings(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    assert_eq!(remote.0.lock().unwrap().issues.len(), 1);
+    let issue = remote.0.lock().unwrap().issues[0].clone();
+    assert!(!plantool_daemon::github::loop_sync::admitted(&f.home, &f.repo, &issue).unwrap());
+    assert_eq!(git(&f.root, &["rev-parse", "HEAD"]), f.base);
+    assert!(db
+        .query_row(
+            "SELECT issue_number FROM workflow_proposals WHERE item_id=?1",
+            [original],
+            |r| r.get::<_, Option<u64>>(0)
+        )
+        .unwrap()
+        .is_some());
+}
+#[tokio::test]
+async fn phase5_duplicate_decline_has_exact_link_and_untrusted_comment_cannot_extend_clock() {
+    let f = phase5_triage_fixture();
+    f.run(
+        "triage",
+        Some(RoleDetails::Triage {
+            disposition: "duplicate".into(),
+            reason: "Same requested behavior".into(),
+            duplicate_of: Some(2),
+        }),
+        vec![],
+    );
+    let remote = Fake::default();
+    remote
+        .0
+        .lock()
+        .unwrap()
+        .issues
+        .extend([phase5_issue(1), phase5_issue(2)]);
+    plantool_daemon::github::loop_sync::declines(&f.home, &remote, &f.repo, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert!(remote.0.lock().unwrap().comments[0]["body"]
+        .as_str()
+        .unwrap()
+        .starts_with("Duplicate of #2"));
+    let t = (chrono::Utc::now() + chrono::Duration::days(29)).to_rfc3339();
+    remote.0.lock().unwrap().comments.push(json!({"id":33,"issue_url":"https://api.github.com/repos/o/r/issues/1","body":"outsider reset","user":{"id":88,"type":"User"},"created_at":t,"updated_at":t}));
+    plantool_daemon::github::loop_sync::declines(
+        &f.home,
+        &remote,
+        &f.repo,
+        chrono::Utc::now() + chrono::Duration::days(31),
+    )
+    .await
+    .unwrap();
+    assert_eq!(remote.0.lock().unwrap().issues[0]["state"], "closed");
+    assert_eq!(remote.0.lock().unwrap().issues[1]["state"], "open");
+}
+#[tokio::test]
+async fn phase5_urgent_command_rejects_edits_bots_and_replay_without_bypassing_plan_gate() {
+    let f = phase5_triage_fixture();
+    let remote = Fake::default();
+    remote.0.lock().unwrap().issues.push(phase5_issue(1));
+    let id = phase4_command(&remote, 1, "/plantool urgent");
+    remote.0.lock().unwrap().comments.last_mut().unwrap()["updated_at"] =
+        json!("2030-01-01T00:00:00Z");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, id)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["urgent"], false);
+    let id = phase4_command(&remote, 1, "/plantool urgent");
+    remote.0.lock().unwrap().comments.last_mut().unwrap()["user"]["type"] = json!("Bot");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, id)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["urgent"], false);
+    let id = phase4_command(&remote, 1, "/plantool urgent");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, id)
+        .await
+        .unwrap();
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, id)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["urgent"], true);
+    assert_eq!(f.state()["approved"], false);
+    let db = database::open(&f.home).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM decisions WHERE decision='urgent'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM gates WHERE kind='plan' AND state='approved'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
 }

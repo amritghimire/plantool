@@ -461,6 +461,14 @@ pub async fn scans(
         return Ok(());
     };
     let id = format!("{}:scan:{week}:{signature}", repo.project);
+    crate::scheduler::ensure_project(home, &repo.project)?;
+    let sprint = format!("{}:{week}", repo.project);
+    database::open(home)?.execute(
+        "INSERT OR IGNORE INTO sprints(id,project_id,week,state) VALUES(?1,?2,?3,'scanning')",
+        params![sprint, repo.project, week],
+    )?;
+    super::sprints::ensure_tracking(home, api, repo, &sprint, &week).await?;
+
     if workflow::state(&database::open(home)?, &id)?.is_some() {
         return Ok(());
     }

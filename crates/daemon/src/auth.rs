@@ -897,6 +897,8 @@ mod tests {
     fn approvals_and_existing_security_changes_require_assertions() {
         for path in [
             "/api/settings/difftool",
+            "/api/settings/loop",
+            "/api/settings/loop/override",
             "/api/settings/worktree-dir",
             "/api/sessions/repo/item/milestone/approve",
             "/api/sessions/repo/item/runs/id/milestone/approve",
