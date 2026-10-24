@@ -944,7 +944,10 @@ async fn worker_identity_is_socket_only_and_repair_needs_a_fresh_bound_assertion
             .uri("/internal/v1/health")
             .header("host", "localhost:41300")
             .header("x-plantool-run-token", &secret)
-            .header("x-plantool-contract-version", "1")
+            .header(
+                "x-plantool-contract-version",
+                plantool_contract::CONTRACT_VERSION.to_string(),
+            )
             .body(Body::empty())
             .unwrap()
     };
@@ -1043,5 +1046,74 @@ async fn worker_identity_is_socket_only_and_repair_needs_a_fresh_bound_assertion
         .await
         .status(),
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn github_settings_are_browser_only_and_assertions_bind_the_allowlist() {
+    let h = harness();
+    let path = "/api/settings/github/allowlist";
+    let body = json!({"login":"amritghimire","remove":false});
+    assert_eq!(
+        raw(
+            &h.app,
+            "GET",
+            "/api/settings/github",
+            json!(null),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&h.app, "POST", path, body.clone()).await;
+    let db = plantool_daemon::database::open(&h.state.config.home).unwrap();
+    db.execute("INSERT INTO allowlist VALUES(7,'other','now','test')", [])
+        .unwrap();
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            body,
+            Some(&browser.cookie),
+            Some(&proof)
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+#[tokio::test]
+async fn github_preflight_refresh_requires_a_fresh_assertion() {
+    let h = harness();
+    let browser = Browser::register(&h.app, &h.state.config.home).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            "/api/settings/github/preflight",
+            json!({"project":"p"}),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
     );
 }

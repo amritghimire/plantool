@@ -403,3 +403,61 @@ replayed dispatch/resume delivery, quota fallback, lease serialization and never
 Nix's dev shell uses the same pinned uv version. `nix build` builds the web assets, Rust binary
 with crane and worker venv with uv2nix from the same `worker/uv.lock`; `nix run` starts the packaged
 CLI. A Nix-built worker uses its packaged Python environment and skips network bootstrap.
+
+### GitHub App setup and plan gates
+
+In Settings → GitHub App setup, follow the browser wizard to create/install the App,
+disable webhooks, and grant Issues, Pull requests, Contents and Checks write;
+Commit statuses, Actions, Administration and Metadata read. Connect the numeric App and
+installation IDs, `owner/repository`, a matching local checkout, and the RSA PEM once.
+The daemon stores the key using security-framework in macOS Keychain service
+`plantool/github-app`, account `<app-id>`. JWTs use RS256; installation credentials are
+cached for at most 59 minutes and expire earlier when GitHub requires it. No App key or
+installation token is passed to the worker or agents. Linux has an explicit unavailable
+Keychain stub; Personal still works without App setup.
+
+The wizard resolves `amritghimire` to a numeric ID once as the initial approver. Add/remove users
+with a fresh passkey; changes are audited and the last approver cannot be removed. Names
+are display metadata, never approval authority. Preflight warns about missing required
+checks, approving reviews or dismissal of stale reviews. Warnings remain visible after reopening Settings; Refresh preflight with passkey checks the live default branch without re-entering credentials. Label setup records each write intent before the GitHub request and recovers a lost response by looking up the unique label. It links branch settings; add
+`plantool/policy` once the later PR workflow actually publishes that check. Finish setup
+using the existing worker Repair, route verification, allowed-provider and never-sent
+controls. Provider settings apply to both public and private repositories; a visibility
+change is audited but never changes them automatically.
+
+The daemon polls every 60 seconds with paginated ETags and durable cursors/inbox receipts.
+It rechecks repository numeric identity and visibility, synchronizes issues/comments,
+label events (including actors), PR state/reviews and check runs. Only an allowlisted
+human label actor counts; App labels are informational. This half-phase records that
+information but does not run triage, roles, work-item graphs, pushes, PRs or merges.
+
+A plan gate pins the newest immutable revision, policy version and waiting graph identity.
+Each publication is a new App comment with the full hash, a discussion summary and a link
+to a read-only PlanTool plan/thread page. The worker gate request may supply `summary` and
+`discussion_thread_id`; the thread must belong to that item. Otherwise the page explicitly
+has no supplied discussion summary. GitHub is where approvals happen: post exactly
+`/plantool approve-plan sha256:<12-or-more-hex-prefix>` or
+`/plantool request-changes <reason>` on its own line in the issue comment. Empty leading/trailing lines and GitHub line endings are accepted; prose and multiple commands are rejected. PlanTool refetches the comment and issue, then revalidates the comment immediately before committing,
+requires an allowlisted numeric human ID, rejects edits, deletions, comments at/before the
+publication, stale revisions/policies and used comment IDs. Decision, gate closure and
+idempotent graph-resume outbox entry commit together. Natural language never approves.
+Near-miss replies are limited to allowlisted humans, with eligibility rechecked at delivery. Publication recovery precedes command polling; open gates also backfill issue comments so a previously advanced cursor cannot lose an approval posted while the daemon was down.
+
+The parser and verification context also cover sprint, per-item sprint, milestone and
+urgent command syntax. Their workflow effects remain deferred to the scoped later
+implementations. No PR approval/merge gate is implemented here. After an uncertain GitHub
+POST, publication searches all comment pages for its App-authored marker. If it cannot
+prove the outcome, it stops for owner inspection instead of risking duplicate comments;
+the repository's last sync error appears in Settings. Definite API rejections (for example, missing permission) remain retryable once corrected. Do not delete an uncertain outbox
+entry or repeat the publication blindly.
+
+Default GitHub tests use mocks only:
+
+```bash
+cargo test -p plantool-daemon --test github
+```
+
+The opt-in real playground suite and local macOS instructions are in
+[tests/e2e_github/README.md](tests/e2e_github/README.md). It creates and closes a disposable
+issue, checks App publication/forged approval rejection/real owner approval/replay, and
+leaves comments as evidence. It does not exercise the deferred PR workflow or call models.

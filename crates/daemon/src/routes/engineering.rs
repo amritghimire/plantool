@@ -64,7 +64,7 @@ pub(crate) fn worker(
         || headers
             .get("x-plantool-contract-version")
             .and_then(|h| h.to_str().ok())
-            != Some("1")
+            != Some(plantool_contract::CONTRACT_VERSION.to_string().as_str())
     {
         return Err(ApiError(
             StatusCode::FORBIDDEN,

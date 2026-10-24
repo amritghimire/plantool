@@ -156,11 +156,28 @@ async fn gate(
         .contains(&request.kind.as_str()),
         "Invalid gate kind"
     );
+    let digest =
+        plantool_core::sha256_hex(&serde_json::to_string(&request).map_err(anyhow::Error::from)?);
     let value = database::inbox_once(
         &state.config.home,
         "worker.gate",
         &request.idempotency_key,
         |tx| {
+            if request.kind == "plan" {
+                let id = crate::github::gates::request(
+                    tx,
+                    &request.item,
+                    &request.target_digest,
+                    request.thread_id.as_deref().unwrap_or(""),
+                    request.interrupt_id.as_deref().unwrap_or(""),
+                )?;
+                if let Some(thread) = &request.discussion_thread_id {
+                    let belongs:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM threads t JOIN work_items i ON i.id=t.item_id WHERE t.id=?1 AND t.item_id=?2 AND t.project_id=i.project_id)",params![thread,request.item],|r|r.get(0))?;
+                    ensure!(belongs, "Discussion thread is outside this item");
+                }
+                tx.execute("UPDATE github_gate_context SET summary=coalesce(?2,summary),discussion_thread_id=?3 WHERE gate_id=?1",params![id,request.summary,request.discussion_thread_id])?;
+                return Ok(json!({"gate_id":id,"publication":"pending","request_digest":digest}));
+            }
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute("INSERT INTO gates(id,item_id,kind,target_digest,target_sha,state,created_at) VALUES(?1,?2,?3,?4,?5,'pending',?6)",params![id,request.item,request.kind,request.target_digest,request.target_sha,plantool_core::now()])?;
             database::audit(
@@ -171,10 +188,14 @@ async fn gate(
                 &serde_json::to_value(&request)?,
             )?;
             Ok(
-                json!({"gate_id":id,"publication":"GitHub App publication is unavailable until Phase 3"}),
+                json!({"gate_id":id,"publication":"This gate kind is not connected in the GitHub half-phase","request_digest":digest}),
             )
         },
     )?;
+    ensure!(
+        value["request_digest"].as_str() == Some(digest.as_str()),
+        "Gate idempotency key reused with different input"
+    );
     Ok(Json(value))
 }
 async fn message(

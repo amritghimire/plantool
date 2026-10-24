@@ -271,7 +271,29 @@ fn persist(inner: &Inner) -> anyhow::Result<()> {
                 "INSERT OR IGNORE INTO projects(id,local_checkout,created_at) VALUES(?1,?2,?3)",
                 rusqlite::params![project, repo.to_string_lossy(), plantool_core::now()],
             )?;
-            tx.execute("INSERT OR IGNORE INTO project_settings(project_id,version,never_sent_globs_json,effective_at,set_by) VALUES(?1,?2,?3,?4,'browser')",rusqlite::params![project,inner.saved.status.policy_revision,serde_json::to_string(patterns)?,plantool_core::now()])?;
+            let targets = {
+                let mut q = tx.prepare("SELECT id FROM projects WHERE local_checkout=?1")?;
+                let rows = q.query_map([repo.to_string_lossy()], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for target in targets {
+                let previous:Option<String>=tx.query_row("SELECT never_sent_globs_json FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",[&target],|r|r.get(0)).optional()?;
+                let value = serde_json::to_string(patterns)?;
+                if previous.as_deref() == Some(&value) {
+                    continue;
+                }
+                let copied=tx.execute("INSERT INTO project_settings(project_id,version,oversight,allowed_providers_json,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,effective_at,set_by) SELECT project_id,version+1,oversight,allowed_providers_json,?2,sprint_day,scan_time,timezone,retention_json,?3,'browser' FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",rusqlite::params![target,value,plantool_core::now()])?;
+                if copied == 0 {
+                    tx.execute("INSERT INTO project_settings(project_id,version,never_sent_globs_json,effective_at,set_by) VALUES(?1,1,?2,?3,'browser')",rusqlite::params![target,value,plantool_core::now()])?;
+                }
+                crate::database::audit(
+                    &tx,
+                    "human",
+                    "sandbox.never_sent",
+                    &target,
+                    &serde_json::json!({"patterns":patterns}),
+                )?;
+            }
         }
         tx.commit()?;
     }

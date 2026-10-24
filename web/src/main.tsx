@@ -1,3 +1,4 @@
+import {GithubPlan} from "./components/GithubPlan";
 import React from "react";
 import { CleanBreakNotice } from "./components/CleanBreakNotice";
 import { ExecutionControls } from "./components/ExecutionControls";
@@ -12,6 +13,7 @@ function App() {
   return (
     <AuthGate><CleanBreakNotice /><ExecutionControls /><BrowserRouter>
       <Routes>
+        <Route path="/github/plans/:id" element={<GithubPlan/>} />
         <Route path="/" element={<SessionList />} />
         <Route path="/s/:repo/:slug" element={<SessionPage />} />
         <Route path="*" element={<SessionList />} />

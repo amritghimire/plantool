@@ -2,7 +2,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const GRAPH_VERSION: u32 = 1;
 macro_rules! wire {
     ($name:ident {$($field:ident: $ty:ty),* $(,)?}) => {
@@ -66,7 +66,7 @@ wire!(DispatchReply {
     attempt_id: String,
     generation: u64
 });
-wire!(Gate {item:String, kind:String, target_digest:String, target_sha:Option<String>, idempotency_key:String});
+wire!(Gate {item:String, kind:String, target_digest:String, target_sha:Option<String>, idempotency_key:String, thread_id:Option<String>, interrupt_id:Option<String>, summary:Option<String>, discussion_thread_id:Option<String>});
 wire!(ReadArtifact {
     item: String,
     sha256: String

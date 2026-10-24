@@ -11,6 +11,7 @@ pub mod dispatcher;
 pub mod events;
 pub mod execution;
 pub mod git;
+pub mod github;
 pub mod identities;
 pub mod models;
 pub mod prompts;
@@ -83,6 +84,17 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             timer.tick().await;
             if let Err(error) = dispatcher::runtime::tick(&dispatch_state).await {
                 tracing::warn!("dispatch recovery pending: {error}");
+            }
+        }
+    });
+    let github_home = config.home.clone();
+    let github_sync = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(e) = github::sync::tick(&github_home).await {
+                tracing::warn!("GitHub sync: {e}");
             }
         }
     });
@@ -193,6 +205,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             abort.abort();
         }
     }
+    github_sync.abort();
     idle_sweep.abort();
     dispatch_job.abort();
     retention_job.abort();

@@ -519,8 +519,20 @@
         "target_digest"
       ],
       "properties": {
+        "discussion_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "idempotency_key": {
           "type": "string"
+        },
+        "interrupt_id": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "item": {
           "type": "string"
@@ -528,10 +540,22 @@
         "kind": {
           "type": "string"
         },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "target_digest": {
           "type": "string"
         },
         "target_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
           "type": [
             "string",
             "null"

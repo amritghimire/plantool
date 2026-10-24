@@ -301,6 +301,10 @@ fn make_binding(
     if let Some(execution) = &execution {
         data["execution"] = json!(execution);
     }
+    if path.starts_with("/api/settings/github") {
+        data["github"] =
+            crate::routes::github::snapshot(&state.config.home).map_err(|_| denied())?;
+    }
     if path.starts_with("/api/settings/models") {
         data["chains"] =
             json!(crate::models::router::config(&state.config.home).map_err(|_| denied())?);

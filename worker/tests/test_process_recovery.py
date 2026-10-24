@@ -29,7 +29,7 @@ uvicorn.run(create_app(home,token,httpx.MockTransport(daemon)),uds=sys.argv[2],l
 async def test_killed_worker_resumes_checkpoint_once_and_never_repeats_dispatch_effect(tmp_path):
     token="fake-worker-token-"*4
     socket=tmp_path/"worker.sock"
-    headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"1"}
+    headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"2"}
     processes=[]
     def launch():
         if socket.exists():socket.unlink()

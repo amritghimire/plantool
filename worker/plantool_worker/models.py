@@ -147,11 +147,15 @@ class Gate(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
+    discussion_thread_id: str | None = None
     idempotency_key: str
+    interrupt_id: str | None = None
     item: str
     kind: str
+    summary: str | None = None
     target_digest: str
     target_sha: str | None = None
+    thread_id: str | None = None
 
 
 class Graph(str, Enum):
