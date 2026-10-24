@@ -774,7 +774,7 @@ pub async fn process_item(
 pub async fn proposals(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
     let rows = {
         let db = database::open(home)?;
-        let mut q=db.prepare("SELECT f.id,f.item_id,f.title,f.body FROM workflow_proposals f JOIN work_items i ON i.id=f.item_id WHERE i.project_id=?1 AND f.issue_number IS NULL")?;
+        let mut q=db.prepare("SELECT f.id,f.item_id,f.title,f.body FROM workflow_proposals f JOIN work_items i ON i.id=f.item_id WHERE i.project_id=?1 AND f.issue_number IS NULL AND NOT EXISTS(SELECT 1 FROM workflow_items w WHERE w.item_id=i.project_id||':finding:'||f.id)")?;
         let rows = q.query_map([&repo.project], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -854,21 +854,7 @@ pub async fn start_new(
             continue;
         }
         let db = database::open(home)?;
-        if !super::gates::valid_identity(&db, issue) {
-            continue;
-        }
-        let created: String = db.query_row(
-            "SELECT created_at FROM projects WHERE id=?1",
-            [&repo.project],
-            |r| r.get(0),
-        )?;
-        let Some(time) = issue["created_at"]
-            .as_str()
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        else {
-            continue;
-        };
-        if time < chrono::DateTime::parse_from_rfc3339(&created)? {
+        if !super::loop_sync::admitted(home, repo, issue)? {
             continue;
         }
         let Some(number) = issue["number"].as_u64() else {

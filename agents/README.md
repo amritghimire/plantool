@@ -23,8 +23,7 @@ conventions and task/plan/prior-result context. Shared research/plan/implement s
 separate Engineering OS and Personal sections; the Personal CLI/browser loops are preserved
 and are not instructions for an Engineering OS dispatch.
 
-Active skills are selected by crates/daemon/src/instructions.rs. Sprint-plan, discuss and moderate now support the Phase 4 project/workspace graph. Triage
-and scan remain reserved for Phase 5; no urgent workflow is added.
+Active skills are selected by crates/daemon/src/instructions.rs. Sprint-plan, discuss and moderate now support the Phase 4 project/workspace graph. Triage and scan now support Phase 5 read-only intake and scheduled loop graphs. Urgent requests remain notifications until an allowlisted GitHub actor promotes the item.
 
 ## Existing typed details examples
 

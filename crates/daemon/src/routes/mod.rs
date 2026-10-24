@@ -6,6 +6,7 @@ pub mod engineering;
 pub mod execution;
 pub mod github;
 pub mod live;
+pub mod loop_settings;
 mod models;
 pub mod notices;
 pub mod oversight;
@@ -157,6 +158,7 @@ pub fn router(state: AppState) -> Router {
         .merge(engineering::browser_routes())
         .merge(workspace::routes())
         .merge(oversight::routes())
+        .merge(loop_settings::routes())
         .merge(models::browser_routes())
         .merge(github::routes())
         .merge(notices::routes())

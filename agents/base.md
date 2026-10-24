@@ -69,4 +69,13 @@ prepared item IDs and descriptive estimates. Do not use a Personal review loop.
 For Standard/Strict work, implement only keys in the current phase. A milestone is an
 owner stop on the exact pushed commit, not an agent completion claim. Never self-continue
 or treat an earlier commit's approval as permission for another head. Strict research
-approval is separate from plan approval. Reserved Phase 5 intake/scan/urgent work stays off.
+approval is separate from plan approval. Phase 5 adds read-only PM triage and DevOps/QA/PM scans. An urgent request is context until an allowlisted GitHub actor promotes it; a promoted item still needs its own plan and PR gates.
+
+## Continuous loop
+Loop triage and scan turns use read capabilities only. Return the exact typed result
+requested for that step. Findings are routed into new issues, never fixed in the
+current approved work item. Backlog and declines wait for daemon events. Owner context
+messages, urgency requests, scan findings and routing decisions never approve work.
+If project Nix is enabled and flake.nix exists, the daemon starts the coding CLI under
+`nix develop --no-write-lock-file -c`; build/test subprocesses inherit that dev shell.
+Keep every command inside the sandbox. Never install Nix or modify project policy.

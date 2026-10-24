@@ -475,8 +475,8 @@ leaves comments as evidence. It does not exercise the deferred PR workflow or ca
 
 ### Engineering OS work-item agents
 
-New open issues by allowlisted human authors, created after GitHub project setup, start the
-work-item graph directly. Phase 4 adds sprint scheduling and workspace discussions; triage remains deferred.
+Admitted issues enter read-only PM triage. Fits items wait in backlog until plan preparation;
+verified urgent items proceed immediately. Phase 4 supplies sprint scheduling and workspace discussions.
 The graph dispatches each role, interrupts and resumes with a daemon-validated result:
 CTO research → PM keyed plan → CTO review → GitHub plan gate → approved coding areas →
 conditional DevOps → QA → Reviewer security pass → Docs → App PR and current-head PR gate.
@@ -500,7 +500,7 @@ A new head resets the gate. Main movement rebases and reruns QA/Reviewer; confli
 to implementation. Merge uses `sha=<approved head>` and a permitted repository method;
 GitHub enforces branch protection. Refusals and uncertain outcomes pause for owner review.
 
-The graph/contract versions advance to 3/4; older checkpoint versions are refused rather
+The graph/contract versions are now 4/5; older checkpoint versions are refused rather
 than silently resumed. Personal continues without Python, worker setup or GitHub credentials.
 See [the native two-approval playground guide](tests/e2e_github/PHASE3_AGENT.md) for later
 installation testing, and [evals](evals/README.md) for five small tasks and offline chain comparison.
@@ -520,7 +520,7 @@ PM freely selects/sizes prepared plans. The App creates Sprint YYYY-Www with imm
 snapshot comments containing versions, full hashes, estimates and recent 28-day throughput.
 On the tracking issue, /plantool approve-sprint approves the latest snapshot; /plantool
 approve <issue-number> selects one item. Only approved items are released; unapproved items
-return to backlog at rollover. This adds no triage, scan or urgent execution.
+return to backlog at rollover. Phase 5 adds triage, scanning and urgent execution below.
 
 Minimal retains plan and exact-head PR gates. Standard suggests editable [review] tags for
 risk-matching plans and stops at tagged phases. Editing a pending tag creates a new revision
@@ -531,5 +531,46 @@ approval, Engineering OS phase headings are normalized to ### for stable task gr
 At a milestone the App opens a draft PR and posts a commit/compare link. /plantool continue
 and /plantool request-changes <reason> apply only to the current stopped head. The App marks
 the draft ready after the final stop; current-head PR approval and CI remain required.
-Contract/graph versions are now 4/3; incompatible checkpoints fail closed and require repair.
+Contract/graph versions are now 5/4; incompatible checkpoints fail closed and require repair.
 See [the native three-item sprint guide](tests/e2e_github/PHASE4_SPRINT.md) for real verification.
+
+
+### Continuous project loop (Phase 5)
+
+Intake accepts allowlisted human authors, current `plantool:accept` labels whose latest
+issue event was added by an allowlisted human, and daemon-recorded agent findings.
+Non-allowlisted comments are excluded from model context; owner comments remain untrusted
+context and never count as decisions. An issue can predate project setup.
+
+PM triage is read-only: fits → backlog, decline → reason comment and `plantool:declined`,
+duplicate → `Duplicate of #N` and the same decline label. Declined items close after 30 days.
+The daily check refetches live comments and labels; an allowlisted comment resets the clock,
+label removal disables auto-close, and Settings → Continuous loop → Return to triage uses
+a fresh passkey to override a decline. No override approves a plan.
+
+Weekly scans run DevOps → QA → PM with read-only capabilities. Settings → Continuous loop
+sets a local scan day/time using the project's timezone; default is 08:00 on the day before
+sprint day. The selected time is interpreted strictly before the next sprint. Evidence
+includes default-branch CI, dependency alerts, a bounded regular-file/test inventory and
+TODO/FIXME matches. API permission failures and truncated inventories are reported as
+limitations, never clean scans. Give the App Dependabot-alert read access for private alerts.
+PM routes findings to proposed issues (owner accept required), sprint candidates, or backlog,
+with the reason recorded in audit and on the latest sprint tracking issue. Review findings
+use the same read-only PM routing immediately and are never fixed in the current PR.
+
+An allowlisted `plantool:urgent` label event or exact `/plantool urgent` comment promotes an
+item to immediate triage, research/discussion and planning. Its plan must be approved on
+its own issue; sprint batch approvals exclude urgent items. Agents can only request
+`plantool:urgent-requested`, shown as a notification in Continuous loop settings. Requests
+do not admit or promote issues and never interrupt an already running model.
+
+Nix agent environments are off by default and configured per project with a fresh passkey
+while stopped. With the option enabled and a regular `flake.nix` in an attempt worktree,
+the daemon launches the coding CLI under `nix develop --no-write-lock-file -c`; all its
+build/test subprocesses inherit that dev shell. The sandbox and stripped environment remain
+in force. Missing Nix fails the opted-in attempt visibly. Without a flake or with the option
+off, execution uses the existing setup; rustup/npm/uv and Personal remain usable without Nix.
+
+See [the week-long playground guide](tests/e2e_github/PHASE5_LOOP.md). Mocked Loop tests run
+with `cargo test -p plantool-daemon --test phase3 phase5` and
+`uv run --project worker --frozen pytest worker/tests/test_loop_graph.py`; they call no models.

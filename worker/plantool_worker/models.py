@@ -66,30 +66,34 @@ class Type13(str, Enum):
 
 
 class Type14(str, Enum):
-    project_event_ack = 'project_event_ack'
+    request_urgent = 'request_urgent'
 
 
 class Type15(str, Enum):
-    project_wait = 'project_wait'
+    project_event_ack = 'project_event_ack'
 
 
 class Type16(str, Enum):
-    llm = 'llm'
+    project_wait = 'project_wait'
 
 
 class Type17(str, Enum):
-    role_call = 'role_call'
+    llm = 'llm'
 
 
 class Type18(str, Enum):
-    workflow_context = 'workflow_context'
+    role_call = 'role_call'
 
 
 class Type19(str, Enum):
-    workflow_pr = 'workflow_pr'
+    workflow_context = 'workflow_context'
 
 
 class Type20(str, Enum):
+    workflow_pr = 'workflow_pr'
+
+
+class Type21(str, Enum):
     store_artifact = 'store_artifact'
 
 
@@ -263,6 +267,14 @@ class ReadTask(BaseModel):
     key: str
 
 
+class RequestUrgent(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    idempotency_key: str
+    item: str
+
+
 class Resume(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -292,88 +304,128 @@ class RoleCall(BaseModel):
 
 
 class Kind(str, Enum):
-    discussion = 'discussion'
+    triage = 'triage'
 
 
 class RoleDetails1(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    body: str
-    decision: str | None = None
+    disposition: str
+    duplicate_of: conint(ge=0) | None = None
     kind: Kind
+    reason: str
 
 
 class Kind1(str, Enum):
-    sprint = 'sprint'
+    scan = 'scan'
 
 
-class Kind2(str, Enum):
-    research = 'research'
-
-
-class RoleDetails3(BaseModel):
+class RoleDetails2(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    kind: Kind2
-    markdown: str
+    kind: Kind1
+    summary: str
+
+
+class Kind2(str, Enum):
+    routes = 'routes'
 
 
 class Kind3(str, Enum):
-    plan = 'plan'
+    discussion = 'discussion'
 
 
 class RoleDetails4(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    acceptance_criteria: list[str]
-    affected_files: list[str]
+    body: str
+    decision: str | None = None
     kind: Kind3
-    markdown: str
 
 
 class Kind4(str, Enum):
-    security = 'security'
-
-
-class RoleDetails5(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    commit: str
-    criteria: list[str]
-    kind: Kind4
-    passed: bool
+    sprint = 'sprint'
 
 
 class Kind5(str, Enum):
-    docs = 'docs'
+    research = 'research'
 
 
 class RoleDetails6(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    body: str
     kind: Kind5
-    updates: list[DocUpdate] | None = None
+    markdown: str
 
 
 class Kind6(str, Enum):
-    strategy = 'strategy'
+    plan = 'plan'
 
 
 class RoleDetails7(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    action: str
+    acceptance_criteria: list[str]
+    affected_files: list[str]
     kind: Kind6
+    markdown: str
+
+
+class Kind7(str, Enum):
+    security = 'security'
+
+
+class RoleDetails8(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    commit: str
+    criteria: list[str]
+    kind: Kind7
+    passed: bool
+
+
+class Kind8(str, Enum):
+    docs = 'docs'
+
+
+class RoleDetails9(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    body: str
+    kind: Kind8
+    updates: list[DocUpdate] | None = None
+
+
+class Kind9(str, Enum):
+    strategy = 'strategy'
+
+
+class RoleDetails10(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    action: str
+    kind: Kind9
     owner: str | None = None
     reason: str
     task_key: str | None = None
+
+
+class RoutedFinding(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    body: str
+    reason: str
+    route: str
+    title: str
 
 
 class Severity(str, Enum):
@@ -506,38 +558,43 @@ class Contract14(BaseModel):
 
 
 class Contract15(BaseModel):
-    body: EventAck
+    body: RequestUrgent
     type: Type14
 
 
 class Contract16(BaseModel):
-    body: ProjectWait
+    body: EventAck
     type: Type15
 
 
 class Contract17(BaseModel):
-    body: LlmContext
+    body: ProjectWait
     type: Type16
 
 
 class Contract18(BaseModel):
-    body: RoleCall
+    body: LlmContext
     type: Type17
 
 
 class Contract19(BaseModel):
-    body: WorkflowContext
+    body: RoleCall
     type: Type18
 
 
 class Contract20(BaseModel):
-    body: WorkflowPr
+    body: WorkflowContext
     type: Type19
 
 
 class Contract21(BaseModel):
-    body: StoreArtifact
+    body: WorkflowPr
     type: Type20
+
+
+class Contract22(BaseModel):
+    body: StoreArtifact
+    type: Type21
 
 
 class Check(BaseModel):
@@ -562,12 +619,20 @@ class Finding(BaseModel):
     title: str
 
 
-class RoleDetails2(BaseModel):
+class RoleDetails3(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    findings: list[RoutedFinding]
+    kind: Kind2
+
+
+class RoleDetails5(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
     items: list[SprintChoice]
-    kind: Kind1
+    kind: Kind4
     notes: str
 
 
@@ -580,6 +645,9 @@ class RoleDetails(
         | RoleDetails5
         | RoleDetails6
         | RoleDetails7
+        | RoleDetails8
+        | RoleDetails9
+        | RoleDetails10
     ]
 ):
     root: (
@@ -590,6 +658,9 @@ class RoleDetails(
         | RoleDetails5
         | RoleDetails6
         | RoleDetails7
+        | RoleDetails8
+        | RoleDetails9
+        | RoleDetails10
     )
 
 
@@ -640,6 +711,7 @@ class Contract(
         | Contract19
         | Contract20
         | Contract21
+        | Contract22
     ]
 ):
     root: (
@@ -664,6 +736,7 @@ class Contract(
         | Contract19
         | Contract20
         | Contract21
+        | Contract22
     ) = Field(
         ...,
         description='Schema roots include every request and response, not just the graph entrypoints.',

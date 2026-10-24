@@ -19,7 +19,9 @@ pub fn state(db: &rusqlite::Connection, item: &str) -> anyhow::Result<Option<Val
 pub fn role(step: &str) -> &str {
     match step {
         "research" | "plan_review" => "cto",
-        "plan" | "sprint_plan" => "pm",
+        "plan" | "sprint_plan" | "triage" | "scan_pm" | "route_finding" => "pm",
+        "scan_devops" => "devops",
+        "scan_qa" => "qa",
         other => other,
     }
 }
@@ -73,21 +75,27 @@ pub fn check(db: &rusqlite::Connection, request: &Dispatch) -> anyhow::Result<bo
         "Graph step/role mismatch"
     );
     ensure!(
-        request.capability == capability(&request.role),
+        request.capability
+            == if crate::loop_engine::read_step(step) {
+                "read"
+            } else {
+                capability(&request.role)
+            },
         "Role capability mismatch"
     );
     ensure!(
         request.plan_sha == s["plan_sha"].as_str().unwrap_or(""),
         "Graph plan changed"
     );
-    Ok([
-        "research",
-        "plan",
-        "plan_review",
-        "supervisor",
-        "sprint_plan",
-    ]
-    .contains(&step))
+    Ok(crate::loop_engine::read_step(step)
+        || [
+            "research",
+            "plan",
+            "plan_review",
+            "supervisor",
+            "sprint_plan",
+        ]
+        .contains(&step))
 }
 pub fn start(
     home: &Path,
@@ -119,10 +127,30 @@ pub fn start(
         |r| r.get(0),
     )?;
     let mut state = json!({"item":item,"step":"research","generation":0,"sequence":0,"plan_sha":"","approved":false,"areas":[],"owners":{},"retries":{},"supervisor_rounds":0,"frozen":false,"issue_body":body});
+    let intake: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM loop_intake WHERE item_id=?1)",
+        [&item],
+        |r| r.get(0),
+    )?;
+    if intake {
+        state["step"] = json!("triage");
+        state["urgent"] = json!(tx.query_row(
+            "SELECT urgent FROM loop_intake WHERE item_id=?1",
+            [&item],
+            |r| r.get::<_, bool>(0)
+        )?);
+        state["issue_number"] = json!(issue);
+    }
     state["discuss_enabled"] = json!(discussion);
     state["preset"] = serde_json::to_value(crate::oversight::preset(&tx, project)?)?;
     state["review_globs"] = json!(crate::oversight::rules(&tx, project)?);
     tx.execute("INSERT INTO work_items(id,project_id,kind,title,github_issue_number,state,created_at,repo_slug,slug,session_json) VALUES(?1,?2,'eos',?3,?4,'research',?5,?2,?6,'{}')",params![item,project,title,issue,plantool_core::now(),format!("issue-{issue}")])?;
+    if state["urgent"] == true {
+        tx.execute(
+            "UPDATE work_items SET priority='urgent' WHERE id=?1",
+            [&item],
+        )?;
+    }
     tx.execute(
         "INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES(?1,?2,?3,?3)",
         params![item, state.to_string(), base],
@@ -238,6 +266,9 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
         return Ok(());
     };
     ensure!(s["frozen"] != true, "Item is frozen");
+    if crate::loop_engine::read_step(s["step"].as_str().unwrap_or("")) {
+        return crate::loop_engine::validate(result, &s);
+    }
     if s["project"] == true && s["step"] == "sprint_plan" {
         if result.outcome == Outcome::Done {
             crate::scheduler::validate(&s, result)?;
@@ -415,6 +446,11 @@ pub fn record(
     s["generation"] = json!(result.generation);
     s["phase_restart"] = json!(false);
     s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
+    if crate::loop_engine::read_step(&step) {
+        crate::loop_engine::record(tx, result, &mut s)?;
+        save(tx, &result.item, &s)?;
+        return Ok(());
+    }
     if s["project"] == true && step == "sprint_plan" {
         crate::scheduler::record(result, &mut s)?;
         save(tx, &result.item, &s)?;
@@ -829,7 +865,20 @@ pub fn proposal(
         "INSERT OR IGNORE INTO workflow_proposals(id,item_id,title,body) VALUES(?1,?2,?3,?4)",
         params![id, item, title, body],
     )?;
-    dispatcher::enqueue(tx, item, "github.proposal", &json!({"id":id}))?;
+    let (project, _) = dispatcher::item(tx, item)?;
+    let base: String = tx.query_row(
+        "SELECT head_sha FROM workflow_items WHERE item_id=?1",
+        [item],
+        |r| r.get(0),
+    )?;
+    crate::loop_engine::start_aux(
+        tx,
+        &project,
+        &format!("{project}:finding:{id}"),
+        "route_finding",
+        &json!({"proposal_id":id,"source_item":item,"title":title,"body":body}),
+        &base,
+    )?;
     Ok(id)
 }
 

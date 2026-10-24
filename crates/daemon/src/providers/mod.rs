@@ -124,6 +124,21 @@ pub struct RunOptions {
 impl RunOptions {
     pub fn command(&self, exe: &std::path::Path) -> anyhow::Result<tokio::process::Command> {
         if let Some(launch) = &self.launch {
+            if let Some((home, attempt)) = &launch.attempt {
+                let db = crate::database::open(home)?;
+                let item: String =
+                    db.query_row("SELECT item_id FROM attempts WHERE id=?1", [attempt], |r| {
+                        r.get(0)
+                    })?;
+                if crate::loop_engine::nix_enabled(home, &item, &self.cwd)? {
+                    let nix=which::which("nix").map_err(|_|anyhow::anyhow!("Project opted into Nix, but nix is unavailable; disable the setting or install Nix"))?;
+                    let mut command = launch.command(&nix)?;
+                    command
+                        .args(["develop", "--no-write-lock-file", "-c"])
+                        .arg(exe);
+                    return Ok(command);
+                }
+            }
             launch.command(exe)
         } else {
             Ok(tokio::process::Command::new(exe))

@@ -151,7 +151,9 @@ pub async fn comment(home: &Path, api: &dyn Api, repo: &Repository, id: u64) -> 
     if super::sprints::handle(home, api, repo, &c, number, &command).await? {
         return Ok(());
     }
-    // Phase 5 commands remain parsed but have no executor.
+    if super::loop_sync::urgent(home, api, repo, &c, number, &command).await? {
+        return Ok(());
+    }
     if !matches!(
         command,
         Command::ApprovePlan(_) | Command::ApproveResearch(_) | Command::RequestChanges(_)

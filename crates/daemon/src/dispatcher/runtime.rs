@@ -264,6 +264,7 @@ async fn run(
     if !crate::workflow::coding(&request.role)
         || request.inputs["step"] == "discussion"
         || request.inputs["step"] == "sprint_plan"
+        || crate::loop_engine::read_step(request.inputs["step"].as_str().unwrap_or(""))
     {
         let prompt = crate::instructions::assemble(home, request, id)?;
         database::open(home)?.execute(

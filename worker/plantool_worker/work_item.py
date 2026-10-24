@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 CODING = {"backend", "frontend", "devops", "qa", "reviewer"}
-STEPS = {"research":"cto", "plan":"pm", "plan_review":"cto", "backend":"backend", "frontend":"frontend", "devops":"devops", "qa":"qa", "reviewer":"reviewer", "docs":"docs", "supervisor":"supervisor"}
+STEPS = {"triage":"pm","scan_devops":"devops","scan_qa":"qa","scan_pm":"pm","route_finding":"pm","research":"cto", "plan":"pm", "plan_review":"cto", "backend":"backend", "frontend":"frontend", "devops":"devops", "qa":"qa", "reviewer":"reviewer", "docs":"docs", "supervisor":"supervisor"}
 
 def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     state = dict(state)
     step = state["step"]
+    if step in {"triage","scan_devops","scan_qa","scan_pm","route_finding"} and result.get("outcome")!="done":return {**state,"step":"escalated","frozen":True}
     if state.get("route_retry") and result.get("outcome")!="done": return state
     findings = result.get("findings", [])
     defects = [f for f in findings if f.get("scope") == "in"]
@@ -35,7 +36,11 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         else:
             state["step"] = owner
         return state
-    if step == "research": state["step"] = "research_gate" if state.get("preset")=="strict" else "discussion" if state.get("discuss_enabled") else "plan"
+    if step == "triage": state["step"] = ("research" if state.get("urgent") else "backlog") if (result.get("details") or {}).get("disposition")=="fits" else "declined_wait"
+    elif step == "scan_devops":state["step"]="scan_qa"
+    elif step == "scan_qa":state["step"]="scan_pm"
+    elif step in {"scan_pm","route_finding"}:state["step"]="loop_complete"
+    elif step == "research": state["step"] = "research_gate" if state.get("preset")=="strict" else "discussion" if state.get("discuss_enabled") else "plan"
     elif step == "plan": state["step"] = "plan_review"
     elif step == "plan_review": state["step"] = "plan_gate"
     elif step == "backend": state["step"] = "frontend" if "frontend" in state.get("areas", []) else ("devops" if state.get("infra_changed") else "qa")
@@ -79,7 +84,7 @@ async def build_step(daemon, store, state):
         role = workflow["discussion"]["speaker"] if step=="discussion" else STEPS[step]
         request = Dispatch(item=item,role=role,generation=workflow.get("generation",0)+1,
             inputs={"step":step},plan_sha=workflow.get("plan_sha", ""),
-            policy_version=workflow["policy_version"],capability="read" if step=="discussion" else "write" if role in {"backend","frontend","devops"} else "tests" if role=="qa" else "read",
+            policy_version=workflow["policy_version"],capability="read" if step in {"discussion","triage","scan_devops","scan_qa","scan_pm","route_finding"} else "write" if role in {"backend","frontend","devops"} else "tests" if role=="qa" else "read",
             thread_id=item,interrupt_id=identity,idempotency_key=context["idempotency_key"])
         response=await daemon.post("/internal/v1/request_dispatch",json=request.model_dump(mode="json"));response.raise_for_status()
         result=RoleResult.model_validate(interrupt({"attempt":response.json(),"interrupt_id":identity})).model_dump(mode="json")
@@ -90,7 +95,7 @@ async def build_step(daemon, store, state):
             if updated["step"]!=facts["state"]["step"] or (updated["step"]=="discussion" and updated["discussion"]!=facts["state"]["discussion"]):raise RuntimeError("Discussion projection mismatch")
             updated.update(generation=facts["state"]["generation"],sequence=facts["state"]["sequence"],policy_version=facts["policy_version"])
             return {"workflow":updated,"result":updated}
-        for key in ["phase_restart","head_sha","preset","phases","research_sha","research_approved","discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
+        for key in ["urgent","phase_restart","head_sha","preset","phases","research_sha","research_approved","discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
             if key in facts["state"]: workflow[key]=facts["state"][key]
         updated=route(workflow,result)
         if step in {"backend","frontend"} and updated["step"]=="qa" and workflow.get("infra_changed"): updated["step"]="devops"
@@ -99,6 +104,12 @@ async def build_step(daemon, store, state):
         updated["policy_version"]=facts["policy_version"]
         updated["summary"]=result["summary"]
         if "phase_index" in facts["state"]: updated["phase_index"]=facts["state"]["phase_index"]
+    elif step in ("backlog","declined_wait"):
+        response=await daemon.post("/internal/v1/loop_wait",json={**context,"kind":step});response.raise_for_status()
+        event=interrupt({"loop":step,"interrupt_id":identity})
+        facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();facts=facts.json()
+        updated={**facts["state"],"policy_version":facts["policy_version"]}
+        if updated["step"]!=event["step"]:raise RuntimeError("Stale loop wake")
     elif step in ("plan_gate","research_gate","milestone"):
         kind="plan" if step=="plan_gate" else "research" if step=="research_gate" else "milestone"
         facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();current=facts.json()["state"]

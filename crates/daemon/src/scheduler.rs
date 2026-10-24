@@ -201,7 +201,7 @@ pub fn expire(tx: &Transaction<'_>, project: &str, except: &str) -> anyhow::Resu
     Ok(())
 }
 pub fn candidates(home: &Path, db: &Connection, project: &str) -> anyhow::Result<Value> {
-    let mut q=db.prepare("SELECT i.id,i.github_issue_number,i.title,r.number,r.content_sha256 FROM work_items i JOIN revisions r ON r.item_id=i.id AND r.doc_kind='plan' AND r.number=(SELECT max(number) FROM revisions WHERE item_id=i.id AND doc_kind='plan') WHERE i.project_id=?1 AND i.closed_at IS NULL AND (i.approved_plan_revision_id IS NULL OR coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=1) AND EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='plan' AND g.state='open' AND g.target_digest=r.content_sha256) ORDER BY i.created_at,i.id")?;
+    let mut q=db.prepare("SELECT i.id,i.github_issue_number,i.title,r.number,r.content_sha256 FROM work_items i JOIN revisions r ON r.item_id=i.id AND r.doc_kind='plan' AND r.number=(SELECT max(number) FROM revisions WHERE item_id=i.id AND doc_kind='plan') WHERE i.project_id=?1 AND i.closed_at IS NULL AND coalesce(i.priority,'')<>'urgent' AND (i.approved_plan_revision_id IS NULL OR coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=1) AND EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='plan' AND g.state='open' AND g.target_digest=r.content_sha256) ORDER BY i.created_at,i.id")?;
     let rows=q.query_map([project],|r|Ok(json!({"item":r.get::<_,String>(0)?,"issue":r.get::<_,u64>(1)?,"title":r.get::<_,String>(2)?,"version":r.get::<_,u64>(3)?,"hash":r.get::<_,String>(4)?})))?.collect::<Result<Vec<_>,_>>()?;
     let mut rows = rows;
     for row in &mut rows {
@@ -484,6 +484,7 @@ pub fn start_items(home: &Path, request: &plantool_contract::WorkflowPr) -> anyh
     )
 }
 pub fn tick(home: &Path, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+    crate::loop_engine::tick_backlog(home, now)?;
     let projects = {
         let db = database::open(home)?;
         let mut q=db.prepare("SELECT p.id,coalesce(s.sprint_day,0),coalesce(s.sprint_time,'09:00'),coalesce(s.timezone,'UTC') FROM projects p LEFT JOIN project_settings s ON s.project_id=p.id AND s.version=(SELECT max(version) FROM project_settings WHERE project_id=p.id) WHERE p.mode='eos'")?;

@@ -2,8 +2,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub const CONTRACT_VERSION: u32 = 4;
-pub const GRAPH_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 5;
+pub const GRAPH_VERSION: u32 = 4;
 macro_rules! wire {
     ($name:ident {$($field:ident: $ty:ty),* $(,)?}) => {
         #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -91,6 +91,10 @@ wire!(FileProposal {
     body: String,
     idempotency_key: String
 });
+wire!(RequestUrgent {
+    item: String,
+    idempotency_key: String
+});
 wire!(ProjectWait {
     item: String,
     thread_id: String,
@@ -139,6 +143,17 @@ wire!(ReviewGuide {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoleDetails {
+    Triage {
+        disposition: String,
+        reason: String,
+        duplicate_of: Option<u64>,
+    },
+    Scan {
+        summary: String,
+    },
+    Routes {
+        findings: Vec<RoutedFinding>,
+    },
     Discussion {
         body: String,
         decision: Option<String>,
@@ -171,6 +186,12 @@ pub enum RoleDetails {
         reason: String,
     },
 }
+wire!(RoutedFinding {
+    title: String,
+    body: String,
+    route: String,
+    reason: String
+});
 wire!(SprintChoice {
     item: String,
     estimate: String
@@ -217,6 +238,7 @@ pub enum Contract {
     PostMessage(PostMessage),
     ReportResult(RoleResult),
     FileProposal(FileProposal),
+    RequestUrgent(RequestUrgent),
     ProjectEventAck(EventAck),
     ProjectWait(ProjectWait),
     Llm(LlmContext),

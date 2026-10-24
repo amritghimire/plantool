@@ -45,6 +45,9 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
+  loop: () => request<{projects:{id:string;name:string|null;version:number;scan_day:number;scan_time:string;nix_enabled:boolean}[];declines:{item:string;title:string;reason:string;reset_at:string;active:boolean}[];notifications:{id:string;body:string;created_at:string}[]}>("GET","/api/settings/loop"),
+  saveLoop: (body:{project:string;version:number;scan_day:number;scan_time:string;nix_enabled:boolean}) => request("POST","/api/settings/loop",body),
+  overrideDecline: (item:string) => request("POST","/api/settings/loop/override",{item}),
   oversight: () => request<{projects:{id:string;name:string|null;version:number;preset:"minimal"|"standard"|"strict";day:number;time:string;timezone:string;review_globs:string[]}[];plans:{item:string;title:string;state:{preset:string;plan_sha:string;phases?:{name:string;tagged:boolean}[]}}[]}>("GET","/api/settings/oversight"),
   saveOversight: (body:{project:string;version:number;preset:string;day:number;time:string;timezone:string;review_globs:string[]}) => request("POST","/api/settings/oversight",body),
   saveReviewTags: (body:{item:string;hash:string;tags:boolean[]}) => request("POST","/api/settings/oversight/tags",body),

@@ -14,6 +14,43 @@ use std::path::Path;
 fn latest(db: &rusqlite::Connection, sprint: &str) -> anyhow::Result<String> {
     Ok(db.query_row("SELECT id FROM sprint_snapshots WHERE sprint_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1",[sprint],|r|r.get(0))?)
 }
+/// Shared by weekly scans and plan snapshots: one App tracking issue per sprint.
+pub async fn ensure_tracking(
+    home: &Path,
+    api: &dyn Api,
+    repo: &Repository,
+    sprint: &str,
+    week: &str,
+) -> anyhow::Result<u64> {
+    let item = format!("{}:project", repo.project);
+    let path = repo.path()?;
+    let existing: Option<u64> = database::open(home)?.query_row(
+        "SELECT tracking_issue_number FROM sprints WHERE id=?1 AND project_id=?2",
+        params![sprint, repo.project],
+        |r| r.get(0),
+    )?;
+    if let Some(n) = existing {
+        return Ok(n);
+    }
+    let marker = format!("<!-- plantool-sprint:{sprint} -->");
+    let found = pages(api, &format!("{path}/issues?state=all"), None)
+        .await?
+        .into_iter()
+        .find(|i| {
+            i["pull_request"].is_null()
+                && i["user"]["id"].as_u64() == Some(repo.app_bot_id)
+                && i["body"].as_str().is_some_and(|b| b.contains(&marker))
+        });
+    let created=write(home,api,&item,&format!("sprint-issue:{sprint}"),"POST",&format!("{path}/issues"),json!({"title":format!("Sprint {}",week),"body":format!("Immutable snapshot comments below identify plan versions and hashes. Owner commands approve only the latest snapshot.\n\n{marker}"),"labels":["plantool:sprint"]}),found,false).await?;
+    let n = created["number"]
+        .as_u64()
+        .context("Tracking issue missing")?;
+    database::open(home)?.execute(
+        "UPDATE sprints SET tracking_issue_number=?2 WHERE id=?1",
+        params![sprint, n],
+    )?;
+    Ok(n)
+}
 pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
     let pending = {
         let db = database::open(home)?;
@@ -32,7 +69,7 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
     };
     let item = format!("{}:project", repo.project);
     let path = repo.path()?;
-    for (id, sprint, payload, issue) in pending {
+    for (id, sprint, payload, _issue) in pending {
         if latest(&database::open(home)?, &sprint)? != id {
             continue;
         }
@@ -40,28 +77,14 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
             continue;
         }
         let p: Value = serde_json::from_str(&payload)?;
-        let issue = if let Some(n) = issue {
-            n
-        } else {
-            let marker = format!("<!-- plantool-sprint:{sprint} -->");
-            let found = pages(api, &format!("{path}/issues?state=all"), None)
-                .await?
-                .into_iter()
-                .find(|i| {
-                    i["pull_request"].is_null()
-                        && i["user"]["id"].as_u64() == Some(repo.app_bot_id)
-                        && i["body"].as_str().is_some_and(|b| b.contains(&marker))
-                });
-            let created=write(home,api,&item,&format!("sprint-issue:{sprint}"),"POST",&format!("{path}/issues"),json!({"title":format!("Sprint {}",p["week"].as_str().context("Week missing")?),"body":format!("Immutable snapshot comments below identify plan versions and hashes. Owner commands approve only the latest snapshot.\n\n{marker}"),"labels":["plantool:sprint"]}),found,false).await?;
-            let n = created["number"]
-                .as_u64()
-                .context("Tracking issue missing")?;
-            database::open(home)?.execute(
-                "UPDATE sprints SET tracking_issue_number=?2 WHERE id=?1",
-                params![sprint, n],
-            )?;
-            n
-        };
+        let issue = ensure_tracking(
+            home,
+            api,
+            repo,
+            &sprint,
+            p["week"].as_str().context("Week missing")?,
+        )
+        .await?;
         let marker = format!("<!-- plantool-snapshot:{id} -->");
         let mut body=format!("## Sprint {} snapshot\n\n| Item | Plan version | Full sha256 | PM estimate |\n| --- | --- | --- | --- |\n",p["week"].as_str().unwrap());
         for entry in p["items"].as_array().context("Snapshot items missing")? {
@@ -222,6 +245,15 @@ pub async fn handle(
         .context("Snapshot missing items")?
     {
         let item = entry["item"].as_str().unwrap();
+        let urgent: bool = tx.query_row(
+            "SELECT coalesce(priority,'')='urgent' FROM work_items WHERE id=?1",
+            [item],
+            |r| r.get(0),
+        )?;
+        // Urgency always needs an item-issue plan decision, even if this older snapshot listed it.
+        if urgent {
+            continue;
+        }
         let current:String=tx.query_row("SELECT content_sha256 FROM revisions WHERE item_id=?1 AND doc_kind='plan' ORDER BY number DESC LIMIT 1",[item],|r|r.get(0))?;
         entries.push((
             item.to_owned(),
