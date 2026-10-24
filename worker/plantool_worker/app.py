@@ -97,7 +97,7 @@ def create_app(home: Path, token: str, transport=None):
                 graph = StateGraph(State)
                 graph.add_node("bridge",bridge)
                 graph.add_edge(START,"bridge")
-                graph.add_conditional_edges("bridge",lambda s: "bridge" if s.get("workflow") and s["workflow"]["step"] not in ("merged","escalated") else END)
+                graph.add_conditional_edges("bridge",lambda s: "bridge" if s.get("workflow") and s["workflow"]["step"] not in ("merged","escalated","loop_complete","declined_closed") else END)
                 app.state.graph = graph.compile(checkpointer=saver)
                 app.state.daemon = daemon
                 yield
@@ -177,6 +177,7 @@ def create_app(home: Path, token: str, transport=None):
             # This is a separate role invocation, not the interrupting workflow node.
             async def call_role(state):
                 tools=[{"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":{arg:{"type":"string"}},"required":[arg],"additionalProperties":False}}} for name,arg,description in [("read_repo_file","path","Read a regular default-branch file; never-sent files are denied"),("read_artifact","sha256","Read an item-bound immutable artifact")]]
+                tools.append({"type":"function","function":{"name":"request_urgent","description":"Request owner urgency; never promotes or approves","parameters":{"type":"object","properties":{},"additionalProperties":False}}})
                 for index in range(12):
                     response=await daemon.post("/v1/chat/completions",json={"plantool":{"item":request.request.item,"role":request.request.role,"generation":request.request.generation,"attempt_id":request.attempt_id,"idempotency_key":f"{key}:{index}"},"messages":messages,"tools":tools,"stream":False,"response_format":{"type":"json_schema","json_schema":{"name":"role_result","schema":RoleResult.model_json_schema()}}})
                     response.raise_for_status();message=response.json()["choices"][0]["message"]
@@ -184,9 +185,10 @@ def create_app(home: Path, token: str, transport=None):
                         messages.append(message)
                         for call in message["tool_calls"]:
                             name=call["function"]["name"]
-                            if name not in ("read_repo_file","read_artifact"):raise ValueError("Unknown role capability")
+                            if name not in ("read_repo_file","read_artifact","request_urgent"):raise ValueError("Unknown role capability")
                             arguments=json.loads(call["function"]["arguments"])
                             arguments["item"]=request.request.item
+                            if name=="request_urgent":arguments["idempotency_key"]=f"{key}:urgent"
                             reply=await daemon.post(f"/internal/v1/{name}",json=arguments);reply.raise_for_status()
                             messages.append({"role":"tool","tool_call_id":call["id"],"content":json.dumps(reply.json())})
                         continue

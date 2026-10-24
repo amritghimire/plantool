@@ -29,8 +29,11 @@ pub fn admit(
         "Unknown role"
     );
     let managed = crate::workflow::state(&database::open(home)?, &request.item)?.is_some();
-    let discussion = crate::workflow::state(&database::open(home)?, &request.item)?
-        .is_some_and(|s| s["step"] == "discussion");
+    let discussion =
+        crate::workflow::state(&database::open(home)?, &request.item)?.is_some_and(|s| {
+            s["step"] == "discussion"
+                || crate::loop_engine::read_step(s["step"].as_str().unwrap_or(""))
+        });
     let expected = if discussion {
         "read"
     } else if managed {

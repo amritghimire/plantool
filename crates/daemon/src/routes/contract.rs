@@ -394,6 +394,40 @@ async fn project_start_items(
         &request,
     )?))
 }
+async fn loop_wait(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<ProjectWait>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    Ok(Json(crate::loop_engine::wait(
+        &state.config.home,
+        &request,
+    )?))
+}
+async fn request_urgent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<RequestUrgent>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    let value = database::inbox_once(
+        &state.config.home,
+        "worker.urgent_requested",
+        &request.idempotency_key,
+        |tx| {
+            crate::loop_engine::request_urgent(tx, &request.item, &request.idempotency_key)?;
+            Ok(json!({"requested":true,"promoted":false,"item":request.item}))
+        },
+    )?;
+    ensure!(
+        value["item"] == request.item,
+        "Urgency key reused for a different item"
+    );
+    Ok(Json(value))
+}
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/internal/v1/request_dispatch", post(dispatch))
@@ -410,6 +444,8 @@ pub fn routes() -> Router<AppState> {
         .route("/internal/v1/file_proposal", post(proposal))
         .route("/internal/v1/project_event_ack", post(ack))
         .route("/internal/v1/project_wait", post(project_wait))
+        .route("/internal/v1/loop_wait", post(loop_wait))
+        .route("/internal/v1/request_urgent", post(request_urgent))
         .route("/internal/v1/project_publish", post(project_publish))
         .route(
             "/internal/v1/project_start_items",

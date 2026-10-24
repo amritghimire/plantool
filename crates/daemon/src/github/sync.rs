@@ -262,7 +262,7 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         "issues",
     )
     .await?;
-    super::lifecycle::start_new(home, api, repo, &issues).await?;
+
     // Recover a successful publication before consuming approvals posted while
     // the daemon was down. Global comment cursors may already be past them.
     gates::publish(home, api, repo).await?;
@@ -322,6 +322,61 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
             label_event(home, repo, number, &e)?;
         }
     }
+    // Admission follows verified issue events, including for issues older than setup.
+    let mut current = issues.clone();
+    {
+        let db = database::open(home)?;
+        let mut q = db.prepare("SELECT body_json FROM github_objects WHERE resource LIKE ?1")?;
+        for row in q.query_map([format!("{}:%/issues?state=all%", repo.repo_id)], |r| {
+            r.get::<_, String>(0)
+        })? {
+            let v: Value = serde_json::from_str(&row?)?;
+            if !current.iter().any(|i| i["number"] == v["number"]) {
+                current.push(v)
+            }
+        }
+        let mut q = db.prepare("SELECT value_json FROM settings WHERE key LIKE ?1");
+        if let Ok(q) = q.as_mut() {
+            for row in q.query_map([format!("urgent-issue:{}:%", repo.project)], |r| {
+                r.get::<_, String>(0)
+            })? {
+                let v: Value = serde_json::from_str(&row?)?;
+                if !current.iter().any(|i| i["number"] == v["number"]) {
+                    current.push(v)
+                }
+            }
+        }
+    }
+    for issue in &current {
+        if issue["state"] != "open" || !issue["pull_request"].is_null() {
+            continue;
+        }
+        let Some(n) = issue["number"].as_u64() else {
+            continue;
+        };
+        let events = collection(
+            home,
+            api,
+            repo,
+            &format!("{base}/issues/{n}/events"),
+            false,
+            "events",
+        )
+        .await?;
+        for e in events {
+            label_event(home, repo, n as i64, &e)?;
+        }
+        let fresh = api
+            .request("GET", &format!("{base}/issues/{n}"), None, None)
+            .await?;
+        ensure!(fresh.status == 200, "Intake issue refetch failed");
+        super::loop_sync::labels(home, repo, &fresh.body)?;
+        super::lifecycle::start_new(home, api, repo, &[fresh.body]).await?;
+    }
+    super::loop_sync::declines(home, api, repo, chrono::Utc::now()).await?;
+    super::loop_sync::scans(home, api, repo, chrono::Utc::now(), &super::git_ops::AppGit).await?;
+    super::loop_sync::findings(home, api, repo).await?;
+    super::loop_sync::urgent_requests(home, api, repo).await?;
     let pulls = collection(
         home,
         api,

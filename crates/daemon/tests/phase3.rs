@@ -86,7 +86,12 @@ impl Fixture {
             inputs: json!({"step":step}),
             plan_sha: state["plan_sha"].as_str().unwrap().into(),
             policy_version: 1,
-            capability: workflow::capability(role).into(),
+            capability: if plantool_daemon::loop_engine::read_step(step) {
+                "read"
+            } else {
+                workflow::capability(role)
+            }
+            .into(),
             idempotency_key: format!("dispatch:{step}:{generation}"),
             thread_id: self.item.clone(),
             interrupt_id: format!("interrupt:{generation}"),
@@ -138,13 +143,13 @@ impl Fixture {
                 git(&self.root, &["commit", "-qm", &message]);
             }
         }
-        if workflow::coding(role) {
+        if workflow::coding(role) && !plantool_daemon::loop_engine::read_step(step) {
             result.artifacts.push(Artifact {
                 kind: "commit".into(),
                 reference: git(&self.root, &["rev-parse", "HEAD"]),
             });
         }
-        if role == "qa" {
+        if role == "qa" && !plantool_daemon::loop_engine::read_step(step) {
             let evidence = plantool_daemon::artifacts::put(
                 &self.home,
                 b"fake test runner: all acceptance criteria pass",
@@ -271,7 +276,8 @@ impl Api for Fake {
                     status = 201;
                     let b = body.unwrap();
                     assert!(
-                        b["labels"] == json!(["plantool:proposed"])
+                        b["labels"] == json!([])
+                            || b["labels"] == json!(["plantool:proposed"])
                             || b["labels"] == json!(["plantool:sprint"])
                     );
                     let issue = json!({"number":10+s.issues.len(),"state":"open","user":{"id":99,"type":"Bot"},"title":b["title"],"body":b["body"]});
@@ -325,6 +331,36 @@ impl Api for Fake {
                     }
                     c
                 }
+                ("POST", p) if p.ends_with("/labels") => {
+                    let n = p.split('/').nth(5).unwrap().parse::<u64>().unwrap();
+                    if let Some(i) = s.issues.iter_mut().find(|i| i["number"] == n) {
+                        i["labels"] = json!(body.unwrap()["labels"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|v| json!({"name":v}))
+                            .collect::<Vec<_>>());
+                    }
+                    json!([])
+                }
+                ("DELETE", p) if p.contains("/labels/") => {
+                    let n = p.split('/').nth(5).unwrap().parse::<u64>().unwrap();
+                    if let Some(i) = s.issues.iter_mut().find(|i| i["number"] == n) {
+                        i["labels"] = json!([]);
+                    }
+                    status = 204;
+                    Value::Null
+                }
+                ("PATCH", p) if p.starts_with("/repos/o/r/issues/") => {
+                    let n = p.rsplit('/').next().unwrap().parse::<u64>().unwrap();
+                    let i = s.issues.iter_mut().find(|i| i["number"] == n).unwrap();
+                    i["state"] = body.unwrap()["state"].clone();
+                    i.clone()
+                }
+                ("GET", p) if p.ends_with("/actions/runs") => {
+                    json!({"workflow_runs":[{"head_branch":"main","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/1"}]})
+                }
+                ("GET", p) if p.ends_with("/dependabot/alerts") => json!([]),
                 ("GET", p) if p.starts_with("/repos/o/r/issues/") => {
                     let n = p.rsplit('/').next().unwrap().parse::<u64>().unwrap();
                     s.issues
@@ -636,13 +672,7 @@ async fn proposals_are_filed_once_after_a_lost_reply_without_changing_code() {
     let f = Fixture::new();
     let mut db = database::open(&f.home).unwrap();
     let tx = db.transaction().unwrap();
-    workflow::proposal(
-        &tx,
-        &f.item,
-        "Separate follow-up",
-        "An out-of-scope change belongs in its own plan",
-    )
-    .unwrap();
+    tx.execute("INSERT INTO workflow_proposals(id,item_id,title,body) VALUES('legacy',?1,'Separate follow-up','An out-of-scope change belongs in its own plan')",[&f.item]).unwrap();
     tx.commit().unwrap();
     let remote = Fake::default();
     remote.0.lock().unwrap().lose_issue_reply = true;
@@ -1604,4 +1634,404 @@ fn phase4_stale_schedule_event_returns_to_wait_without_a_discussion_or_approval(
             .unwrap(),
         0
     );
+}
+
+fn phase5_triage_fixture() -> Fixture {
+    let f = Fixture::new();
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute("INSERT INTO loop_intake(item_id,project_id,issue_number,source,admitted_at) VALUES(?1,'p',1,'allowlist',?2)",params![f.item,plantool_core::now()]).unwrap();
+    let mut s = f.state();
+    s["step"] = json!("triage");
+    s["issue_number"] = json!(1);
+    s["urgent"] = json!(false);
+    workflow::save(&tx, &f.item, &s).unwrap();
+    tx.commit().unwrap();
+    f
+}
+fn phase5_issue(n: u64) -> Value {
+    json!({"number":n,"state":"open","title":"Test issue","body":"Scoped change","labels":[],"user":{"id":7,"type":"User"},"created_at":plantool_core::now()})
+}
+fn phase5_decline(f: &Fixture) {
+    f.run(
+        "triage",
+        Some(RoleDetails::Triage {
+            disposition: "decline".into(),
+            reason: "Outside project scope".into(),
+            duplicate_of: None,
+        }),
+        vec![],
+    );
+}
+#[test]
+fn phase5_intake_requires_human_allowlist_or_current_verified_accept_event() {
+    let f = Fixture::new();
+    let mut issue = phase5_issue(8);
+    issue["user"]["id"] = json!(88);
+    issue["labels"] = json!([{"name":"plantool:accept"}]);
+    let admit = || plantool_daemon::github::loop_sync::admitted(&f.home, &f.repo, &issue).unwrap();
+    assert!(!admit());
+    for (id, actor, kind, expected) in [
+        (1, 88, "User", false),
+        (2, 7, "Bot", false),
+        (3, 7, "User", true),
+    ] {
+        plantool_daemon::github::sync::label_event(&f.home,&f.repo,8,&json!({"id":id,"event":"labeled","label":{"name":"plantool:accept"},"actor":{"id":actor,"type":kind}})).unwrap();
+        assert_eq!(admit(), expected);
+    }
+    plantool_daemon::github::sync::label_event(&f.home,&f.repo,8,&json!({"id":4,"event":"unlabeled","label":{"name":"plantool:accept"},"actor":{"id":7,"type":"User"}})).unwrap();
+    assert!(!admit());
+    issue["user"] = json!({"id":7,"type":"Bot"});
+    assert!(!plantool_daemon::github::loop_sync::admitted(&f.home, &f.repo, &issue).unwrap());
+}
+#[test]
+fn phase5_pm_triage_is_read_only_and_fits_waits_in_backlog() {
+    let f = phase5_triage_fixture();
+    f.run(
+        "triage",
+        Some(RoleDetails::Triage {
+            disposition: "fits".into(),
+            reason: "Matches project".into(),
+            duplicate_of: None,
+        }),
+        vec![],
+    );
+    assert_eq!(f.state()["step"], "backlog");
+    assert_eq!(f.state()["approved"], false);
+    let db = database::open(&f.home).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM gates", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert!(dispatcher::admit(
+        &f.home,
+        &Dispatch {
+            item: f.item.clone(),
+            role: "backend".into(),
+            generation: 2,
+            inputs: json!({"step":"backend"}),
+            plan_sha: "".into(),
+            policy_version: 1,
+            capability: "write".into(),
+            idempotency_key: "unapproved-code".into(),
+            thread_id: f.item.clone(),
+            interrupt_id: "bad".into()
+        },
+        0
+    )
+    .is_err());
+}
+#[tokio::test]
+async fn phase5_decline_clock_resets_for_allowlisted_comment_then_closes_once() {
+    use plantool_daemon::github::loop_sync;
+    let f = phase5_triage_fixture();
+    phase5_decline(&f);
+    let remote = Fake::default();
+    remote.0.lock().unwrap().issues.push(phase5_issue(1));
+    loop_sync::declines(&f.home, &remote, &f.repo, chrono::Utc::now())
+        .await
+        .unwrap();
+    let reset = chrono::Utc::now() + chrono::Duration::days(29);
+    let t = reset.to_rfc3339();
+    remote.0.lock().unwrap().comments.push(json!({"id":33,"issue_url":"https://api.github.com/repos/o/r/issues/1","body":"Please reconsider","user":{"id":7,"type":"User"},"created_at":t,"updated_at":t}));
+    loop_sync::declines(
+        &f.home,
+        &remote,
+        &f.repo,
+        chrono::Utc::now() + chrono::Duration::days(31),
+    )
+    .await
+    .unwrap();
+    assert_eq!(remote.0.lock().unwrap().issues[0]["state"], "open");
+    let closing = chrono::Utc::now() + chrono::Duration::days(60);
+    loop_sync::declines(&f.home, &remote, &f.repo, closing)
+        .await
+        .unwrap();
+    loop_sync::declines(&f.home, &remote, &f.repo, closing)
+        .await
+        .unwrap();
+    let r = remote.0.lock().unwrap();
+    assert_eq!(r.issues[0]["state"], "closed");
+    assert_eq!(
+        r.calls
+            .iter()
+            .filter(|(m, p, _)| m == "PATCH" && p.ends_with("/issues/1"))
+            .count(),
+        1
+    );
+    assert_eq!(f.state()["step"], "declined_closed");
+}
+#[tokio::test]
+async fn phase5_untrusted_comments_do_not_reset_decline_and_label_removal_disables_close() {
+    let f = phase5_triage_fixture();
+    phase5_decline(&f);
+    let remote = Fake::default();
+    remote.0.lock().unwrap().issues.push(phase5_issue(1));
+    plantool_daemon::github::loop_sync::declines(&f.home, &remote, &f.repo, chrono::Utc::now())
+        .await
+        .unwrap();
+    let t = (chrono::Utc::now() + chrono::Duration::days(29)).to_rfc3339();
+    remote.0.lock().unwrap().comments.push(json!({"id":33,"issue_url":"https://api.github.com/repos/o/r/issues/1","body":"reset me","user":{"id":88,"type":"User"},"created_at":t,"updated_at":t}));
+    let before: String = database::open(&f.home)
+        .unwrap()
+        .query_row("SELECT reset_at FROM loop_declines", [], |r| r.get(0))
+        .unwrap();
+    remote.0.lock().unwrap().issues[0]["labels"] = json!([]);
+    plantool_daemon::github::loop_sync::declines(
+        &f.home,
+        &remote,
+        &f.repo,
+        chrono::Utc::now() + chrono::Duration::days(31),
+    )
+    .await
+    .unwrap();
+    let db = database::open(&f.home).unwrap();
+    assert_eq!(
+        db.query_row("SELECT reset_at FROM loop_declines", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        before
+    );
+    assert!(!db
+        .query_row("SELECT active FROM loop_declines", [], |r| r
+            .get::<_, bool>(0))
+        .unwrap());
+    assert_eq!(remote.0.lock().unwrap().issues[0]["state"], "open");
+}
+#[test]
+fn phase5_override_wakes_decline_to_triage_without_approval_and_replay_is_safe() {
+    let f = phase5_triage_fixture();
+    phase5_decline(&f);
+    let req = ProjectWait {
+        item: f.item.clone(),
+        thread_id: f.item.clone(),
+        interrupt_id: "decline-wait".into(),
+        kind: "declined_wait".into(),
+        idempotency_key: "decline-wait".into(),
+    };
+    plantool_daemon::loop_engine::wait(&f.home, &req).unwrap();
+    plantool_daemon::loop_engine::override_decline(&f.home, &f.item).unwrap();
+    plantool_daemon::loop_engine::wait(&f.home, &req).unwrap();
+    assert_eq!(f.state()["step"], "triage");
+    assert_eq!(f.state()["approved"], false);
+    let db = database::open(&f.home).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM outbox WHERE kind='worker.resume'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    ); // result resume + override resume
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM loop_waiters", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+#[test]
+fn phase5_scan_schedule_is_before_next_sprint_in_local_timezone() {
+    let f = Fixture::new();
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE project_settings SET sprint_day=0,sprint_time='09:00',timezone='Asia/Kathmandu'",
+        [],
+    )
+    .unwrap();
+    let at = |s: &str| {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    assert!(
+        plantool_daemon::loop_engine::scan_due(&db, "p", at("2026-10-25T02:14:00Z"))
+            .unwrap()
+            .is_none()
+    );
+    let due = plantool_daemon::loop_engine::scan_due(&db, "p", at("2026-10-25T02:15:00Z"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(due.0, "2026-W44");
+    assert!(
+        plantool_daemon::loop_engine::scan_due(&db, "p", at("2026-10-26T03:15:00Z"))
+            .unwrap()
+            .is_none()
+    );
+    db.execute(
+        "INSERT INTO loop_settings(project_id,scan_day,scan_time) VALUES('p',0,'08:30')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        plantool_daemon::loop_engine::scan_due(&db, "p", at("2026-10-26T03:00:00Z"))
+            .unwrap()
+            .unwrap()
+            .0,
+        "2026-W44"
+    );
+}
+#[tokio::test]
+async fn phase5_scan_and_routed_finding_use_read_only_roles_and_no_duplicate_issue_on_lost_reply() {
+    let mut f = Fixture::new();
+    std::fs::write(f.root.join("src/todo.rs"), "// TODO: add missing test\n").unwrap();
+    std::fs::write(f.root.join(".env"), "SECRET=value").unwrap();
+    git(&f.root, &["add", "src/todo.rs"]);
+    git(&f.root, &["commit", "-qm", "todo"]);
+    let base = git(&f.root, &["rev-parse", "HEAD"]);
+    let remote = Fake::default();
+    let transport = FakeGit {
+        remote: remote.clone(),
+        base,
+    };
+    let at = chrono::DateTime::parse_from_rfc3339("2026-10-25T09:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    plantool_daemon::github::loop_sync::scans(&f.home, &remote, &f.repo, at, &transport)
+        .await
+        .unwrap();
+    plantool_daemon::github::loop_sync::scans(&f.home, &remote, &f.repo, at, &transport)
+        .await
+        .unwrap();
+    let db = database::open(&f.home).unwrap();
+    let (id, evidence): (String, String) = db
+        .query_row("SELECT id,evidence_json FROM loop_scans", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert!(evidence.contains("TODO"));
+    assert!(!evidence.contains("SECRET"));
+    assert!(!evidence.contains(".env"));
+    f.item = id;
+    f.run(
+        "scan_devops",
+        Some(RoleDetails::Scan {
+            summary: "Default branch CI failure; advisory source available".into(),
+        }),
+        vec![],
+    );
+    f.run(
+        "scan_qa",
+        Some(RoleDetails::Scan {
+            summary: "Missing regression coverage for TODO".into(),
+        }),
+        vec![],
+    );
+    f.run(
+        "scan_pm",
+        Some(RoleDetails::Routes {
+            findings: vec![RoutedFinding {
+                title: "Add TODO test".into(),
+                body: "Default branch TODO requires an isolated regression test".into(),
+                route: "candidate".into(),
+                reason: "Small scoped candidate".into(),
+            }],
+        }),
+        vec![],
+    );
+    assert_eq!(f.state()["step"], "loop_complete");
+    remote.0.lock().unwrap().lose_issue_reply = true;
+    assert!(
+        plantool_daemon::github::loop_sync::findings(&f.home, &remote, &f.repo)
+            .await
+            .is_err()
+    );
+    plantool_daemon::github::loop_sync::findings(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    plantool_daemon::github::loop_sync::findings(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    assert_eq!(remote.0.lock().unwrap().issues.len(), 1);
+    let issue = remote.0.lock().unwrap().issues[0].clone();
+    assert!(plantool_daemon::github::loop_sync::admitted(&f.home, &f.repo, &issue).unwrap());
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM loop_routes", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+#[test]
+fn phase5_agent_urgency_is_notification_only_and_owner_label_promotion_never_approves() {
+    let f = phase5_triage_fixture();
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    plantool_daemon::loop_engine::request_urgent(&tx, &f.item, "request").unwrap();
+    tx.commit().unwrap();
+    assert!(!db
+        .query_row("SELECT urgent FROM loop_intake", [], |r| r
+            .get::<_, bool>(0))
+        .unwrap());
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM loop_notifications", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let issue = phase5_issue(1);
+    plantool_daemon::github::loop_sync::labels(&f.home, &f.repo, &issue).unwrap();
+    assert_eq!(f.state()["urgent"], false);
+    let mut issue = issue;
+    issue["labels"] = json!([{"name":"plantool:urgent"}]);
+    plantool_daemon::github::sync::label_event(&f.home,&f.repo,1,&json!({"id":90,"event":"labeled","label":{"name":"plantool:urgent"},"actor":{"id":7,"type":"User"}})).unwrap();
+    plantool_daemon::github::loop_sync::labels(&f.home, &f.repo, &issue).unwrap();
+    f.run(
+        "triage",
+        Some(RoleDetails::Triage {
+            disposition: "fits".into(),
+            reason: "Urgent scoped defect".into(),
+            duplicate_of: None,
+        }),
+        vec![],
+    );
+    assert_eq!(f.state()["step"], "research");
+    assert_eq!(f.state()["approved"], false);
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+#[test]
+fn phase5_nix_is_opt_in_per_eos_project_and_requires_regular_flake() {
+    let f = Fixture::new();
+    assert!(!plantool_daemon::loop_engine::nix_enabled(&f.home, &f.item, &f.root).unwrap());
+    std::fs::write(f.root.join("flake.nix"), "{}").unwrap();
+    assert!(!plantool_daemon::loop_engine::nix_enabled(&f.home, &f.item, &f.root).unwrap());
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "INSERT INTO loop_settings(project_id,nix_enabled) VALUES('p',1)",
+        [],
+    )
+    .unwrap();
+    assert!(plantool_daemon::loop_engine::nix_enabled(&f.home, &f.item, &f.root).unwrap());
+    std::fs::remove_file(f.root.join("flake.nix")).unwrap();
+    assert!(!plantool_daemon::loop_engine::nix_enabled(&f.home, &f.item, &f.root).unwrap());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(".env", f.root.join("flake.nix")).unwrap();
+        assert!(plantool_daemon::loop_engine::nix_enabled(&f.home, &f.item, &f.root).is_err());
+    }
+}
+#[test]
+fn phase5_non_allowlisted_comments_never_enter_agent_context() {
+    let f = Fixture::new();
+    let db = database::open(&f.home).unwrap();
+    for (id, user, kind, body) in [
+        (1, 7, "User", "owner context"),
+        (2, 88, "User", "untrusted instructions"),
+        (3, 7, "Bot", "bot spoof"),
+    ] {
+        db.execute("INSERT INTO github_objects VALUES('42:/repos/o/r/issues/comments',?1,?2)",params![id.to_string(),json!({"id":id,"user":{"id":user,"type":kind},"body":body,"issue_url":"https://api.github.com/repos/o/r/issues/1"}).to_string()]).unwrap();
+    }
+    let context = plantool_daemon::loop_engine::trusted_comments(&db, 42, 1)
+        .unwrap()
+        .to_string();
+    assert!(context.contains("owner context"));
+    assert!(!context.contains("untrusted instructions"));
+    assert!(!context.contains("bot spoof"));
+    assert!(context.contains("untrusted_context_not_authority"));
 }

@@ -156,8 +156,10 @@ pub async fn complete(
             "Provider is disallowed"
         );
         let held = if (!crate::workflow::coding(&context.role)
-            || crate::workflow::state(&db, &context.item)?
-                .is_some_and(|s| s["step"] == "discussion"))
+            || crate::workflow::state(&db, &context.item)?.is_some_and(|s| {
+                s["step"] == "discussion"
+                    || crate::loop_engine::read_step(s["step"].as_str().unwrap_or(""))
+            }))
             && crate::workflow::state(&db, &context.item)?.is_some()
         {
             anyhow::ensure!(

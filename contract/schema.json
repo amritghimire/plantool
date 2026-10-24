@@ -263,6 +263,24 @@
       ],
       "properties": {
         "body": {
+          "$ref": "#/definitions/RequestUrgent"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "request_urgent"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
           "$ref": "#/definitions/EventAck"
         },
         "type": {
@@ -850,6 +868,22 @@
       },
       "additionalProperties": false
     },
+    "RequestUrgent": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "item"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "Resume": {
       "type": "object",
       "required": [
@@ -918,6 +952,78 @@
     },
     "RoleDetails": {
       "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "disposition",
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "disposition": {
+              "type": "string"
+            },
+            "duplicate_of": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "triage"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "summary"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "scan"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "findings",
+            "kind"
+          ],
+          "properties": {
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RoutedFinding"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "routes"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
         {
           "type": "object",
           "required": [
@@ -1200,6 +1306,30 @@
           "items": {
             "type": "string"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RoutedFinding": {
+      "type": "object",
+      "required": [
+        "body",
+        "reason",
+        "route",
+        "title"
+      ],
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
         }
       },
       "additionalProperties": false
