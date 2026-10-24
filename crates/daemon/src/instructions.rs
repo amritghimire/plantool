@@ -37,7 +37,7 @@ pub fn assemble(
     let (_, root) = crate::dispatcher::item(&db, &request.item)?;
     let discussion = request.inputs["step"] == "discussion";
     let skills: &[&str] = if discussion {
-        &["discuss"]
+        &["discuss", "moderate"]
     } else {
         match request.role.as_str() {
             "cto" => &["research", "architecture", "plan-review"],
@@ -55,6 +55,9 @@ pub fn assemble(
     let mut text = embedded("base.md")?;
     if discussion {
         text.push_str("\nDISCUSSION TURN ONLY: use supplied read tools; return details {kind:discussion,body,decision}. No implementation, task completion, execution claims or Personal CLI. Follow the discussion round/speaker facts in context. After round 3 the designated PM/Supervisor must return a nonempty decision summary; earlier turns return decision null. A discussion decision is context, never an owner approval.\n");
+    } else if request.inputs["step"] == "sprint_plan" {
+        text.push_str("\nSPRINT PLANNING ONLY: use supplied read tools. Return details {kind:sprint,items:[{item,estimate}],notes}. Choose any number of the prepared candidates in context, size freely and explain capacity against recent throughput. Do not invent items/hashes, implement, approve, triage, scan or start work.\n");
+        text.push_str(&embedded("skills/sprint-plan/SKILL.md")?);
     } else {
         text.push_str(&embedded(&format!("roles/{}.md", request.role))?);
     }

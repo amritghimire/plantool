@@ -91,7 +91,15 @@ wire!(FileProposal {
     body: String,
     idempotency_key: String
 });
+wire!(ProjectWait {
+    item: String,
+    thread_id: String,
+    interrupt_id: String,
+    kind: String,
+    idempotency_key: String
+});
 wire!(EventAck {
+    next_step: Option<String>,
     project: String,
     event_id: String,
     idempotency_key: String
@@ -210,6 +218,7 @@ pub enum Contract {
     ReportResult(RoleResult),
     FileProposal(FileProposal),
     ProjectEventAck(EventAck),
+    ProjectWait(ProjectWait),
     Llm(LlmContext),
     RoleCall(RoleCall),
     WorkflowContext(WorkflowContext),

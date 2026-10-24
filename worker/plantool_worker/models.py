@@ -70,22 +70,26 @@ class Type14(str, Enum):
 
 
 class Type15(str, Enum):
-    llm = 'llm'
+    project_wait = 'project_wait'
 
 
 class Type16(str, Enum):
-    role_call = 'role_call'
+    llm = 'llm'
 
 
 class Type17(str, Enum):
-    workflow_context = 'workflow_context'
+    role_call = 'role_call'
 
 
 class Type18(str, Enum):
-    workflow_pr = 'workflow_pr'
+    workflow_context = 'workflow_context'
 
 
 class Type19(str, Enum):
+    workflow_pr = 'workflow_pr'
+
+
+class Type20(str, Enum):
     store_artifact = 'store_artifact'
 
 
@@ -149,6 +153,7 @@ class EventAck(BaseModel):
     )
     event_id: str
     idempotency_key: str
+    next_step: str | None = None
     project: str
 
 
@@ -220,6 +225,17 @@ class PostMessage(BaseModel):
     body: str
     idempotency_key: str
     item: str
+    thread_id: str
+
+
+class ProjectWait(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    idempotency_key: str
+    interrupt_id: str
+    item: str
+    kind: str
     thread_id: str
 
 
@@ -495,28 +511,33 @@ class Contract15(BaseModel):
 
 
 class Contract16(BaseModel):
-    body: LlmContext
+    body: ProjectWait
     type: Type15
 
 
 class Contract17(BaseModel):
-    body: RoleCall
+    body: LlmContext
     type: Type16
 
 
 class Contract18(BaseModel):
-    body: WorkflowContext
+    body: RoleCall
     type: Type17
 
 
 class Contract19(BaseModel):
-    body: WorkflowPr
+    body: WorkflowContext
     type: Type18
 
 
 class Contract20(BaseModel):
-    body: StoreArtifact
+    body: WorkflowPr
     type: Type19
+
+
+class Contract21(BaseModel):
+    body: StoreArtifact
+    type: Type20
 
 
 class Check(BaseModel):
@@ -618,6 +639,7 @@ class Contract(
         | Contract18
         | Contract19
         | Contract20
+        | Contract21
     ]
 ):
     root: (
@@ -641,6 +663,7 @@ class Contract(
         | Contract18
         | Contract19
         | Contract20
+        | Contract21
     ) = Field(
         ...,
         description='Schema roots include every request and response, not just the graph entrypoints.',

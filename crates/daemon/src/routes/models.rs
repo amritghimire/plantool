@@ -105,7 +105,7 @@ async fn save(
     tx.execute("DELETE FROM route_health", [])
         .map_err(anyhow::Error::from)?;
     if let (Some(project), Some(providers)) = (&body.project, &body.allowed_providers) {
-        let copied=tx.execute("INSERT INTO project_settings(project_id,version,oversight,allowed_providers_json,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,effective_at,set_by) SELECT project_id,version+1,oversight,?2,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,?3,'browser' FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",params![project,serde_json::to_string(providers).map_err(anyhow::Error::from)?,plantool_core::now()]).map_err(anyhow::Error::from)?;
+        let copied=tx.execute("INSERT INTO project_settings(project_id,version,oversight,allowed_providers_json,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,effective_at,set_by,sprint_time,review_globs_json) SELECT project_id,version+1,oversight,?2,never_sent_globs_json,sprint_day,scan_time,timezone,retention_json,?3,'browser',sprint_time,review_globs_json FROM project_settings WHERE project_id=?1 ORDER BY version DESC LIMIT 1",params![project,serde_json::to_string(providers).map_err(anyhow::Error::from)?,plantool_core::now()]).map_err(anyhow::Error::from)?;
         if copied == 0 {
             tx.execute("INSERT INTO project_settings(project_id,version,allowed_providers_json,effective_at,set_by) VALUES(?1,1,?2,?3,'browser')",params![project,serde_json::to_string(providers).map_err(anyhow::Error::from)?,plantool_core::now()]).map_err(anyhow::Error::from)?;
         }

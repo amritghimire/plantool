@@ -31,6 +31,14 @@ async fn task_done(
     })?;
     ensure!(body["item"] == auth.scope.session, "Task item mismatch");
     ensure!(!state.runs.execution.status().stopped, "Stop All is active");
+    if let Some(s) =
+        crate::workflow::state(&database::open(&state.config.home)?, &auth.scope.session)?
+    {
+        ensure!(
+            crate::oversight::active_key(&s, body["key"].as_str().unwrap_or("")),
+            "Task is outside the current phase"
+        );
+    }
     let key = body["key"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing task key"))?;
@@ -251,13 +259,18 @@ async fn gate(
         "worker.gate",
         &request.idempotency_key,
         |tx| {
-            if request.kind == "plan" {
-                let id = crate::github::gates::request(
+            if request.kind == "milestone" {
+                let id = crate::github::milestones::request(tx, &request)?;
+                return Ok(json!({"gate_id":id,"request_digest":digest}));
+            }
+            if request.kind == "plan" || request.kind == "research" {
+                let id = crate::github::gates::request_revision(
                     tx,
                     &request.item,
                     &request.target_digest,
                     request.thread_id.as_deref().unwrap_or(""),
                     request.interrupt_id.as_deref().unwrap_or(""),
+                    &request.kind,
                 )?;
                 if let Some(thread) = &request.discussion_thread_id {
                     let belongs:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM threads t JOIN work_items i ON i.id=t.item_id WHERE t.id=?1 AND t.item_id=?2 AND t.project_id=i.project_id)",params![thread,request.item],|r|r.get(0))?;
@@ -346,29 +359,39 @@ async fn ack(
     Json(request): Json<EventAck>,
 ) -> Result<Json<Value>, ApiError> {
     worker(&state, &headers, socket)?;
-    let db = database::open(&state.config.home)?;
-    let exists: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND mode='eos')",
-            [&request.project],
-            |r| r.get(0),
-        )
-        .map_err(anyhow::Error::from)?;
-    ensure!(exists, "Unknown Engineering OS project");
-    Ok(Json(database::inbox_once(
+    Ok(Json(crate::scheduler::ack(&state.config.home, &request)?))
+}
+async fn project_wait(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<ProjectWait>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    Ok(Json(crate::scheduler::wait(&state.config.home, &request)?))
+}
+async fn project_publish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<WorkflowPr>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    Ok(Json(crate::scheduler::publish(
         &state.config.home,
-        "worker.event",
-        &request.idempotency_key,
-        |tx| {
-            database::audit(
-                tx,
-                "worker",
-                "project.event_ack",
-                &request.project,
-                &serde_json::to_value(&request)?,
-            )?;
-            Ok(json!({"accepted":true}))
-        },
+        &request,
+    )?))
+}
+async fn project_start_items(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    socket: Option<Extension<crate::socket::SocketTransport>>,
+    Json(request): Json<WorkflowPr>,
+) -> Result<Json<Value>, ApiError> {
+    worker(&state, &headers, socket)?;
+    Ok(Json(crate::scheduler::start_items(
+        &state.config.home,
+        &request,
     )?))
 }
 pub fn routes() -> Router<AppState> {
@@ -386,4 +409,10 @@ pub fn routes() -> Router<AppState> {
         .route("/internal/v1/post_message", post(message))
         .route("/internal/v1/file_proposal", post(proposal))
         .route("/internal/v1/project_event_ack", post(ack))
+        .route("/internal/v1/project_wait", post(project_wait))
+        .route("/internal/v1/project_publish", post(project_publish))
+        .route(
+            "/internal/v1/project_start_items",
+            post(project_start_items),
+        )
 }

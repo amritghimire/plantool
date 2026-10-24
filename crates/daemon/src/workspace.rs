@@ -38,6 +38,7 @@ pub fn ensure_channels(tx: &Connection, project: &str) -> anyhow::Result<()> {
             params![format!("{id}:thread"), project, id, format!("#{name}")],
         )?;
     }
+    tx.execute("INSERT OR IGNORE INTO threads(id,project_id,item_id,title) SELECT id||':thread',project_id,id,title FROM work_items WHERE project_id=?1 AND kind='eos' AND github_issue_number IS NOT NULL",[project])?;
     Ok(())
 }
 pub fn item_thread(tx: &Connection, item: &str) -> anyhow::Result<String> {

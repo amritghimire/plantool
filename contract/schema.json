@@ -281,6 +281,24 @@
       ],
       "properties": {
         "body": {
+          "$ref": "#/definitions/ProjectWait"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "project_wait"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "body",
+        "type"
+      ],
+      "properties": {
+        "body": {
           "$ref": "#/definitions/LlmContext"
         },
         "type": {
@@ -523,6 +541,12 @@
         "idempotency_key": {
           "type": "string"
         },
+        "next_step": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "project": {
           "type": "string"
         }
@@ -742,6 +766,34 @@
           "type": "string"
         },
         "item": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProjectWait": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "interrupt_id",
+        "item",
+        "kind",
+        "thread_id"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "interrupt_id": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "kind": {
           "type": "string"
         },
         "thread_id": {

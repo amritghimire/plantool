@@ -120,7 +120,15 @@ impl Fixture {
             details,
         };
         if role == "backend" {
-            std::fs::write(self.root.join("src/a.rs"), "fixed\n").unwrap();
+            std::fs::write(
+                self.root.join("src/a.rs"),
+                if result.tasks_done.contains(&"T2".into()) {
+                    "second fix\n"
+                } else {
+                    "fixed\n"
+                },
+            )
+            .unwrap();
             git(&self.root, &["add", "."]);
             let message = format!(
                 "Scoped fix\n\nPlanTool-Item: {}\nPlanTool-Plan: sha256:{}\nPlanTool-Attempt: {}",
@@ -228,6 +236,8 @@ struct Remote {
     issues: Vec<Value>,
     lose_issue_reply: bool,
     refuse_merge: bool,
+    comments: Vec<Value>,
+    lose_comment_reply: bool,
 }
 #[derive(Clone, Default)]
 struct Fake(Arc<Mutex<Remote>>);
@@ -260,8 +270,11 @@ impl Api for Fake {
                 ("POST", "/repos/o/r/issues") => {
                     status = 201;
                     let b = body.unwrap();
-                    assert_eq!(b["labels"], json!(["plantool:proposed"]));
-                    let issue = json!({"number":10,"user":{"id":99,"type":"Bot"},"title":b["title"],"body":b["body"]});
+                    assert!(
+                        b["labels"] == json!(["plantool:proposed"])
+                            || b["labels"] == json!(["plantool:sprint"])
+                    );
+                    let issue = json!({"number":10+s.issues.len(),"state":"open","user":{"id":99,"type":"Bot"},"title":b["title"],"body":b["body"]});
                     s.issues.push(issue.clone());
                     if s.lose_issue_reply {
                         s.lose_issue_reply = false;
@@ -273,9 +286,52 @@ impl Api for Fake {
                 ("POST", "/repos/o/r/pulls") => {
                     status = 201;
                     let b = body.unwrap();
-                    let p = json!({"number":2,"user":{"id":99,"type":"Bot"},"head":{"ref":b["head"],"sha":s.sha},"body":b["body"],"state":"open","merged":false});
+                    let p = json!({"number":2,"user":{"id":99,"type":"Bot"},"head":{"ref":b["head"],"sha":s.sha},"body":b["body"],"state":"open","merged":false,"draft":b["draft"],"node_id":"PR_NODE"});
                     s.pr = Some(p.clone());
                     p
+                }
+                ("POST", "/graphql") => {
+                    s.pr.as_mut().unwrap()["draft"] = json!(false);
+                    json!({"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}})
+                }
+                ("GET", p) if p.starts_with("/repos/o/r/issues/comments/") => {
+                    let id = p.rsplit('/').next().unwrap().parse::<u64>().unwrap();
+                    match s.comments.iter().find(|c| c["id"] == id) {
+                        Some(c) => c.clone(),
+                        None => {
+                            status = 404;
+                            Value::Null
+                        }
+                    }
+                }
+                ("GET", p) if p.starts_with("/repos/o/r/issues/") && p.ends_with("/comments") => {
+                    let n = p.split('/').nth(5).unwrap();
+                    json!(s
+                        .comments
+                        .iter()
+                        .filter(|c| c["issue_url"].as_str().unwrap().ends_with(&format!("/{n}")))
+                        .cloned()
+                        .collect::<Vec<_>>())
+                }
+                ("POST", p) if p.starts_with("/repos/o/r/issues/") && p.ends_with("/comments") => {
+                    let n = p.split('/').nth(5).unwrap();
+                    let time = chrono::Utc::now().to_rfc3339();
+                    let c = json!({"id":1000+s.comments.len(),"user":{"id":99,"type":"Bot"},"body":body.unwrap()["body"],"issue_url":format!("https://api.github.com/repos/o/r/issues/{n}"),"created_at":time,"updated_at":time});
+                    s.comments.push(c.clone());
+                    status = 201;
+                    if s.lose_comment_reply {
+                        s.lose_comment_reply = false;
+                        return Err(anyhow::anyhow!("lost comment reply"));
+                    }
+                    c
+                }
+                ("GET", p) if p.starts_with("/repos/o/r/issues/") => {
+                    let n = p.rsplit('/').next().unwrap().parse::<u64>().unwrap();
+                    s.issues
+                        .iter()
+                        .find(|i| i["number"] == n)
+                        .cloned()
+                        .unwrap_or(json!({"number":n,"state":"open"}))
                 }
                 ("GET", "/repos/o/r/pulls/2") => s.pr.clone().unwrap(),
                 ("PATCH", "/repos/o/r/pulls/2") => {
@@ -357,6 +413,9 @@ impl GitOps for FakeGit {
             let mut remote = self.remote.0.lock().unwrap();
             remote.pushes += 1;
             remote.sha = Some(head.into());
+            if let Some(pr) = &mut remote.pr {
+                pr["head"]["sha"] = json!(head);
+            }
             Ok(())
         })
     }
@@ -788,4 +847,662 @@ fn supervisor_replan_creates_a_new_revision_and_resets_changed_task_progress() {
     f.run("plan_review", None, vec![]);
     assert_eq!(f.state()["step"], "plan_gate");
     assert_eq!(f.state()["approved"], false);
+}
+
+fn phase4_preset(f: &Fixture, preset: &str) {
+    let db = database::open(&f.home).unwrap();
+    db.execute(
+        "UPDATE project_settings SET oversight=?1 WHERE project_id='p'",
+        [preset],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE workflow_items SET state_json=json_set(state_json,'$.preset',?2) WHERE item_id=?1",
+        params![f.item, preset],
+    )
+    .unwrap();
+}
+fn phase4_command(remote: &Fake, number: u64, body: &str) -> u64 {
+    let mut r = remote.0.lock().unwrap();
+    let id = 2000 + r.comments.len() as u64;
+    let time = (chrono::Utc::now() + chrono::Duration::seconds(2)).to_rfc3339();
+    r.comments.push(json!({"id":id,"user":{"id":7,"type":"User"},"body":body,"issue_url":format!("https://api.github.com/repos/o/r/issues/{number}"),"created_at":time,"updated_at":time}));
+    id
+}
+fn phase4_plan_gate(f: &Fixture, item: &str) -> String {
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    let s = workflow::state(&tx, item).unwrap().unwrap();
+    let g = plantool_daemon::github::gates::request(
+        &tx,
+        item,
+        s["plan_sha"].as_str().unwrap(),
+        item,
+        "plan-interrupt",
+    )
+    .unwrap();
+    tx.execute("UPDATE gates SET state='open',created_at='2026-10-01T00:00:00Z',github_comment_id=50 WHERE id=?1",[&g]).unwrap();
+    tx.commit().unwrap();
+    g
+}
+fn phase4_docs() -> RoleDetails {
+    RoleDetails::Docs{updates:None,body:"## What changed and why\nScoped fix\n## Where to look first\nsrc/a.rs\n## How to test\nRun focused tests\n## AI review rounds\nQA and Reviewer\n## Found during review\nNone\n## Evidence\nActual fake-runner artifacts\n".into()}
+}
+fn phase4_finish_phase(f: &Fixture, key: &str) {
+    f.run("backend", None, vec![key.into()]);
+    f.run("qa", None, vec![]);
+    f.run(
+        "reviewer",
+        Some(RoleDetails::Security {
+            commit: git(&f.root, &["rev-parse", "HEAD"]),
+            passed: true,
+            criteria: vec!["auth, sandbox, state and scope checked".into()],
+        }),
+        vec![],
+    );
+    f.run("docs", Some(phase4_docs()), vec![]);
+}
+fn phase4_milestone(f: &Fixture) -> String {
+    let s = f.state();
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    let g = plantool_daemon::github::milestones::request(
+        &tx,
+        &Gate {
+            item: f.item.clone(),
+            kind: "milestone".into(),
+            target_digest: s["plan_sha"].as_str().unwrap().into(),
+            target_sha: Some(git(&f.root, &["rev-parse", "HEAD"])),
+            idempotency_key: format!("milestone:{}", s["sequence"]),
+            thread_id: Some(f.item.clone()),
+            interrupt_id: Some(format!("milestone:{}", s["sequence"])),
+            summary: None,
+            discussion_thread_id: None,
+        },
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    g
+}
+#[tokio::test]
+async fn phase4_strict_research_is_a_separate_current_hash_owner_gate() {
+    let f = Fixture::new();
+    phase4_preset(&f, "strict");
+    f.run(
+        "research",
+        Some(RoleDetails::Research {
+            markdown: "Inspected architecture, risks and interfaces".into(),
+        }),
+        vec![],
+    );
+    assert_eq!(f.state()["step"], "research_gate");
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    let sha = f.state()["research_sha"].as_str().unwrap().to_string();
+    plantool_daemon::github::gates::request_revision(
+        &tx,
+        &f.item,
+        &sha,
+        &f.item,
+        "research-interrupt",
+        "research",
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let remote = Fake::default();
+    plantool_daemon::github::gates::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    let issue: u64 = db
+        .query_row(
+            "SELECT github_issue_number FROM work_items WHERE id=?1",
+            [&f.item],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let wrong = phase4_command(
+        &remote,
+        issue,
+        &format!("/plantool approve-plan sha256:{}", &sha[..12]),
+    );
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, wrong)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["step"], "research_gate");
+    let good = phase4_command(
+        &remote,
+        issue,
+        &format!("/plantool approve-research sha256:{}", &sha[..12]),
+    );
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, good)
+        .await
+        .unwrap();
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, good)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["step"], "plan");
+    assert_eq!(f.state()["research_approved"], true);
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(db
+        .query_row(
+            "SELECT approved_plan_revision_id FROM work_items WHERE id=?1",
+            [&f.item],
+            |r| r.get::<_, Option<String>>(0)
+        )
+        .unwrap()
+        .is_none());
+}
+#[tokio::test]
+async fn phase4_milestone_draft_head_binding_and_final_ready_keep_both_owner_gates() {
+    let f = Fixture::new();
+    phase4_preset(&f, "standard");
+    f.planning();
+    f.approve_plan();
+    phase4_finish_phase(&f, "T1");
+    assert_eq!(f.state()["step"], "milestone");
+    let gate = phase4_milestone(&f);
+    let remote = Fake::default();
+    let git = FakeGit {
+        remote: remote.clone(),
+        base: f.base.clone(),
+    };
+    remote.0.lock().unwrap().lose_comment_reply = true;
+    assert!(
+        plantool_daemon::github::milestones::publish(&f.home, &remote, &f.repo, &git)
+            .await
+            .is_err()
+    );
+    plantool_daemon::github::milestones::publish(&f.home, &remote, &f.repo, &git)
+        .await
+        .unwrap();
+    plantool_daemon::github::milestones::publish(&f.home, &remote, &f.repo, &git)
+        .await
+        .unwrap();
+    {
+        let r = remote.0.lock().unwrap();
+        assert_eq!(r.pr.as_ref().unwrap()["draft"], true);
+        assert_eq!(r.pushes, 1);
+        assert_eq!(r.comments.len(), 1);
+        assert!(r.comments[0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("/compare/"));
+    }
+    let head = plantool_daemon::git::git(&f.root, &["rev-parse", "HEAD"]).unwrap();
+    remote.0.lock().unwrap().pr.as_mut().unwrap()["head"]["sha"] = json!("f".repeat(40));
+    let stale = phase4_command(&remote, 2, "/plantool continue");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, stale)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["step"], "milestone");
+    remote.0.lock().unwrap().pr.as_mut().unwrap()["head"]["sha"] = json!(head);
+    let good = phase4_command(&remote, 2, "/plantool continue");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, good)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["step"], "pr");
+    assert_eq!(
+        database::open(&f.home)
+            .unwrap()
+            .query_row("SELECT state FROM gates WHERE id=?1", [gate], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "approved"
+    );
+    workflow::pr_wait(&f.home, &f.item, &f.item, "pr-final").unwrap();
+    lifecycle::process_item(&f.home, &remote, &f.repo, &git, &f.item)
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.0.lock().unwrap().pr.as_ref().unwrap()["draft"],
+        false
+    );
+    assert_eq!(remote.0.lock().unwrap().merge_calls, 0);
+    remote.0.lock().unwrap().reviews = vec![
+        json!({"id":9000,"user":{"id":7,"type":"User"},"state":"APPROVED","commit_id":head,"submitted_at":(chrono::Utc::now()+chrono::Duration::seconds(3)).to_rfc3339()}),
+    ];
+    lifecycle::process_item(&f.home, &remote, &f.repo, &git, &f.item)
+        .await
+        .unwrap();
+    assert_eq!(remote.0.lock().unwrap().merge_calls, 1);
+}
+
+fn phase4_seed_sprint(f: &Fixture) -> String {
+    f.planning();
+    phase4_plan_gate(f, &f.item);
+    let first = f.state();
+    let oldrev:String=database::open(&f.home).unwrap().query_row("SELECT id FROM revisions WHERE item_id=?1 AND doc_kind='plan' ORDER BY number DESC LIMIT 1",[&f.item],|r|r.get(0)).unwrap();
+    for n in [2, 3] {
+        let item = workflow::start(
+            &f.home,
+            "p",
+            n,
+            &format!("Item {n}"),
+            "Scoped change",
+            &f.base,
+        )
+        .unwrap();
+        let db = database::open(&f.home).unwrap();
+        let revision = format!("{item}:plan:{}", first["plan_sha"].as_str().unwrap());
+        db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) SELECT ?1,?2,doc_kind,number,content_sha256,created_by,created_at FROM revisions WHERE id=?3",params![revision,item,oldrev]).unwrap();
+        db.execute("INSERT INTO plan_tasks SELECT ?1||':'||task_key,?1,task_key,area,title,phase,review_tag FROM plan_tasks WHERE revision_id=?2",params![revision,oldrev]).unwrap();
+        let mut state = first.clone();
+        state["item"] = json!(item);
+        state["generation"] = json!(0);
+        state["sequence"] = json!(0);
+        db.execute(
+            "UPDATE workflow_items SET state_json=?2 WHERE item_id=?1",
+            params![item, state.to_string()],
+        )
+        .unwrap();
+        phase4_plan_gate(f, &item);
+    }
+    let project = plantool_daemon::scheduler::ensure_project(&f.home, "p").unwrap();
+    plantool_daemon::scheduler::wait(
+        &f.home,
+        &ProjectWait {
+            item: project.clone(),
+            thread_id: project.clone(),
+            interrupt_id: "due-wait".into(),
+            kind: "project".into(),
+            idempotency_key: "due-wait".into(),
+        },
+    )
+    .unwrap();
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-19T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    plantool_daemon::scheduler::tick(&f.home, now).unwrap();
+    let db = database::open(&f.home).unwrap();
+    let event: String = db
+        .query_row(
+            "SELECT id FROM project_events WHERE kind='sprint_planning_due'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    plantool_daemon::scheduler::ack(
+        &f.home,
+        &EventAck {
+            project: "p".into(),
+            event_id: event,
+            next_step: Some("sprint_plan".into()),
+            idempotency_key: "due-ack".into(),
+        },
+    )
+    .unwrap();
+    let dispatch = Dispatch {
+        item: project.clone(),
+        role: "pm".into(),
+        generation: 1,
+        inputs: json!({"step":"sprint_plan"}),
+        plan_sha: "".into(),
+        policy_version: 1,
+        capability: "read".into(),
+        idempotency_key: "pm-sprint".into(),
+        thread_id: project.clone(),
+        interrupt_id: "pm-turn".into(),
+    };
+    let attempt = dispatcher::admit(&f.home, &dispatch, 0).unwrap();
+    db.execute(
+        "UPDATE attempts SET state='running' WHERE id=?1",
+        [&attempt.attempt_id],
+    )
+    .unwrap();
+    dispatcher::report(
+        &f.home,
+        &RoleResult {
+            item: project.clone(),
+            role: "pm".into(),
+            attempt_id: attempt.attempt_id,
+            generation: 1,
+            outcome: Outcome::Done,
+            summary: "Three bounded items based on inspected candidates".into(),
+            tasks_done: vec![],
+            artifacts: vec![],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: Some(RoleDetails::Sprint {
+                items: vec![f.item.clone(), "p:2".into(), "p:3".into()]
+                    .into_iter()
+                    .map(|item| SprintChoice {
+                        item,
+                        estimate: "one focused change; PM-sized".into(),
+                    })
+                    .collect(),
+                notes: "No imposed point ceiling; test prerequisites are available".into(),
+            }),
+        },
+    )
+    .unwrap();
+    plantool_daemon::scheduler::publish(
+        &f.home,
+        &WorkflowPr {
+            item: project.clone(),
+            thread_id: project.clone(),
+            interrupt_id: "publish".into(),
+            idempotency_key: "publish".into(),
+        },
+    )
+    .unwrap();
+    project
+}
+fn phase4_release(f: &Fixture, project: &str, key: &str) {
+    let db = database::open(&f.home).unwrap();
+    let s = workflow::state(&db, project).unwrap().unwrap();
+    plantool_daemon::scheduler::wait(
+        &f.home,
+        &ProjectWait {
+            item: project.into(),
+            thread_id: project.into(),
+            interrupt_id: key.into(),
+            kind: "sprint".into(),
+            idempotency_key: key.into(),
+        },
+    )
+    .unwrap();
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-19T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    plantool_daemon::scheduler::tick(&f.home, now).unwrap();
+    let event:String=db.query_row("SELECT id FROM project_events WHERE kind='sprint_decision' AND delivered_at IS NOT NULL ORDER BY rowid DESC LIMIT 1",[],|r|r.get(0)).unwrap();
+    plantool_daemon::scheduler::ack(
+        &f.home,
+        &EventAck {
+            project: "p".into(),
+            event_id: event,
+            next_step: Some("start_items".into()),
+            idempotency_key: format!("ack:{key}"),
+        },
+    )
+    .unwrap();
+    plantool_daemon::scheduler::start_items(
+        &f.home,
+        &WorkflowPr {
+            item: project.into(),
+            thread_id: project.into(),
+            interrupt_id: key.into(),
+            idempotency_key: format!("start:{key}"),
+        },
+    )
+    .unwrap();
+    assert!(s["step"] == "await_sprint_gate");
+}
+#[tokio::test]
+async fn phase4_three_item_sprint_starts_only_current_snapshot_approvals_and_never_replays() {
+    let f = Fixture::new();
+    let project = phase4_seed_sprint(&f);
+    let remote = Fake::default();
+    remote.0.lock().unwrap().lose_comment_reply = true;
+    assert!(
+        plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+            .await
+            .is_err()
+    );
+    plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    let db = database::open(&f.home).unwrap();
+    let number: u64 = db
+        .query_row("SELECT tracking_issue_number FROM sprints", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        remote.0.lock().unwrap().issues[0]["title"],
+        "Sprint 2026-W43"
+    );
+    assert_eq!(remote.0.lock().unwrap().comments.len(), 1);
+    let bot = phase4_command(&remote, number, "/plantool approve-sprint");
+    {
+        let mut r = remote.0.lock().unwrap();
+        r.comments.iter_mut().find(|c| c["id"] == bot).unwrap()["user"]["type"] = json!("Bot");
+    }
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, bot)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["step"], "plan_gate");
+    let one = phase4_command(&remote, number, "/plantool approve 2");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, one)
+        .await
+        .unwrap();
+    assert_eq!(
+        workflow::state(&db, "p:2").unwrap().unwrap()["step"],
+        "plan_gate",
+        "A comment alone does not dispatch before the graph start_items node"
+    );
+    phase4_release(&f, &project, "release-one");
+    assert_eq!(
+        workflow::state(&db, "p:2").unwrap().unwrap()["step"],
+        "backend"
+    );
+    assert_eq!(f.state()["step"], "plan_gate");
+    let all = phase4_command(&remote, number, "/plantool approve-sprint");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, all)
+        .await
+        .unwrap();
+    phase4_release(&f, &project, "release-all");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, all)
+        .await
+        .unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM decisions WHERE decision='approved'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decision_targets", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(db.query_row("SELECT count(*) FROM outbox WHERE kind='worker.resume' AND json_extract(payload_json,'$.idempotency_key') LIKE 'sprint-start:%'",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+    assert_eq!(
+        workflow::state(&db, &project).unwrap().unwrap()["step"],
+        "project_wait"
+    );
+}
+#[test]
+fn phase4_unapproved_items_return_to_backlog_and_scheduler_wait_replay_is_idempotent() {
+    let f = Fixture::new();
+    let project = phase4_seed_sprint(&f);
+    let db = database::open(&f.home).unwrap();
+    let before: i64 = db
+        .query_row("SELECT count(*) FROM outbox", [], |r| r.get(0))
+        .unwrap();
+    plantool_daemon::scheduler::wait(
+        &f.home,
+        &ProjectWait {
+            item: project.clone(),
+            thread_id: project,
+            interrupt_id: "due-wait".into(),
+            kind: "project".into(),
+            idempotency_key: "due-wait".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM outbox", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        before
+    );
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    plantool_daemon::scheduler::expire(&tx, "p", "p:2026-W44").unwrap();
+    tx.commit().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM work_items WHERE state='backlog'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+#[test]
+fn phase4_review_tag_edit_is_a_new_immutable_pending_revision() {
+    let f = Fixture::new();
+    phase4_preset(&f, "standard");
+    f.planning();
+    phase4_plan_gate(&f, &f.item);
+    let old = f.state()["plan_sha"].as_str().unwrap().to_string();
+    let new =
+        plantool_daemon::routes::oversight::edit_tags(&f.home, &f.item, &old, &[false]).unwrap();
+    assert_ne!(old, new);
+    assert_eq!(f.state()["phases"][0]["tagged"], false);
+    let db = database::open(&f.home).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM revisions WHERE item_id=?1 AND doc_kind='plan'",
+            [&f.item],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+    assert!(
+        plantool_daemon::routes::oversight::edit_tags(&f.home, &f.item, &old, &[true]).is_err()
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    f.approve_plan();
+    assert!(
+        plantool_daemon::routes::oversight::edit_tags(&f.home, &f.item, &new, &[true]).is_err()
+    );
+}
+
+#[tokio::test]
+async fn phase4_two_phase_milestones_require_fresh_continue_for_each_head() {
+    let f = Fixture::new();
+    phase4_preset(&f, "standard");
+    f.run(
+        "research",
+        Some(RoleDetails::Research {
+            markdown: "Inspect the two bounded steps".into(),
+        }),
+        vec![],
+    );
+    f.run("plan",Some(RoleDetails::Plan{markdown:"# Plan\n### Phase 1 [review]\n- [ ] T1: [backend] First fix\n### Phase 2 [review]\n- [ ] T2: [backend] Second fix\n".into(),acceptance_criteria:vec!["AC1 T1 and AC2 T2 pass focused tests".into()],affected_files:vec!["src/a.rs".into(),"tests/**".into()]}),vec![]);
+    f.run("plan_review", None, vec![]);
+    f.approve_plan();
+    phase4_finish_phase(&f, "T1");
+    assert_eq!(f.state()["phase_index"], 0);
+    assert!(!plantool_daemon::oversight::active_key(&f.state(), "T2"));
+    phase4_milestone(&f);
+    let remote = Fake::default();
+    let transport = FakeGit {
+        remote: remote.clone(),
+        base: f.base.clone(),
+    };
+    plantool_daemon::github::milestones::publish(&f.home, &remote, &f.repo, &transport)
+        .await
+        .unwrap();
+    let first = phase4_command(&remote, 2, "/plantool continue");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, first)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["phase_index"], 1);
+    assert_eq!(f.state()["step"], "backend");
+    phase4_finish_phase(&f, "T2");
+    phase4_milestone(&f);
+    plantool_daemon::github::milestones::publish(&f.home, &remote, &f.repo, &transport)
+        .await
+        .unwrap();
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, first)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.state()["step"],
+        "milestone",
+        "The earlier comment cannot authorize the second stop"
+    );
+    {
+        let r = remote.0.lock().unwrap();
+        assert_eq!(r.pushes, 2);
+        assert_eq!(
+            r.comments
+                .iter()
+                .filter(|c| c["user"]["type"] == "Bot")
+                .count(),
+            2
+        );
+        assert!(r
+            .comments
+            .iter()
+            .any(|c| c["body"].as_str().unwrap().contains("Milestone 2/2")));
+        assert_eq!(r.pr.as_ref().unwrap()["draft"], true);
+    }
+    let next = phase4_command(&remote, 2, "/plantool continue");
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, next)
+        .await
+        .unwrap();
+    assert_eq!(f.state()["step"], "pr");
+}
+#[tokio::test]
+async fn phase4_sprint_revision_refresh_posts_a_new_snapshot_and_rejects_old_commands() {
+    let f = Fixture::new();
+    phase4_preset(&f, "standard");
+    phase4_seed_sprint(&f);
+    let remote = Fake::default();
+    plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    let db = database::open(&f.home).unwrap();
+    let number: u64 = db
+        .query_row("SELECT tracking_issue_number FROM sprints", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let stale = phase4_command(&remote, number, "/plantool approve-sprint");
+    {
+        let mut r = remote.0.lock().unwrap();
+        let old = r.comments[0]["created_at"].clone();
+        let c = r.comments.iter_mut().find(|c| c["id"] == stale).unwrap();
+        c["created_at"] = old.clone();
+        c["updated_at"] = old;
+    }
+    let hash = f.state()["plan_sha"].as_str().unwrap().to_owned();
+    plantool_daemon::routes::oversight::edit_tags(&f.home, &f.item, &hash, &[false]).unwrap();
+    plantool_daemon::github::sprints::refresh(&f.home, &f.repo).unwrap();
+    plantool_daemon::github::sprints::publish(&f.home, &remote, &f.repo)
+        .await
+        .unwrap();
+    assert_eq!(
+        remote
+            .0
+            .lock()
+            .unwrap()
+            .comments
+            .iter()
+            .filter(|c| c["user"]["type"] == "Bot")
+            .count(),
+        2
+    );
+    plantool_daemon::github::gates::comment(&f.home, &remote, &f.repo, stale)
+        .await
+        .unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }

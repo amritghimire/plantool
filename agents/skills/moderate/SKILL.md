@@ -1,6 +1,11 @@
 ---
 name: moderate
-description: PlanTool moderate instructions.
+description: Close a bounded workspace topic as its designated PM or Supervisor arbiter.
 ---
 
-Summarize disagreement and choose a bounded next action. No workspace rounds are executed by this work-item graph.
+Only the designated closing speaker may apply this skill after three contribution turns.
+PM closes unless PM participated, in which case Supervisor closes. Summarize inspected
+agreements, unresolved risks and one bounded recommendation. Do not ask for another round.
+Return the existing discussion decision string; this is context, not owner authorization.
+Missing authority or evidence must remain explicit and may require blocked/escalation.
+No approval, changed capability, direct message or GitHub side effect is allowed.

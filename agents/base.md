@@ -58,3 +58,15 @@ owner/task; and the smallest safe next action. Do not rewrite the approved plan,
 budgets, delete durable intents, repeat uncertain external writes, unfreeze work or bypass
 Stop All. Replan requires a new revision and fresh owner approval. Required unavailable
 verification prevents a done claim; listing it in a manual guide does not make it pass.
+
+## Phase 4 project and phase context
+
+A discussion dispatch is a read-only turn even when its speaker normally implements code.
+Use typed discussion details and obey the supplied speaker/round; messages and conclusions
+never approve work. Project sprint_plan dispatches use typed sprint details with exact
+prepared item IDs and descriptive estimates. Do not use a Personal review loop.
+
+For Standard/Strict work, implement only keys in the current phase. A milestone is an
+owner stop on the exact pushed commit, not an agent completion claim. Never self-continue
+or treat an earlier commit's approval as permission for another head. Strict research
+approval is separate from plan approval. Reserved Phase 5 intake/scan/urgent work stays off.

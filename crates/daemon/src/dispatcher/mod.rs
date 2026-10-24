@@ -203,6 +203,7 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
             anyhow::ensure!(valid,"Plan scope changed; task progress needs fresh approval");
         }
         for key in &result.tasks_done {
+            if let Some(s)=crate::workflow::state(tx,&result.item)? {anyhow::ensure!(crate::oversight::active_key(&s,key),"Task is outside the current phase");}
             let approved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN plan_tasks t ON t.revision_id=i.approved_plan_revision_id WHERE i.id=?1 AND t.task_key=?2)",params![result.item,key],|r|r.get(0))?;
             anyhow::ensure!(approved,"Result references an unapproved task");
             if crate::workflow::state(tx,&result.item)?.is_some() {

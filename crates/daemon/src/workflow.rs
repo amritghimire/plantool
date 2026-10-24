@@ -19,7 +19,7 @@ pub fn state(db: &rusqlite::Connection, item: &str) -> anyhow::Result<Option<Val
 pub fn role(step: &str) -> &str {
     match step {
         "research" | "plan_review" => "cto",
-        "plan" => "pm",
+        "plan" | "sprint_plan" => "pm",
         other => other,
     }
 }
@@ -35,7 +35,12 @@ pub fn capability(role: &str) -> &str {
 }
 pub fn context(home: &Path, item: &str) -> anyhow::Result<Value> {
     let db = database::open(home)?;
-    let state = state(&db, item)?.context("Item graph is not initialized")?;
+    let mut state = state(&db, item)?.context("Item graph is not initialized")?;
+    state["head_sha"] = json!(db.query_row(
+        "SELECT head_sha FROM workflow_items WHERE item_id=?1",
+        [item],
+        |r| r.get::<_, String>(0)
+    )?);
     let (project, _) = dispatcher::item(&db, item)?;
     let policy: u64 = db.query_row(
         "SELECT max(version) FROM project_settings WHERE project_id=?1",
@@ -75,7 +80,14 @@ pub fn check(db: &rusqlite::Connection, request: &Dispatch) -> anyhow::Result<bo
         request.plan_sha == s["plan_sha"].as_str().unwrap_or(""),
         "Graph plan changed"
     );
-    Ok(["research", "plan", "plan_review", "supervisor"].contains(&step))
+    Ok([
+        "research",
+        "plan",
+        "plan_review",
+        "supervisor",
+        "sprint_plan",
+    ]
+    .contains(&step))
 }
 pub fn start(
     home: &Path,
@@ -108,6 +120,8 @@ pub fn start(
     )?;
     let mut state = json!({"item":item,"step":"research","generation":0,"sequence":0,"plan_sha":"","approved":false,"areas":[],"owners":{},"retries":{},"supervisor_rounds":0,"frozen":false,"issue_body":body});
     state["discuss_enabled"] = json!(discussion);
+    state["preset"] = serde_json::to_value(crate::oversight::preset(&tx, project)?)?;
+    state["review_globs"] = json!(crate::oversight::rules(&tx, project)?);
     tx.execute("INSERT INTO work_items(id,project_id,kind,title,github_issue_number,state,created_at,repo_slug,slug,session_json) VALUES(?1,?2,'eos',?3,?4,'research',?5,?2,?6,'{}')",params![item,project,title,issue,plantool_core::now(),format!("issue-{issue}")])?;
     tx.execute(
         "INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES(?1,?2,?3,?3)",
@@ -115,6 +129,15 @@ pub fn start(
     )?;
     if discussion {
         crate::workspace::item_thread(&tx, &item)?;
+    }
+    if self::state(&tx, &format!("{project}:project"))?.is_some() {
+        crate::scheduler::event(
+            &tx,
+            project,
+            "issue_new",
+            &json!({"item":item}),
+            &format!("issue:{issue}"),
+        )?;
     }
     let start = plantool_contract::Start {
         thread_id: item.clone(),
@@ -137,6 +160,9 @@ pub fn start(
 }
 pub fn after_plan(s: &mut Value, approved: bool) {
     s["approved"] = json!(approved);
+    if approved {
+        crate::oversight::initialize(s);
+    }
     s["step"] = json!(if !approved {
         "plan"
     } else if s["areas"]
@@ -154,6 +180,26 @@ pub fn after_plan(s: &mut Value, approved: bool) {
     } else {
         "qa"
     });
+    if approved && s["phases"].as_array().is_some_and(|p| !p.is_empty()) {
+        s["step"] = json!(crate::oversight::first_step(&s["areas"]));
+    }
+}
+pub fn research_decision(tx: &Transaction<'_>, item: &str, approved: bool) -> anyhow::Result<()> {
+    let mut s = state(tx, item)?.context("Research graph missing")?;
+    ensure!(s["step"] == "research_gate", "Not waiting for research");
+    s["research_approved"] = json!(approved);
+    if !approved {
+        s["step"] = json!("research");
+    } else if s["discuss_enabled"] == true {
+        let summary = s["research_summary"]
+            .as_str()
+            .unwrap_or("Discuss research")
+            .to_owned();
+        crate::workspace::begin(tx, item, &mut s, "plan", &summary)?;
+    } else {
+        s["step"] = json!("plan");
+    }
+    save(tx, item, &s)
 }
 pub fn gate_decision(tx: &Transaction<'_>, item: &str, approved: bool) -> anyhow::Result<()> {
     if let Some(mut s) = state(tx, item)? {
@@ -192,6 +238,12 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
         return Ok(());
     };
     ensure!(s["frozen"] != true, "Item is frozen");
+    if s["project"] == true && s["step"] == "sprint_plan" {
+        if result.outcome == Outcome::Done {
+            crate::scheduler::validate(&s, result)?;
+        }
+        return Ok(());
+    }
     if s["step"] == "discussion" {
         if result.outcome == Outcome::Done {
             crate::workspace::validate(&s, result)?;
@@ -361,7 +413,13 @@ pub fn record(
     };
     let step = s["step"].as_str().unwrap_or("").to_owned();
     s["generation"] = json!(result.generation);
+    s["phase_restart"] = json!(false);
     s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
+    if s["project"] == true && step == "sprint_plan" {
+        crate::scheduler::record(result, &mut s)?;
+        save(tx, &result.item, &s)?;
+        return Ok(());
+    }
     if step == "discussion" {
         crate::workspace::record(tx, result, &mut s)?;
         save(tx, &result.item, &s)?;
@@ -379,6 +437,10 @@ pub fn record(
             "Only CTO steps may publish research"
         );
         let sha = crate::artifacts::put(home, markdown.as_bytes())?;
+        if step == "research" {
+            s["research_sha"] = json!(sha);
+            s["research_summary"] = json!(result.summary);
+        }
         crate::artifacts::register(tx, &sha, markdown.len())?;
         tx.execute("INSERT OR IGNORE INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) SELECT ?1,?2,'research',coalesce(max(number),0)+1,?3,'cto',?4 FROM revisions WHERE item_id=?2 AND doc_kind='research'",params![format!("{}:research:{sha}",result.item),result.item,sha,plantool_core::now()])?;
     }
@@ -389,6 +451,26 @@ pub fn record(
     }) = &result.details
     {
         ensure!(step == "plan", "Only PM may create plan revisions");
+        let project = dispatcher::item(tx, &result.item)?.0;
+        let preset = crate::oversight::preset(tx, &project)?;
+        let marked = crate::oversight::mark_plan(
+            markdown,
+            preset,
+            affected_files,
+            &crate::oversight::rules(tx, &project)?,
+        )?;
+        let normalized = if preset != plantool_core::presets::Preset::Minimal {
+            crate::oversight::normalize_phases(&marked)
+        } else {
+            marked
+        };
+        let markdown = &normalized;
+        if preset != plantool_core::presets::Preset::Minimal {
+            s["phases"] = crate::oversight::phases(markdown)?;
+        } else {
+            s["phases"] = json!([])
+        }
+        s["preset"] = serde_json::to_value(preset)?;
         let content = format!(
             "{markdown}\n\n## Bound acceptance criteria\n{}\n\n## Bound affected files\n{}\n",
             acceptance_criteria
@@ -538,6 +620,14 @@ pub fn record(
                 params![result.item, base],
             )?;
             s["rebase_base"] = Value::Null;
+            if s["rebase_restart"] == true {
+                crate::oversight::initialize(&mut s);
+                s["step"] = json!("qa");
+                s["phase_restart"] = json!(true);
+                s["rebase_restart"] = json!(false);
+                s["last_milestone_sha"] = Value::Null;
+                tx.execute("UPDATE gates SET state='superseded',closed_at=?2 WHERE item_id=?1 AND kind='milestone'",params![result.item,plantool_core::now()])?;
+            }
         }
 
         let base: String = tx.query_row(
@@ -706,6 +796,16 @@ pub fn record(
         .filter(|f| f.scope == plantool_contract::FindingScope::Out)
     {
         proposal(tx, &result.item, &f.title, &f.detail)?;
+    }
+    if s["step"] == "pr" && result.outcome == Outcome::Done {
+        crate::oversight::boundary(tx, &result.item, &mut s)?;
+    }
+    if step == "research"
+        && result.outcome == Outcome::Done
+        && s["preset"] == "strict"
+        && s["step"] == "plan"
+    {
+        s["step"] = json!("research_gate");
     }
     if step == "research"
         && result.outcome == Outcome::Done

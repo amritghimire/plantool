@@ -35,7 +35,7 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         else:
             state["step"] = owner
         return state
-    if step == "research": state["step"] = "discussion" if state.get("discuss_enabled") else "plan"
+    if step == "research": state["step"] = "research_gate" if state.get("preset")=="strict" else "discussion" if state.get("discuss_enabled") else "plan"
     elif step == "plan": state["step"] = "plan_review"
     elif step == "plan_review": state["step"] = "plan_gate"
     elif step == "backend": state["step"] = "frontend" if "frontend" in state.get("areas", []) else ("devops" if state.get("infra_changed") else "qa")
@@ -43,13 +43,20 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     elif step == "devops": state["step"] = "qa"
     elif step == "qa": state["step"] = "reviewer"
     elif step == "reviewer": state["step"] = "docs"
-    elif step == "docs": state["step"] = ("qa" if state.get("docs_rounds",0)<=2 else "supervisor") if state.get("docs_changed") else "pr"
+    elif step == "docs":
+        if state.get("docs_changed"):state["step"]="qa" if state.get("docs_rounds",0)<=2 else "supervisor"
+        else:
+            from .phases import boundary
+            state=boundary(state)
     else: raise ValueError(f"Invalid role step {step}")
     return state
 
 def after_plan(state: dict[str, Any], approved: bool) -> dict[str, Any]:
     state = dict(state)
     state["approved"] = approved
+    if approved and state.get("phases"):
+        from .phases import first
+        state.update(phase_index=0,areas=state["phases"][0]["areas"]);state["step"]=first(state["areas"]);return state
     state["step"] = ("backend" if "backend" in state.get("areas", []) else "frontend" if "frontend" in state.get("areas", []) else "devops" if state.get("infra_changed") else "qa") if approved else "plan"
     return state
 
@@ -83,19 +90,34 @@ async def build_step(daemon, store, state):
             if updated["step"]!=facts["state"]["step"] or (updated["step"]=="discussion" and updated["discussion"]!=facts["state"]["discussion"]):raise RuntimeError("Discussion projection mismatch")
             updated.update(generation=facts["state"]["generation"],sequence=facts["state"]["sequence"],policy_version=facts["policy_version"])
             return {"workflow":updated,"result":updated}
-        for key in ["discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
+        for key in ["phase_restart","head_sha","preset","phases","research_sha","research_approved","discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
             if key in facts["state"]: workflow[key]=facts["state"][key]
         updated=route(workflow,result)
         if step in {"backend","frontend"} and updated["step"]=="qa" and workflow.get("infra_changed"): updated["step"]="devops"
+        if workflow.get("phase_restart"): updated["step"]="qa"
         if updated["step"]!=facts["state"]["step"]: raise RuntimeError("Daemon rejected graph transition")
         updated["policy_version"]=facts["policy_version"]
         updated["summary"]=result["summary"]
-    elif step=="plan_gate":
-        response=await daemon.post("/internal/v1/request_gate",json={**context,"kind":"plan","target_digest":workflow["plan_sha"],"target_sha":None,"summary":workflow.get("summary"),"discussion_thread_id":None});response.raise_for_status()
+        if "phase_index" in facts["state"]: updated["phase_index"]=facts["state"]["phase_index"]
+    elif step in ("plan_gate","research_gate","milestone"):
+        kind="plan" if step=="plan_gate" else "research" if step=="research_gate" else "milestone"
+        facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();current=facts.json()["state"]
+        target=workflow.get("research_sha") if kind=="research" else workflow["plan_sha"]
+        response=await daemon.post("/internal/v1/request_gate",json={**context,"kind":kind,"target_digest":target,"target_sha":workflow.get("head_sha",current.get("head_sha")) if kind=="milestone" else None,"summary":workflow.get("summary"),"discussion_thread_id":workflow.get("discussion",{}).get("thread")});response.raise_for_status()
         decision=interrupt({"gate":response.json(),"interrupt_id":identity})
-        updated=after_plan(workflow,decision.get("decision")=="approved")
-        facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();facts=facts.json();updated["policy_version"]=facts["policy_version"]
-        if updated["step"]!=facts["state"]["step"]: raise RuntimeError("Stale gate resume")
+        facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();facts=facts.json()
+        if kind=="plan": updated=after_plan({**workflow,**facts["state"]},decision.get("decision")=="approved")
+        elif kind=="research":
+            expected="discussion" if workflow.get("discuss_enabled") else "plan"
+            if decision.get("decision")!="approved":expected="research"
+            updated={**workflow,**facts["state"],"step":expected}
+        elif decision.get("decision")=="approved":
+            from .phases import advance
+            updated=advance(workflow)
+            updated.update({k:v for k,v in facts["state"].items() if k!="step"})
+        else:updated={**workflow,**facts["state"]}
+        updated["policy_version"]=facts["policy_version"]
+        if updated["step"]!=facts["state"]["step"]:raise RuntimeError("Stale gate resume")
     elif step=="pr":
         response=await daemon.post("/internal/v1/workflow_pr",json=context);response.raise_for_status()
         decision=interrupt({"pr":response.json(),"interrupt_id":identity})
