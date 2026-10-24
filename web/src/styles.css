@@ -632,3 +632,19 @@ input[type="checkbox"], input[type="radio"] { width: auto; flex: none; accent-co
 .connection-card {padding:18px;border:1px solid var(--line);border-radius:8px;margin:12px 0;}
 @media(max-width:1100px){.app-header {gap:10px;flex-wrap:wrap;}.execution-state {display:none;}.status-grid {grid-template-columns:1fr;}.settings-page,.engineering-page,.setup-page {grid-template-columns:215px minmax(0,1fr);}}
 @media(max-width:700px){.app-header {padding:10px 12px;}.app-header nav {order:3;width:100%;overflow-x:auto;}.app-header nav a {padding:8px 9px;}.app-header .brand {font-size:16px;}.app-header .execution-controls {margin-left:auto;max-width:65%;}.execution-controls [role=status] {font-size:11px;}.engineering-page,.settings-page,.setup-page,.workspace-page {display:flex;flex-direction:column;height:auto;min-height:100%;}.page-sidebar,.workspace-sidebar {border-right:0;border-bottom:1px solid var(--line);padding:18px;overflow:visible;}.page-sidebar nav {flex-direction:row;overflow:auto;}.page-sidebar nav a,.page-sidebar nav button {flex-shrink:0;}.engineering-content,.settings-content,.setup-content,.item-detail {padding:22px 16px;overflow:visible;}.page-heading,.section-heading {align-items:flex-start;flex-wrap:wrap;}.item-grid {grid-template-columns:1fr;}.workspace-sidebar nav {max-height:190px;overflow:auto;}.workspace-conversation {min-height:70vh;}.message-list {max-height:55vh;}.conversation-header {padding:18px;}.message-list {padding:8px 18px;}.context-composer {margin:10px 14px 18px;}.setup-steps {display:flex;overflow:auto;}.setup-steps li {flex-shrink:0;}.setup-actions {flex-wrap:wrap;}}
+.workspace-nav-toggle {display:none;}
+@media(max-width:700px){
+ .workspace-page {height:100%;min-height:0;}
+ .workspace-sidebar {gap:10px;flex-shrink:0;padding:14px;}
+ .workspace-sidebar h1,.workspace-read-note,.workspace-sidebar>a,.workspace-sidebar .workspace-search {display:none;}
+ .workspace-sidebar.browsing .workspace-search {display:flex;}
+ .workspace-nav-toggle {display:block;}
+ .workspace-sidebar nav:not(.open) {display:none;}
+ .workspace-sidebar nav.open {max-height:150px;}
+ .workspace-conversation {min-height:0;flex:1;}
+ .message-list {max-height:none;min-height:60px;}
+ .conversation-header {padding:12px 16px;}
+ .conversation-header .eyebrow {overflow-wrap:anywhere;}
+ .context-composer {padding:12px;flex-shrink:0;}
+ .context-composer textarea {min-height:60px;}
+}

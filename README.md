@@ -344,8 +344,10 @@ Personal remains the Rust engine and never downloads or starts Python. Both mode
 model lease, so a hosted coding run or LLM request waits while another holds it. Coding runs
 checkpoint after at most 45 minutes; model changes happen between attempts.
 
-In browser **Settings → Engineering OS**, choose **Repair with passkey** for first setup or
-repair. The binary unpacks its embedded worker and agent instructions under
+Open **Engineering OS → Guided setup** for the in-app, one-step-at-a-time guide. It saves
+your step and selected project on the daemon, so you can close the browser or restart and
+resume. Saved configuration is retained; unfinished form inputs must be entered again.
+For worker repair, open **Settings → Worker** and choose **Repair with passkey**. The binary unpacks its embedded worker and agent instructions under
 `$PLANTOOL_HOME/worker/<version>/`, downloads checksum-verified uv **0.12.23**, and runs
 `uv sync --frozen --no-dev --python 3.12`. Python installs under the same home, not system-wide.
 The worker runs sandboxed on `run/worker.sock`, receives its token through an inherited descriptor,
@@ -482,7 +484,12 @@ CTO research → PM keyed plan → CTO review → GitHub plan gate → approved 
 conditional DevOps → QA → Reviewer security pass → Docs → App PR and current-head PR gate.
 In-scope defects return to their owning task's role, with three retries per task and at most
 two Supervisor rounds. Replanning creates a new immutable plan/hash; escalation freezes
-side effects. Settings → Engineering OS shows work-item state, failures and owner attention.
+side effects. **Engineering OS** shows projects, active role/model attempts and owner attention;
+open an item for its recorded graph history and GitHub gate links. **Workspace** provides
+project channels, item threads, search and browser-local unread markers. Owner replies are
+context, never approvals. Global **Stop All** in the shared header affects every project
+and Personal run. **Settings** has separate pages for connections, worker, model routes,
+project policies and privacy.
 
 Coding attempts use private checkouts. Reviewer is read-only; QA writes tests only. Agent
 Git configuration/hooks are protected, and the dispatcher checks commits, scope and owned

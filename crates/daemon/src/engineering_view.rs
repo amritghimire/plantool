@@ -9,18 +9,58 @@ fn items(db: &Connection, project: Option<&str>) -> anyhow::Result<Vec<Value>> {
     let rows=q.query_map([project],|r|Ok(json!({"id":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"issue":r.get::<_,Option<u64>>(3)?,"state":r.get::<_,String>(4)?,"priority":r.get::<_,Option<String>>(5)?,"pr":r.get::<_,Option<u64>>(6)?,"error":r.get::<_,Option<String>>(7)?,"frozen":r.get::<_,Option<bool>>(8)?.unwrap_or(false),"step":r.get::<_,Option<String>>(9)?.unwrap_or_default(),"waiting_gates":r.get::<_,u64>(10)?})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(rows)
 }
+fn roles(home: &Path, db: &Connection, project: Option<&str>) -> anyhow::Result<Value> {
+    let cfg = crate::models::router::config(home)?;
+    let allowed = if let Some(project) = project {
+        crate::models::router::allowed(db, project)?
+    } else {
+        cfg.routes.values().map(|r| r.provider.clone()).collect()
+    };
+    let mut q = db.prepare("SELECT route FROM route_health WHERE available=1")?;
+    let healthy = q
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    Ok(json!([
+        "cto",
+        "pm",
+        "backend",
+        "frontend",
+        "devops",
+        "qa",
+        "reviewer",
+        "docs",
+        "supervisor"
+    ]
+    .into_iter()
+    .map(|role| {
+        let ready = cfg.chains.get(role).is_some_and(|chain| {
+            chain.iter().any(|name| {
+                healthy.contains(name)
+                    && cfg
+                        .routes
+                        .get(name)
+                        .is_some_and(|r| allowed.contains(&r.provider))
+            })
+        });
+        json!({"role":role,"ready":ready})
+    })
+    .collect::<Vec<_>>()))
+}
 pub fn overview(home: &Path) -> anyhow::Result<Value> {
     let db = database::open(home)?;
     let mut q=db.prepare("SELECT p.id,p.repo_full_name,p.local_checkout,p.visibility,g.app_id,g.installation_id,g.default_branch,g.last_sync_at,g.last_error,json_extract(w.state_json,'$.step') FROM projects p LEFT JOIN github_repositories g ON g.project_id=p.id LEFT JOIN workflow_items w ON w.item_id=p.id||':project' WHERE p.mode='eos' ORDER BY p.repo_full_name,p.id")?;
-    let projects=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,Option<String>>(1)?,"checkout":r.get::<_,String>(2)?,"visibility":r.get::<_,Option<String>>(3)?,"app_id":r.get::<_,Option<u64>>(4)?,"installation_id":r.get::<_,Option<u64>>(5)?,"branch":r.get::<_,Option<String>>(6)?,"synced_at":r.get::<_,Option<String>>(7)?,"error":r.get::<_,Option<String>>(8)?,"scheduler":r.get::<_,Option<String>>(9)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut projects=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,Option<String>>(1)?,"checkout":r.get::<_,String>(2)?,"visibility":r.get::<_,Option<String>>(3)?,"app_id":r.get::<_,Option<u64>>(4)?,"installation_id":r.get::<_,Option<u64>>(5)?,"branch":r.get::<_,Option<String>>(6)?,"synced_at":r.get::<_,Option<String>>(7)?,"error":r.get::<_,Option<String>>(8)?,"scheduler":r.get::<_,Option<String>>(9)?})))?.collect::<Result<Vec<_>,_>>()?;
     for project in &mut projects {
-        let id = project["id"].as_str().unwrap();
+        let id = project["id"].as_str().unwrap().to_owned();
+        project["roles"] = roles(home, &db, Some(&id))?;
         project["preflight"] =
             database::get::<Value>(&db, &format!("github_preflight:{id}"))?.unwrap_or(Value::Null);
     }
     let mut q=db.prepare("SELECT a.id,a.item_id,i.project_id,i.title,a.role,a.state,a.model_route,a.started_at,s.provider,s.model FROM attempts a JOIN work_items i ON i.id=a.item_id LEFT JOIN runs_summary s ON s.attempt_id=a.id WHERE i.kind='eos' AND a.state IN('queued','starting','running','waiting','idle') ORDER BY a.started_at,a.id")?;
     let active=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item":r.get::<_,String>(1)?,"project":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"role":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"route":r.get::<_,String>(6)?,"started_at":r.get::<_,String>(7)?,"provider":r.get::<_,Option<String>>(8)?,"model":r.get::<_,Option<String>>(9)?})))?.collect::<Result<Vec<_>,_>>()?;
-    Ok(json!({"projects":projects,"items":items(&db,None)?,"active":active}))
+    Ok(
+        json!({"projects":projects,"items":items(&db,None)?,"active":active,"roles":roles(home,&db,None)?}),
+    )
 }
 pub fn item(home: &Path, id: &str) -> anyhow::Result<Value> {
     let db = database::open(home)?;
