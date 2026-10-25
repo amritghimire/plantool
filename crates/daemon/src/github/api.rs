@@ -261,42 +261,95 @@ pub fn visibility(repo: &Value) -> anyhow::Result<&str> {
     }
 }
 pub async fn preflight(api: &dyn Api, repo: &str, branch: &str) -> anyhow::Result<Value> {
-    let r = api
+    let branch = percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC)
+        .to_string();
+    let classic = api
         .request(
             "GET",
-            &format!(
-                "{repo}/branches/{}/protection",
-                percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC)
-            ),
+            &format!("{repo}/branches/{branch}/protection"),
             None,
             None,
         )
         .await?;
-    let mut warnings = vec![];
-    if r.status != 200 {
-        warnings.push(format!("Cannot confirm default-branch protection (HTTP {}). Require PR reviews, checks and dismissal of stale reviews.",r.status));
-    } else {
-        if r.body["required_status_checks"]["contexts"]
+    let mut warnings: Vec<String> = vec![];
+    let mut advisories: Vec<String> = vec![];
+    let mut rules = Vec::new();
+    let mut rules_known = false;
+    // Effective rules endpoint includes active applicable inherited rulesets;
+    // disabled/evaluate-only rulesets are not mistaken for enforcement.
+    for page in 1..=20 {
+        let reply = api
+            .request(
+                "GET",
+                &format!("{repo}/rules/branches/{branch}?per_page=100&page={page}"),
+                None,
+                None,
+            )
+            .await?;
+        if reply.status != 200 {
+            advisories.push(format!("Cannot inspect effective rulesets (HTTP {}); classic protection was checked separately",reply.status));
+            break;
+        }
+        let batch = reply
+            .body
             .as_array()
-            .is_none_or(|a| a.is_empty())
-            && r.body["required_status_checks"]["checks"]
-                .as_array()
-                .is_none_or(|a| a.is_empty())
-        {
-            warnings.push("No required checks configured".into())
+            .context("Invalid effective branch rules")?;
+        rules.extend(batch.iter().cloned());
+        if batch.len() < 100 {
+            rules_known = true;
+            break;
         }
-        if r.body["required_pull_request_reviews"]["required_approving_review_count"]
-            .as_u64()
-            .unwrap_or(0)
-            < 1
-        {
-            warnings.push("Require at least one approving review".into())
-        }
-        if r.body["required_pull_request_reviews"]["dismiss_stale_reviews"] != true {
-            warnings.push("Enable dismissal of stale reviews".into())
+        if page == 20 {
+            warnings.push(
+                "Effective rules response exceeded pagination limit; review rulesets manually"
+                    .into(),
+            );
         }
     }
+    let classic_known = classic.status == 200;
+    let c = &classic.body;
+    let mut checks = classic_known
+        && (c["required_status_checks"]["contexts"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+            || c["required_status_checks"]["checks"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()));
+    let mut reviews = classic_known
+        && c["required_pull_request_reviews"]["required_approving_review_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1;
+    let mut stale =
+        classic_known && c["required_pull_request_reviews"]["dismiss_stale_reviews"] == true;
+    for r in &rules {
+        if r["type"] == "required_status_checks" {
+            checks |= r["parameters"]["required_status_checks"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty());
+        }
+        if r["type"] == "pull_request" {
+            reviews |= r["parameters"]["required_approving_review_count"]
+                .as_u64()
+                .unwrap_or(0)
+                >= 1;
+            stale |= r["parameters"]["dismiss_stale_reviews_on_push"] == true;
+        }
+    }
+    if !classic_known && !rules_known {
+        warnings.push(format!("Cannot confirm default-branch protection (HTTP {}). Require PR reviews, checks and dismissal of stale reviews.",classic.status));
+    } else {
+        if !reviews {
+            warnings.push("Require at least one approving review".into());
+        }
+        if !stale {
+            warnings.push("Enable dismissal of stale reviews".into());
+        }
+    }
+    if !checks {
+        advisories.push("No required checks yet. Setup, planning and the first PR can proceed. Run CI once, then add its check and plantool/policy as required checks in a GitHub ruleset.".into());
+    }
     Ok(
-        json!({"warnings":warnings,"policy_check":"Offer plantool/policy as a required check after the PR workflow is implemented; this phase does not publish that check.","settings_url":format!("https://github.com{}/settings/branches",repo.trim_start_matches("/repos"))}),
+        json!({"warnings":warnings,"advisories":advisories,"blocking":false,"required_checks_configured":checks,"rulesets_checked":rules_known,"policy_check":"Add plantool/policy as a required check after it first appears on a PlanTool PR.","settings_url":format!("https://github.com{}/settings/rules",repo.trim_start_matches("/repos"))}),
     )
 }

@@ -9,7 +9,7 @@ export type EngineeringProject = {
   synced_at: string | null;
   error: string | null;
   scheduler: string | null;
-  preflight?: { warnings: string[] } | null;
+  preflight?: { warnings: string[]; advisories?: string[] } | null;
   roles?: { role: string; ready: boolean }[];
 };
 export type EngineeringItem = {

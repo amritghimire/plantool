@@ -35,19 +35,7 @@ async fn transport(
         os::{fd::AsRawFd, unix::fs::PermissionsExt},
     };
     super::api::repo_path(repo)?;
-    let overrides = crate::git::git(
-        root,
-        &[
-            "config",
-            "--get-regexp",
-            r"^(url\.|http\.|credential\.|core\.ssh)",
-        ],
-    )
-    .unwrap_or_default();
-    ensure!(
-        overrides.is_empty(),
-        "Unsafe repository transport override; inspect repository configuration"
-    );
+    validate_transport(root)?;
     let temp = tempfile::tempdir()?;
     let helper = temp.path().join("credential");
     std::fs::write(&helper,format!("#!/bin/sh\n[ \"$1\" = get ] || exit 0\nprotocol= host= path=\nwhile IFS='=' read -r name value; do case \"$name\" in protocol) protocol=$value;; host) host=$value;; path) path=$value;; esac; done\n[ \"$protocol\" = https ] && [ \"$host\" = github.com ] && [ \"$path\" = '{repo}.git' ] || exit 1\nIFS= read -r token <&3 || exit 1\nprintf 'username=x-access-token\\npassword=%s\\n' \"$token\"\n"))?;
@@ -80,6 +68,7 @@ async fn transport(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "/bin/false")
         .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -189,4 +178,30 @@ impl GitOps for AppGit {
             Ok(())
         })
     }
+}
+
+/// Match the actual isolated transport environment; ignore ordinary global/system helpers.
+#[cfg(unix)]
+fn validate_transport(root: &Path) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .current_dir(root)
+        .args([
+            "config",
+            "--get-regexp",
+            r"^(url\.|http\.|credential\.|core\.ssh)",
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .output()?;
+    ensure!(
+        matches!(out.status.code(), Some(0 | 1)),
+        "Cannot validate repository transport configuration"
+    );
+    ensure!(
+        out.stdout.is_empty(),
+        "Unsafe repository transport override; inspect repository configuration"
+    );
+    Ok(())
 }

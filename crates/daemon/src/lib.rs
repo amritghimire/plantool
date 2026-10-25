@@ -227,3 +227,5 @@ pub mod oversight;
 pub mod loop_engine;
 
 pub mod engineering_view;
+
+pub mod recovery;

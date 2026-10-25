@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import json
 import os
+import sys
+import traceback
 from pathlib import Path
 import sqlite3
 import ssl
@@ -33,6 +35,8 @@ class Store:
         with self.db() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS bridge_threads(id TEXT PRIMARY KEY, graph_version INTEGER NOT NULL, state TEXT NOT NULL, interrupt_id TEXT, result TEXT);
+            CREATE TABLE IF NOT EXISTS bridge_epochs(id TEXT PRIMARY KEY, epoch TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS bridge_history(id TEXT, epoch TEXT, snapshot TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS bridge_inbox(id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT);
             """)
     def db(self):
@@ -40,6 +44,10 @@ class Store:
         self.path.chmod(0o600)
         db.execute("PRAGMA journal_mode=WAL")
         return db
+    def config(self, name):
+        with self.db() as db:
+            row = db.execute("SELECT epoch FROM bridge_epochs WHERE id=?", (name,)).fetchone()
+        return {"configurable":{"thread_id":name if not row else name+"~"+row[0]}}
     def thread(self, name):
         with self.db() as db:
             row = db.execute("SELECT graph_version,state,interrupt_id,result FROM bridge_threads WHERE id=?", (name,)).fetchone()
@@ -48,7 +56,7 @@ class Store:
         if not row:
             with self.db() as db:
                 exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone()
-                if exists and db.execute("SELECT 1 FROM checkpoints WHERE thread_id=? LIMIT 1",(name,)).fetchone():
+                if exists and db.execute("SELECT 1 FROM checkpoints WHERE thread_id=? LIMIT 1",(self.config(name)["configurable"]["thread_id"],)).fetchone():
                     raise HTTPException(409,"Checkpoint has no graph_version; migration required")
         return None if not row else {"thread_id":name,"graph_version":row[0],"state":row[1],"interrupt_id":row[2],"result":json.loads(row[3]) if row[3] else None}
     def receipt(self, key, body):
@@ -156,7 +164,7 @@ def create_app(home: Path, token: str, transport=None):
             if payload.get("workflow"):
                 context=await app.state.daemon.post("/internal/v1/workflow_context",json={"item":request.thread_id});context.raise_for_status();facts=context.json()
                 initial["workflow"]={**payload["workflow"],"policy_version":facts["policy_version"]}
-            output=await app.state.graph.ainvoke(initial,{"configurable":{"thread_id":request.thread_id}})
+            output=await app.state.graph.ainvoke(initial,store.config(request.thread_id))
             identifier=store.thread(request.thread_id)["interrupt_id"]
             return await asyncio.to_thread(store.save,request.thread_id,"interrupted",identifier,output.get("result"),request.idempotency_key)
     @app.post("/internal/v1/resume")
@@ -168,16 +176,55 @@ def create_app(home: Path, token: str, transport=None):
             current = store.thread(request.thread_id)
             if not current or current["state"] != "interrupted" or current["interrupt_id"] != request.interrupt_id:
                 raise HTTPException(409,"Stale interrupt or cancelled graph")
-            snapshot = await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
+            snapshot = await app.state.graph.aget_state(store.config(request.thread_id))
             if not snapshot.next and "result" in snapshot.values:
                 return await asyncio.to_thread(store.save,request.thread_id,"completed",None,snapshot.values["result"],request.idempotency_key)
-            result = await app.state.graph.ainvoke(Command(resume=request.value),{"configurable":{"thread_id":request.thread_id}})
-            snapshot=await app.state.graph.aget_state({"configurable":{"thread_id":request.thread_id}})
+            result = await app.state.graph.ainvoke(Command(resume=request.value),store.config(request.thread_id))
+            snapshot=await app.state.graph.aget_state(store.config(request.thread_id))
             waiting=bool(snapshot.next)
             identifier=store.thread(request.thread_id)["interrupt_id"] if waiting else None
             return await asyncio.to_thread(store.save,request.thread_id,"interrupted" if waiting else "completed",identifier,result.get("result"),request.idempotency_key)
+    @app.post("/internal/v1/recover")
+    async def recover(request: Start):
+        versions(request)
+        receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
+        if receipt is not None: return receipt
+        with store.db() as db:
+            epoch = db.execute("SELECT epoch FROM bridge_epochs WHERE id=?", (request.thread_id,)).fetchone()
+        if epoch and epoch[0] == request.idempotency_key:
+            return await start(request)
+        facts = await app.state.daemon.post("/internal/v1/workflow_context", json={"item":request.thread_id})
+        facts.raise_for_status()
+        current = facts.json()["state"]
+        requested = dict(request.input.get("workflow") or {})
+        current.pop("head_sha",None); requested.pop("head_sha",None)
+        if current.get("frozen") or current != requested:
+            raise HTTPException(409, "Recovery scope changed")
+        async with lock(request.thread_id):
+            with store.db() as db:
+                prior = db.execute("SELECT epoch FROM bridge_epochs WHERE id=?", (request.thread_id,)).fetchone()
+                if not prior or prior[0] != request.idempotency_key:
+                    row = db.execute("SELECT * FROM bridge_threads WHERE id=?", (request.thread_id,)).fetchone()
+                    if row:
+                        db.execute("INSERT INTO bridge_history VALUES(?,?,?)", (request.thread_id,prior[0] if prior else "original",json.dumps(row)))
+                    db.execute("INSERT INTO bridge_epochs VALUES(?,?) ON CONFLICT(id) DO UPDATE SET epoch=excluded.epoch", (request.thread_id,request.idempotency_key))
+                    db.execute("DELETE FROM bridge_threads WHERE id=?", (request.thread_id,))
+        return await start(request)
     @app.post("/internal/v1/role")
     async def role(request: RoleCall):
+        try:
+            return await invoke_role(request)
+        except HTTPException:
+            raise
+        except Exception as error:
+            status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+            kind = "upstream_http" if status else "invalid_role_result" if isinstance(error, (ValueError, KeyError, IndexError, TypeError)) else "worker_internal"
+            detail = {"kind":kind,"upstream_status":status,"exception":type(error).__name__}
+            # Do not log str(error), locals, provider response bodies or prompts.
+            detail["frames"] = [{"file":Path(f.filename).name,"line":f.lineno,"function":f.name} for f in traceback.extract_tb(error.__traceback__)]
+            print(json.dumps({"attempt":request.attempt_id,**detail}),file=sys.stderr,flush=True)
+            raise HTTPException(502, detail={k:v for k,v in detail.items() if k != "frames"}) from None
+    async def invoke_role(request: RoleCall):
         key="role:"+request.attempt_id
         async with lock(key):
             receipt=await asyncio.to_thread(store.receipt,key,request.model_dump(mode="json"))

@@ -245,18 +245,17 @@ export function GithubSettings({
                 {r.visibility ?? "visibility unknown"}
               </p>
               <a
-                href={`https://github.com/${r.full_name}/settings/branches`}
+                href={`https://github.com/${r.full_name}/settings/rules`}
                 target="_blank"
                 rel="noreferrer"
               >
-                Review branch protection
+                Review rulesets and branch protection
               </a>
               <p className="small muted">
                 Add plantool/policy after the first real check appears.
-                Preflight currently checks classic branch protection; rulesets
-                may still show a warning.
+                Preflight checks effective rulesets and classic protection. No checks yet is an advisory; setup and the first PR can proceed.
               </p>
-              {r.preflight?.warnings.map((w) => (
+              {[...(r.preflight?.warnings ?? []),...(r.preflight?.advisories ?? [])].map((w) => (
                 <p key={w}>{w}</p>
               ))}
               <button

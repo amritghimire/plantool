@@ -8,8 +8,8 @@ STEPS = {"triage":"pm","scan_devops":"devops","scan_qa":"qa","scan_pm":"pm","rou
 def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     state = dict(state)
     step = state["step"]
-    if step in {"triage","scan_devops","scan_qa","scan_pm","route_finding"} and result.get("outcome")!="done":return {**state,"step":"escalated","frozen":True}
     if state.get("route_retry") and result.get("outcome")!="done": return state
+    if step in {"triage","scan_devops","scan_qa","scan_pm","route_finding"} and result.get("outcome")!="done":return {**state,"step":"escalated","frozen":True}
     findings = result.get("findings", [])
     defects = [f for f in findings if f.get("scope") == "in"]
     if step == "supervisor":
@@ -91,7 +91,7 @@ async def build_step(daemon, store, state):
         facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status();facts=facts.json()
         if step=="discussion":
             from .discussion import advance
-            updated=advance(workflow,result)
+            updated={**facts["state"]} if facts["state"].get("route_retry") else advance(workflow,result)
             if updated["step"]!=facts["state"]["step"] or (updated["step"]=="discussion" and updated["discussion"]!=facts["state"]["discussion"]):raise RuntimeError("Discussion projection mismatch")
             updated.update(generation=facts["state"]["generation"],sequence=facts["state"]["sequence"],policy_version=facts["policy_version"])
             return {"workflow":updated,"result":updated}

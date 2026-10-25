@@ -446,6 +446,31 @@ pub fn record(
     s["generation"] = json!(result.generation);
     s["phase_restart"] = json!(false);
     s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
+    let retry: bool = tx.query_row(
+        "SELECT quota_pending FROM dispatches WHERE attempt_id=?1",
+        [&result.attempt_id],
+        |r| r.get(0),
+    )?;
+    s["route_retry"] = json!(retry && result.outcome != Outcome::Done);
+    if result.outcome != Outcome::Done {
+        tx.execute(
+            "UPDATE workflow_items SET last_error=?2 WHERE item_id=?1",
+            params![result.item, result.summary],
+        )?;
+        s["failed_step"] = json!(step);
+    }
+    if retry && result.outcome != Outcome::Done {
+        save(tx, &result.item, &s)?;
+        crate::workspace::operational(tx,&result.item,"Model fallback",&format!("fallback:{}",result.attempt_id),&format!("{}\nThe failed attempt has ended. A new generation will try another permitted route; no model is switched mid-attempt.",result.summary))?;
+        database::audit(
+            tx,
+            "daemon",
+            "workflow.route_retry",
+            &result.item,
+            &json!({"attempt":result.attempt_id,"step":step}),
+        )?;
+        return Ok(());
+    }
     if crate::loop_engine::read_step(&step) {
         crate::loop_engine::record(tx, result, &mut s)?;
         save(tx, &result.item, &s)?;

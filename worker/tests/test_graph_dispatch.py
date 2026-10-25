@@ -65,3 +65,22 @@ async def test_llm_role_scope_and_cached_result_use_no_real_provider(tmp_path):
             two=await client.post('/internal/v1/role',json=payload);assert one.json()==two.json()
             assert one.json()['item']=='p:1' and one.json()['role']=='cto' and one.json()['attempt_id']=='a1' and one.json()['generation']==1
             assert len(calls)==1 and calls[0]['plantool']['attempt_id']=='a1'
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["http", "invalid_json"])
+async def test_role_errors_preserve_safe_cause_without_leaking_prompt(tmp_path, capsys, failure):
+    async def daemon(request):
+        if request.url.path.endswith('/health'):return httpx.Response(200,json=VERSIONS)
+        if failure=="http":return httpx.Response(429,json={"error":"SECRET-PROVIDER-BODY"})
+        return httpx.Response(200,json={"choices":[{"message":{"content":"SECRET-INVALID-OUTPUT"}}]})
+    token='t'*40;app=create_app(tmp_path,token,httpx.MockTransport(daemon))
+    payload={"request":{"item":"p:1","role":"pm","generation":1,"inputs":{"step":"triage"},"plan_sha":"","policy_version":1,"capability":"read","idempotency_key":"d","thread_id":"p:1","interrupt_id":"i"},"attempt_id":"a1","prompt":"SECRET-PROMPT"}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"5"}) as client:
+            reply=await client.post('/internal/v1/role',json=payload)
+            assert reply.status_code==502
+            assert reply.json()['detail']['kind']==('upstream_http' if failure=='http' else 'invalid_role_result')
+            assert (await client.get('/internal/v1/health')).status_code==200
+    output=capsys.readouterr().err+reply.text
+    assert 'SECRET' not in output and token not in output
+    assert '429' in output if failure=='http' else 'JSONDecodeError' in output

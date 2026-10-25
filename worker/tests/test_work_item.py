@@ -27,3 +27,9 @@ def test_strict_research_and_phase_stops_never_become_owner_approvals():
     state=advance(state);assert state["step"]=="frontend" and state["phase_index"]==1
     state["step"]="docs";state=route(state,done);assert state["step"]=="milestone"
     assert advance(state)["step"]=="pr"
+
+def test_failed_triage_retries_route_before_escalating():
+    state={"step":"triage","route_retry":True}
+    assert route(state,{"outcome":"failed"})['step']=='triage'
+    state['route_retry']=False
+    assert route(state,{"outcome":"failed"})['frozen'] is True

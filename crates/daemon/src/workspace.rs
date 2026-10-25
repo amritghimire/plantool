@@ -353,3 +353,28 @@ mod tests {
         );
     }
 }
+
+/// Operational context only. Never creates a decision, gate or graph event.
+pub fn operational(
+    db: &Connection,
+    item: &str,
+    event: &str,
+    key: &str,
+    detail: &str,
+) -> anyhow::Result<()> {
+    let (project, _) = dispatcher::item(db, item)?;
+    ensure_channels(db, &project)?;
+    let title: String = db.query_row("SELECT title FROM work_items WHERE id=?1", [item], |r| {
+        r.get(0)
+    })?;
+    let url = percent_encoding::utf8_percent_encode(item, percent_encoding::NON_ALPHANUMERIC);
+    let body=format!("{event}: {title} ({item}).\n{detail}\nOpen /engineering/items/{url}. This message is status/context only, never an approval.");
+    append(
+        db,
+        &format!("{project}:channel:general:thread"),
+        "daemon",
+        &body,
+        &format!("ops:{item}:{key}"),
+    )?;
+    Ok(())
+}

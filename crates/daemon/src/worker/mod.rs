@@ -180,7 +180,7 @@ impl WorkerManager {
                 .env("PYTHONPATH", &dir)
                 .env("PYTHONDONTWRITEBYTECODE", "1")
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
+                .stderr(worker_log(home)?);
                 credential = Some(state.runs.tokens.worker_command(cmd)?);
                 Ok(())
             },
@@ -268,10 +268,9 @@ impl WorkerManager {
             }
             .await;
             if let Err(e) = &result {
-                if !e
-                    .downcast_ref::<CallError>()
-                    .is_some_and(|e| matches!(e.status, 400 | 404 | 409 | 422))
-                {
+                if !e.downcast_ref::<CallError>().is_some_and(|e| {
+                    matches!(e.status, 400 | 404 | 409 | 422) || (path == "role" && e.status >= 500)
+                }) {
                     self.unavailable(e)
                 }
             }
@@ -470,4 +469,18 @@ mod tests {
         assert!(verify_checksum(b"tampered", &"0".repeat(64)).is_err());
         assert!(unpack(t.path(), "../escape").is_err());
     }
+}
+
+#[cfg(unix)]
+fn worker_log(home: &Path) -> anyhow::Result<std::process::Stdio> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = home.join("worker-state");
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(dir.join("errors.log"))?;
+    Ok(file.into())
 }

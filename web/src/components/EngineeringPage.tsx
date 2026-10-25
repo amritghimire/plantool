@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { stepLabel } from "../engineering";
 import { usePolling } from "../lib/usePolling";
+import { RecoveryControls } from "./RecoveryControls";
 import { GithubSettings } from "./GithubSettings";
 export function EngineeringPage() {
   const { data, error, refresh, updated } = usePolling(api.engineering);
@@ -190,15 +191,17 @@ export function EngineeringPage() {
                 </Link>
               </article>
             </div>
-            {project.preflight?.warnings.length ? (
+            {project.preflight && (project.preflight.warnings.length || project.preflight.advisories?.length) ? (
               <aside className="next-action">
-                <strong>Project setup needs review</strong>
-                {project.preflight.warnings.map((w) => (
+                <strong>GitHub protection guidance</strong>
+                <p className="small muted">Advisory only: this does not block planning or execution. GitHub still enforces configured rules at merge.</p>
+                {[...project.preflight.warnings,...(project.preflight.advisories ?? [])].map((w) => (
                   <p key={w}>{w}</p>
                 ))}
                 <Link to="/settings/github">Review GitHub preflight</Link>
               </aside>
             ) : null}
+            {project.scheduler === "escalated" && <RecoveryControls item={`${project.id}:project`} onRecovered={refresh} />}
             {project.error && (
               <p role="alert" className="error">
                 GitHub sync: {project.error}
@@ -412,6 +415,7 @@ export function EngineeringItemPage() {
           </Link>
         </div>
       </div>
+      {item.frozen && <RecoveryControls item={item.id} onRecovered={refresh} />}
       <nav className="detail-tabs" aria-label="Item activity">
         {[
           ["attempts", "Role attempts"],
