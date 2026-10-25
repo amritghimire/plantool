@@ -88,7 +88,7 @@ def create_app(home: Path, token: str, transport=None):
             verify=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
             trust_env=False,
         )
-        async with httpx.AsyncClient(transport=daemon_transport, trust_env=False, base_url="http://localhost", headers={"x-plantool-run-token":token,"x-plantool-contract-version":str(VERSIONS["contract_version"])}, timeout=60) as daemon:
+        async with httpx.AsyncClient(transport=daemon_transport, trust_env=False, base_url="http://localhost", headers={"x-plantool-run-token":token,"x-plantool-contract-version":str(VERSIONS["contract_version"])}, timeout=httpx.Timeout(600, connect=5, pool=5)) as daemon:
             # Both processes must agree before a checkpoint or model is touched.
             health = await daemon.get("/internal/v1/health")
             health.raise_for_status()
@@ -120,6 +120,22 @@ def create_app(home: Path, token: str, transport=None):
                 app.state.daemon = daemon
                 yield
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    @app.exception_handler(httpx.HTTPStatusError)
+    async def broker_error(request, error):
+        from starlette.responses import JSONResponse
+        status = error.response.status_code
+        # A broker rejection belongs to this graph, never the worker installation.
+        reason = "Daemon rejected this graph operation; inspect workflow state"
+        # Only expose known diagnostic phrases, never arbitrary response contents.
+        for known in ("Item is frozen", "Stale dispatch generation", "Role capability mismatch",
+                      "Graph step/role mismatch", "Stale policy version", "Another attempt is active",
+                      "Dependencies are incomplete", "Approved immutable plan required"):
+            if known in error.response.text:
+                reason = known
+                break
+        return JSONResponse(status_code=409 if status in (400,403,404,409,422) else 503,
+            content={"detail":{"kind":"daemon_rejected" if status < 500 else "daemon_unavailable",
+                "upstream_status":status,"operation":error.request.url.path,"reason":reason}})
     @app.middleware("http")
     async def authenticate(request: Request, next):
         from starlette.responses import JSONResponse
@@ -243,13 +259,19 @@ def create_app(home: Path, token: str, transport=None):
                         for call in message["tool_calls"]:
                             name=call["function"]["name"]
                             if name not in ("read_repo_file","read_artifact","request_urgent"):raise ValueError("Unknown role capability")
-                            arguments=json.loads(call["function"]["arguments"])
+                            raw=call["function"]["arguments"]
+                            arguments=json.loads(raw) if isinstance(raw,str) else raw
+                            if not isinstance(arguments,dict):raise ValueError("Tool arguments must be an object")
                             arguments["item"]=request.request.item
                             if name=="request_urgent":arguments["idempotency_key"]=f"{key}:urgent"
                             reply=await daemon.post(f"/internal/v1/{name}",json=arguments);reply.raise_for_status()
                             messages.append({"role":"tool","tool_call_id":call["id"],"content":json.dumps(reply.json())})
                         continue
-                    data=json.loads(message["content"]);data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
+                    content=message.get("content")
+                    if not isinstance(content,str):raise ValueError("Role response must contain JSON text")
+                    data=json.loads(content)
+                    if not isinstance(data,dict):raise ValueError("Role result must be an object")
+                    data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
                     return {"result":RoleResult.model_validate(data).model_dump(mode="json")}
                 raise ValueError("Role tool/call budget exhausted")
             graph=StateGraph(State);graph.add_node("role",call_role);graph.add_edge(START,"role");graph.add_edge("role",END)

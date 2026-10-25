@@ -57,7 +57,9 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
         &state.config.home,
         state.runs.worker.availability().available,
     )?;
-    deliver_worker(state).await?;
+    if let Err(error) = deliver_worker(state).await {
+        tracing::warn!("Worker outbox delivery deferred: {error}");
+    }
     if state.runs.execution.status().stopped {
         return Ok(());
     }
@@ -304,11 +306,16 @@ async fn run(
             attempt_id: id.into(),
             prompt,
         };
+        let started = std::time::Instant::now();
         let result = state
             .runs
             .worker
             .call("role", Some(&serde_json::to_value(call)?))
             .await;
+        database::open(home)?.execute(
+            "UPDATE runs_summary SET duration_ms=?2 WHERE attempt_id=?1",
+            params![id, started.elapsed().as_millis() as u64],
+        )?;
         let result = match result {
             Ok(value) => value,
             Err(error) => {

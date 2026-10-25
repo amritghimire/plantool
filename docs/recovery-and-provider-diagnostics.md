@@ -53,7 +53,7 @@ tests the installed Ollama model. This is not an Engineering OS acceptance test.
 
 3. Restart the daemon. The Git transport check now ignores system/global helpers that the
    actual transport ignores, so the `GIT_CONFIG_NOSYSTEM=1` launch workaround is unnecessary.
-   An already-installed worker for the same version restores automatically when execution
+   An existing worker installation restores automatically across upgrades when execution
    is enabled. First installation of a new version still requires Repair with passkey.
 4. Verify routes and the project's allowed providers, budgets and current worker health.
    Do not save chain changes while other work is running: Stop All cancels globally.
@@ -126,3 +126,34 @@ Use a disposable home/project, real passkey, and the playground for these checks
 Polling regression tests use an injected fixed clock. Previously they could pass before
 Sunday's default scan time and start a real scheduled scan against a mock checkout after
 that time; production polling continues to use the current time.
+
+
+## Failure isolation review
+
+This follow-up audits lifecycle, graph start/resume/recover, dispatch replay, role
+execution, outbox delivery, browser recovery and scheduler navigation.
+
+| Failure | Scope and way forward |
+| --- | --- |
+| Provider HTTP error, invalid typed output, timeout | Failed read-only attempt; existing bounded fallback selects another eligible route. Exhausted routes remain eligible for owner recovery after cooldown/configuration changes. |
+| Broker rejects graph request | Structured graph conflict with operation and a known safe reason; health is probed independently. A frozen graph remains frozen until bound owner recovery. |
+| One outbox recipient fails | Preserve original idempotency key and backoff; continue other recipients and runnable attempts. |
+| Temporary request failure | Independent health probe decides availability; Refresh can restore readiness without reinstalling a healthy process. |
+| Worker process exits, health fails or versions mismatch | Worker unavailable; Repair remains the explicit restart/install path. |
+| Upgrade with an installed worker | Unpack this binary's embedded worker and sync its own frozen lock automatically; never reuse another version's environment. Stop All prevents startup. |
+| Scheduler row selected | Same scoped attempt/history/gate view as other work, including recovery. |
+| Stop All | Explicit resume with fresh passkey; recovery reports this separately from worker readiness. |
+| Coding effects, uncertain checkpoint acknowledgement, pending external writes or open gates | Automatic retry stays blocked. Reconcile evidence and existing effects; no flag clearing, approval bypass or checkpoint deletion. |
+
+The worker's daemon client allows ten minutes per model response (previously one
+minute), with a five-second connect/pool bound; the enclosing read-role request
+allows eleven minutes. This is not a promise that every local model fits that
+budget. Read-only failures now record actual elapsed duration, including errors.
+
+Manual verification on macOS: upgrade from an installed earlier alpha; restart
+without Repair; confirm Stop All still prevents launch. Exercise a model timeout,
+an upstream 429, malformed output, a frozen dispatch conflict, and one broken
+outbox thread alongside healthy work. Confirm worker health remains ready when
+healthy, no duplicate attempt is admitted on checkpoint replay, and owner recovery
+still requires a fresh action-bound assertion. Open the project scheduler from the
+running list and inspect its history. These native checks cannot run on Linux.

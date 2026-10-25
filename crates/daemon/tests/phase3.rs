@@ -2223,3 +2223,48 @@ async fn phase5_old_sprint_snapshot_cannot_approve_a_newly_urgent_item() {
         2
     );
 }
+
+#[test]
+fn accepted_dispatch_replays_after_workflow_freezes_or_changes_capability() {
+    let f = Fixture::new();
+    let db = database::open(&f.home).unwrap();
+    let mut state = f.state();
+    state["step"] = json!("scan_devops");
+    db.execute(
+        "UPDATE workflow_items SET state_json=?2 WHERE item_id=?1",
+        params![f.item, state.to_string()],
+    )
+    .unwrap();
+    let request = Dispatch {
+        item: f.item.clone(),
+        role: "devops".into(),
+        generation: 1,
+        inputs: json!({"step":"scan_devops"}),
+        plan_sha: "".into(),
+        policy_version: 1,
+        capability: "read".into(),
+        idempotency_key: "replay-scan".into(),
+        thread_id: f.item.clone(),
+        interrupt_id: "i".into(),
+    };
+    let first = dispatcher::admit(&f.home, &request, 0).unwrap();
+    state["step"] = json!("escalated");
+    state["frozen"] = json!(true);
+    db.execute(
+        "UPDATE workflow_items SET state_json=?2 WHERE item_id=?1",
+        params![f.item, state.to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        dispatcher::admit(&f.home, &request, 0).unwrap().attempt_id,
+        first.attempt_id
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM attempts", [], |r| r.get::<_, u64>(0))
+            .unwrap(),
+        1
+    );
+    let mut fresh = request;
+    fresh.idempotency_key = "new".into();
+    assert!(dispatcher::admit(&f.home, &fresh, 0).is_err());
+}

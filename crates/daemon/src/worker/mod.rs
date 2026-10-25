@@ -224,6 +224,26 @@ impl WorkerManager {
         };
         Ok(())
     }
+    /// Refresh is read-only: it neither installs nor resumes frozen workflows.
+    pub async fn refresh_health(&self) {
+        #[cfg(unix)]
+        let running = self.running.lock().await.is_some();
+        #[cfg(unix)]
+        if running {
+            if let Ok(value) = self.call("health", None).await {
+                if serde_json::from_value::<plantool_contract::Health>(value)
+                    .is_ok_and(|h| h == plantool_contract::Health::default())
+                {
+                    *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Availability {
+                        available: true,
+                        message: "Engineering OS available".into(),
+                    };
+                } else {
+                    self.unavailable("Worker contract/graph version mismatch");
+                }
+            }
+        }
+    }
     pub async fn call(
         &self,
         path: &str,
@@ -250,7 +270,7 @@ impl WorkerManager {
                     client.get(url)
                 };
                 let request = if path == "role" {
-                    request.timeout(Duration::from_secs(180))
+                    request.timeout(Duration::from_secs(660))
                 } else {
                     request
                 };
@@ -268,10 +288,27 @@ impl WorkerManager {
             }
             .await;
             if let Err(e) = &result {
-                if !e.downcast_ref::<CallError>().is_some_and(|e| {
-                    matches!(e.status, 400 | 404 | 409 | 422) || (path == "role" && e.status >= 500)
-                }) {
-                    self.unavailable(e)
+                // HTTP failures and request timeouts do not establish process health.
+                // Probe independently so one broken graph cannot disable all projects.
+                let client = self.running.lock().await.as_ref().map(|r| r.client.clone());
+                let healthy = if let Some(client) = client {
+                    match client
+                        .get("http://localhost/internal/v1/health")
+                        .timeout(Duration::from_secs(3))
+                        .send()
+                        .await
+                    {
+                        Ok(response) if response.status().is_success() => response
+                            .json::<plantool_contract::Health>()
+                            .await
+                            .is_ok_and(|h| h == plantool_contract::Health::default()),
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if !healthy {
+                    self.unavailable(e);
                 }
             }
             result
@@ -366,6 +403,15 @@ fn worker_client(home: &Path, token: &str) -> anyhow::Result<reqwest::Client> {
         .default_headers(headers)
         .timeout(Duration::from_secs(30))
         .build()?)
+}
+/// An existing installation authorizes restoring its locked worker after upgrades.
+/// Do not reuse another version's environment: launch unpacks and syncs this lock.
+pub fn has_installed_worker(home: &Path) -> bool {
+    std::fs::read_dir(home.join("worker")).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|e| e.path().join(".venv/bin/python").is_file())
+    })
 }
 pub fn unpack(home: &Path, version: &str) -> anyhow::Result<PathBuf> {
     anyhow::ensure!(

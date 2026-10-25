@@ -4,10 +4,17 @@ use anyhow::Context;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::Path;
-fn items(db: &Connection, project: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    let mut q=db.prepare("SELECT i.id,i.project_id,i.title,i.github_issue_number,i.state,i.priority,w.pr_number,w.last_error,json_extract(w.state_json,'$.frozen'),json_extract(w.state_json,'$.step'),(SELECT count(*) FROM gates g WHERE g.item_id=i.id AND g.state IN('open','pending')) FROM work_items i JOIN workflow_items w ON w.item_id=i.id WHERE i.kind='eos' AND i.deleted_at IS NULL AND coalesce(json_extract(w.state_json,'$.project'),0)=0 AND (?1 IS NULL OR i.project_id=?1) ORDER BY i.created_at DESC,i.id")?;
-    let rows=q.query_map([project],|r|Ok(json!({"id":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"issue":r.get::<_,Option<u64>>(3)?,"state":r.get::<_,String>(4)?,"priority":r.get::<_,Option<String>>(5)?,"pr":r.get::<_,Option<u64>>(6)?,"error":r.get::<_,Option<String>>(7)?,"frozen":r.get::<_,Option<bool>>(8)?.unwrap_or(false),"step":r.get::<_,Option<String>>(9)?.unwrap_or_default(),"waiting_gates":r.get::<_,u64>(10)?})))?.collect::<Result<Vec<_>,_>>()?;
+fn item_rows(
+    db: &Connection,
+    project: Option<&str>,
+    schedulers: bool,
+) -> anyhow::Result<Vec<Value>> {
+    let mut q=db.prepare("SELECT i.id,i.project_id,i.title,i.github_issue_number,i.state,i.priority,w.pr_number,w.last_error,json_extract(w.state_json,'$.frozen'),json_extract(w.state_json,'$.step'),(SELECT count(*) FROM gates g WHERE g.item_id=i.id AND g.state IN('open','pending')) FROM work_items i JOIN workflow_items w ON w.item_id=i.id WHERE i.kind='eos' AND i.deleted_at IS NULL AND (coalesce(json_extract(w.state_json,'$.project'),0)=0 OR ?2) AND (?1 IS NULL OR i.project_id=?1) ORDER BY i.created_at DESC,i.id")?;
+    let rows=q.query_map(rusqlite::params![project,schedulers],|r|Ok(json!({"id":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"issue":r.get::<_,Option<u64>>(3)?,"state":r.get::<_,String>(4)?,"priority":r.get::<_,Option<String>>(5)?,"pr":r.get::<_,Option<u64>>(6)?,"error":r.get::<_,Option<String>>(7)?,"frozen":r.get::<_,Option<bool>>(8)?.unwrap_or(false),"step":r.get::<_,Option<String>>(9)?.unwrap_or_default(),"waiting_gates":r.get::<_,u64>(10)?})))?.collect::<Result<Vec<_>,_>>()?;
     Ok(rows)
+}
+fn items(db: &Connection, project: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    item_rows(db, project, false)
 }
 fn roles(home: &Path, db: &Connection, project: Option<&str>) -> anyhow::Result<Value> {
     let cfg = crate::models::router::config(home)?;
@@ -65,10 +72,10 @@ pub fn overview(home: &Path) -> anyhow::Result<Value> {
 pub fn item(home: &Path, id: &str) -> anyhow::Result<Value> {
     let db = database::open(home)?;
     let (project,repo,base,head):(String,Option<String>,String,String)=db.query_row("SELECT i.project_id,p.repo_full_name,w.base_sha,w.head_sha FROM work_items i JOIN projects p ON p.id=i.project_id JOIN workflow_items w ON w.item_id=i.id WHERE i.id=?1 AND i.kind='eos' AND i.deleted_at IS NULL",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-    let item = items(&db, Some(&project))?
+    let item = item_rows(&db, Some(&project), true)?
         .into_iter()
         .find(|v| v["id"] == id)
-        .context("Work item is a project scheduler, not an item")?;
+        .context("Work item not found")?;
     let mut q=db.prepare("SELECT a.id,a.role,a.generation,a.state,a.model_route,a.started_at,a.ended_at,json_extract(a.outcome_json,'$.summary'),s.provider,s.model,s.tokens_in,s.tokens_out,s.duration_ms FROM attempts a LEFT JOIN runs_summary s ON s.attempt_id=a.id WHERE a.item_id=?1 ORDER BY a.generation DESC LIMIT 200")?;
     let attempts=q.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"role":r.get::<_,String>(1)?,"generation":r.get::<_,u64>(2)?,"state":r.get::<_,String>(3)?,"route":r.get::<_,String>(4)?,"started_at":r.get::<_,String>(5)?,"ended_at":r.get::<_,Option<String>>(6)?,"summary":r.get::<_,Option<String>>(7)?,"provider":r.get::<_,Option<String>>(8)?,"model":r.get::<_,Option<String>>(9)?,"tokens_in":r.get::<_,Option<u64>>(10)?,"tokens_out":r.get::<_,Option<u64>>(11)?,"duration_ms":r.get::<_,Option<u64>>(12)?})))?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,kind,state,target_digest,target_sha,github_comment_id,created_at FROM gates WHERE item_id=?1 ORDER BY created_at DESC LIMIT 100")?;

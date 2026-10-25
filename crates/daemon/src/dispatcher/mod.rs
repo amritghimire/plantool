@@ -28,24 +28,24 @@ pub fn admit(
         .contains(&role),
         "Unknown role"
     );
-    let managed = crate::workflow::state(&database::open(home)?, &request.item)?.is_some();
-    let discussion =
-        crate::workflow::state(&database::open(home)?, &request.item)?.is_some_and(|s| {
+    let body = serde_json::to_value(request)?;
+    let value = database::inbox_once(home, "worker.dispatch", &request.idempotency_key, |tx| {
+        // Replay accepted dispatches before validating mutable workflow state.
+        let managed = crate::workflow::state(&*tx, &request.item)?.is_some();
+        let discussion = crate::workflow::state(&*tx, &request.item)?.is_some_and(|s| {
             s["step"] == "discussion"
                 || crate::loop_engine::read_step(s["step"].as_str().unwrap_or(""))
         });
-    let expected = if discussion {
-        "read"
-    } else if managed {
-        crate::workflow::capability(role)
-    } else if ["backend", "frontend", "devops", "docs"].contains(&role) {
-        "write"
-    } else {
-        "read"
-    };
-    anyhow::ensure!(request.capability == expected, "Role capability mismatch");
-    let body = serde_json::to_value(request)?;
-    let value = database::inbox_once(home, "worker.dispatch", &request.idempotency_key, |tx| {
+        let expected = if discussion {
+            "read"
+        } else if managed {
+            crate::workflow::capability(role)
+        } else if ["backend", "frontend", "devops", "docs"].contains(&role) {
+            "write"
+        } else {
+            "read"
+        };
+        anyhow::ensure!(request.capability == expected, "Role capability mismatch");
         let (project, root) = item(tx, &request.item)?;
         let policy: u64 = tx.query_row(
             "SELECT coalesce(max(version),0) FROM project_settings WHERE project_id=?1",
@@ -326,15 +326,25 @@ where
         rows
     };
     let mut count = 0;
+    let mut failure = None;
     for (id, kind, body) in rows {
         if !kinds.contains(&kind.as_str()) {
             continue;
         }
         database::open(home)?
             .execute("UPDATE outbox SET attempts=attempts+1,next_attempt_at=?2+min(3600,(1 << min(attempts,10))) WHERE id=?1", params![id,database::unix_now()])?;
-        let result = deliver(kind, serde_json::from_str(&body)?).await?;
+        let result = match deliver(kind, serde_json::from_str(&body)?).await {
+            Ok(value) => value,
+            Err(error) => {
+                failure = Some(error);
+                continue;
+            }
+        };
         database::finish_intent(home, &id, &result)?;
         count += 1;
+    }
+    if let Some(error) = failure {
+        return Err(error);
     }
     Ok(count)
 }

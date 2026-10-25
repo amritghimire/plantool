@@ -21,9 +21,7 @@ async fn status(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     human(&state, &headers)?;
-    if state.runs.worker.availability().available {
-        let _ = state.runs.worker.call("health", None).await;
-    }
+    state.runs.worker.refresh_health().await;
     let available = state.runs.worker.availability();
     Ok(Json(
         json!({"worker":available,"items":crate::workflow::overview(&state.config.home)?,"versions":plantool_contract::Health::default(),"sandbox_supported":crate::sandbox::supported()}),
@@ -179,10 +177,19 @@ async fn retry(
 ) -> Result<Json<Value>, ApiError> {
     human(&state, &headers)?;
     approval.recheck(&state)?;
-    if state.runs.execution.status().stopped || !state.runs.worker.availability().available {
+    if state.runs.execution.status().stopped {
         return Err(ApiError(
             StatusCode::CONFLICT,
-            "Enable execution and repair the worker before recovery".into(),
+            "Execution is stopped. Resume execution with passkey before retrying this step.".into(),
+        ));
+    }
+    if !state.runs.worker.availability().available {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            format!(
+                "Worker is not ready: {}. Open Settings → Worker to check health before retrying.",
+                state.runs.worker.availability().message
+            ),
         ));
     }
     crate::recovery::retry(&state.config.home, &id, &body.attempt_id)
