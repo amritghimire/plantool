@@ -1665,7 +1665,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plantool"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "plantool-contract"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "schemars",
  "serde",
@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "plantool-core"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "chrono",
  "serde",
@@ -1712,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "plantool-daemon"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "axum",
