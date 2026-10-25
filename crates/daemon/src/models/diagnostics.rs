@@ -13,6 +13,8 @@ fn failure(name: &str, status: Option<u16>, error: &str) -> Value {
         Some(429)=>("Provider rate limit or quota reached","Wait for the provider reset or use another permitted route. Retesting consumes quota."),
         Some(400|422)=>("Provider rejected the request format","This route may not support tools or structured output. Inspect the named stage and use a compatible model."),
         Some(500..=599)=>("Upstream provider failed","Retry later or use another route; this does not mean the worker needs Repair."),
+        _ if error.to_lowercase().contains("quota") || error.to_lowercase().contains("usage limit") => ("Provider quota or usage limit reached", "Wait for account limits to reset or use another configured route."),
+        _ if error.to_lowercase().contains("login") || error.to_lowercase().contains("unauthorized") => ("Provider login is unavailable", "Sign in on the daemon host using the provider's normal login flow, then retest."),
         _ if error.contains("Keychain")=>("Provider credential is missing or inaccessible","Check the matching plantool/<provider> generic-password service in the daemon user's Keychain."),
         _ if error.contains("timed out") || error.contains("timeout")=>("Provider request timed out","Check model loading and server reachability; retry after the model is ready."),
         _ =>("Connection, catalog or response check failed","Follow the provider guide below. Check the exact model, local service and login, then retest."),
@@ -242,29 +244,30 @@ async fn codex_check(state: &AppState, selected: &router::Selected) -> Vec<Value
         let provider=crate::providers::run_provider(plantool_core::Provider::Codex,opts,rx,sink);tokio::pin!(provider);
         let mut final_text=String::new();
         loop {tokio::select! {
-            _=&mut provider=>anyhow::bail!("Codex ended without validated completion"),
+            result=&mut provider=>{result?;anyhow::bail!("Codex ended without validated completion")},
             event=events.recv()=>match event {
                 Some(ProviderEvent::Message{role,content,..}) if role=="assistant"=>final_text=content,
-                Some(ProviderEvent::TurnCompleted{status,error,..})=>{let value:Value=serde_json::from_str(&final_text)?;anyhow::ensure!(status=="completed"&&error.is_none()&&value==json!({"ok":true,"value":expected}),"Codex response check failed");let _=input.try_send(RunInput::Stop);break;},
+                Some(ProviderEvent::TurnCompleted{status,error,..})=>{if let Some(error)=error {anyhow::bail!("{error}");}let value:Value=serde_json::from_str(&final_text)?;anyhow::ensure!(status=="completed"&&value==json!({"ok":true,"value":expected}),"Codex response check failed");let _=input.try_send(RunInput::Stop);break;},
                 Some(_)=>{},None=>anyhow::bail!("Codex event stream ended"),
             }
         }}
         Ok::<_,anyhow::Error>(())
     }.await;
-    vec![stage(
-        "Codex CLI + read tool + JSON",
-        result.is_ok(),
-        if result.is_ok() {
-            "Signed-in Codex app-server execution passed"
-        } else {
-            "Signed-in Codex execution did not pass"
-        },
-        if result.is_ok() {
-            ""
-        } else {
-            "Check codex login status and CLI installation on the daemon host. This route never uses an OpenAI API key."
-        },
-    )]
+    match result {
+        Ok(()) => vec![stage(
+            "Codex CLI + read tool + JSON",
+            true,
+            "Signed-in Codex app-server execution passed",
+            "",
+        )],
+        Err(error) => {
+            let mut value = failure("Codex CLI + read tool + JSON", None, &format!("{error:#}"));
+            if value["message"] == "Connection, catalog or response check failed" {
+                value["next_step"]=json!("Check codex login status and CLI installation on the daemon host. This route never uses an OpenAI API key.");
+            }
+            vec![value]
+        }
+    }
 }
 
 #[cfg(test)]

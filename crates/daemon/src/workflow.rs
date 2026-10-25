@@ -982,6 +982,8 @@ pub fn recover(home: &Path, attempt: &str, error: &str) -> anyhow::Result<()> {
             params![item, error],
         )?;
     }
+    crate::workspace::operational(&tx,&item,"Recovery needed",&format!("recovery-needed:{attempt}"),
+        &format!("Reason: {error}\nOwner: inspect the attempt and reconcile uncertain effects before retrying. No approval or freeze state is changed by this notice."))?;
     database::audit(
         &tx,
         "daemon",

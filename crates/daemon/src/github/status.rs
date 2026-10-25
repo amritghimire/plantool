@@ -26,6 +26,9 @@ pub async fn deliver(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
         rows
     };
     for (id, item, raw) in rows {
+        if crate::execution::Execution::load(home)?.status().stopped {
+            break;
+        }
         let payload: Value = serde_json::from_str(&raw)?;
         let issue = payload["issue"]
             .as_u64()
