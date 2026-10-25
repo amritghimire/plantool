@@ -27,7 +27,7 @@ export function EngineeringPage() {
   const active = data?.active.filter((a) => a.project === project?.id) ?? [];
   const worker = status.data?.worker;
   const attention = items.filter(
-    (i) => i.frozen || i.error || i.waiting_gates > 0,
+    (i) => i.frozen || i.error || i.waiting_gates > 0 || i.step === "owner_question",
   );
   return (
     <main className="engineering-page">
@@ -391,7 +391,7 @@ export function EngineeringItemPage() {
       <div className="next-action">
         <strong>Next action</strong>
         <p>
-          {item.frozen
+          {item.step === "closed" ? "This issue is closed. No further work will run. Check the item thread for any changes that need your attention." : item.step === "owner_question" ? "Answer the specific clarification question in this item’s discussion thread. Your reply resumes read-only review and does not approve implementation." : item.frozen
             ? "Review the failure and recovery state before restarting work. Side effects remain frozen."
             : item.waiting_gates
               ? "Review the current gate and its exact plan hash or commit on GitHub."
@@ -412,7 +412,7 @@ export function EngineeringItemPage() {
             className="btn"
             to={`/workspace?project=${encodeURIComponent(item.project)}&item=${encodeURIComponent(item.id)}`}
           >
-            Open discussion
+            {item.step === "owner_question" ? "Answer in item thread" : "Open discussion"}
           </Link>
         </div>
       </div>

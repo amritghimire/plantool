@@ -220,13 +220,18 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
             Some(plantool_contract::RoleDetails::Triage{..}|plantool_contract::RoleDetails::Strategy{..}|plantool_contract::RoleDetails::Discussion{..})) {
             let facts=crate::workflow::state(tx,&result.item)?.unwrap_or(Value::Null);
             let decision=match &result.details {
-                Some(plantool_contract::RoleDetails::Triage{disposition,reason,duplicate_of})=>format!("Triage: {disposition}. {reason}. Duplicate of: {duplicate_of:?}"),
-                Some(plantool_contract::RoleDetails::Strategy{action,owner,task_key,reason})=>format!("Strategy: {action}. {reason}. Owner: {owner:?}. Task: {task_key:?}"),
+                Some(plantool_contract::RoleDetails::Triage{disposition,reason,duplicate_of})=>format!("Triage: {disposition}. {reason}{}", duplicate_of.map(|n|format!(" Duplicate of #{n}.")).unwrap_or_default()),
+                Some(plantool_contract::RoleDetails::Strategy{action,owner,task_key,reason})=>format!("Decision: {action}. {reason}{}{}", owner.as_ref().map(|o|format!(" Owner: {o}.")).unwrap_or_default(),task_key.as_ref().map(|t|format!(" Task: {t}.")).unwrap_or_default()),
                 Some(plantool_contract::RoleDetails::Discussion{decision:Some(decision),..})=>format!("Discussion recommendation: {decision}"),
                 _=>String::new(),
             };
-            crate::workspace::operational(tx,&result.item,"Issue decision / status",&format!("result:{}",result.attempt_id),
-                &format!("Role: {}. Outcome: {:?}. Reason: {}\n{}\nCurrent step: {}. Frozen: {}. Next action: {}.\nA role recommendation is not owner approval.",result.role,result.outcome,result.summary,decision,facts["step"],facts["frozen"],if facts["frozen"]==true {"Owner: inspect failure and eligible recovery"}else{"Follow the current graph step; owner acts only on an open approval gate"}))?;
+            let final_decision = facts["frozen"] == true || match &result.details {
+                Some(plantool_contract::RoleDetails::Triage{disposition,..}) => disposition != "fits",
+                Some(plantool_contract::RoleDetails::Strategy{action,..}) => action != "retry",
+                _ => false,
+            };
+            crate::workspace::operational(tx,&result.item,if final_decision {"Final issue decision"} else {"Issue decision / status"},&format!("result:{}",result.attempt_id),
+                &if final_decision { format!("{}\nNext action: {}.", if decision.is_empty() { if result.summary.starts_with("Dispatch stopped:") { crate::workspace::plain_failure(&result.summary) } else { &result.summary } } else { &decision }, if facts["frozen"]==true {"Open the item, check what failed, and use Retry if it is available"} else if facts["step"] == "owner_question" {"Reply to the question in the item thread"} else {"Review the proposed plan on the issue when it is ready"}) } else { format!("{}\nThe team is continuing this work.", if result.summary.starts_with("Dispatch stopped:") { crate::workspace::plain_failure(&result.summary) } else { &result.summary }) })?;
         }
         let (thread,interrupt):(String,String)=tx.query_row("SELECT thread_id,interrupt_id FROM dispatches WHERE attempt_id=?1",[&result.attempt_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         let resume=plantool_contract::Resume{thread_id:thread,interrupt_id:interrupt,value:body.clone(),idempotency_key:format!("result:{}:{}",result.attempt_id,result.generation),contract_version:plantool_contract::CONTRACT_VERSION,graph_version:plantool_contract::GRAPH_VERSION};

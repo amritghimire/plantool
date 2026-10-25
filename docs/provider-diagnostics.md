@@ -102,3 +102,44 @@ still needs its own recovery after saving/verifying corrected configuration.
 Owner recovery also reevaluates current route availability without a live model call.
 It shows these exclusions and disables a retry while no route is eligible, even for
 old generic failure cards. The panel polls again as cooldowns expire or settings change.
+
+### Issue notification policy
+
+GitHub issues receive final triage/scope decisions and failures that actually freeze work and require owner action. Routine successful intake, intermediate research, automatic retries, model fallback, recovery queued/recovered, and repeated frozen reminders remain in PlanTool. Identical public decisions are deduplicated by content. Old queued routine notices are suppressed after upgrading; existing GitHub comments remain historical. Plan and PR approval publications retain their existing authoritative flow.
+
+### Answering a blocker
+
+For missing owner facts or scope choices, Supervisor can return Strategy action
+`clarify` with one exact question in `reason`. It should first inspect verifiable
+repository facts, such as a prerequisite PR's merge state. The item enters
+`owner_question` and asks in its own Workspace thread. Use **Answer question**
+there; a general context message does not resume the workflow. A matching answer
+queues a new checkpoint epoch for read-only Supervisor review, preserving prior
+history and approvals. Stale question identities are rejected and repeated
+submissions are idempotent. Plan changes still need a new approved revision.
+Uncertain writes, active attempts and open gates require their existing recovery
+or approval path. This flow applies to new clarification requests; previously
+frozen items retain their recovery requirements.
+
+### Autonomous planning and issue closure
+
+Minimal planning resolves ordinary ambiguity using current files and synchronized
+issue/PR evidence. Intake refreshes the issue description and reads up to eight
+referenced PRs so merged prerequisites do not depend on stale discussion text.
+Missing evidence remains unknown. PM proposes the smallest coherent scope change
+in a new immutable plan; the existing GitHub gate publishes it for confirmation.
+A question is reserved for materially different owner goals that evidence cannot
+resolve. This guidance does not guarantee that every model follows it correctly.
+
+An explicit closed issue from GitHub closes its local work item, invalidates queued
+attempts and future results, supersedes gates, and cancels its worker graph. History
+and worktree changes are retained. Active runs or uncertain external actions require
+inspection before reusing changes. Closure through an associated merged PR retains
+the normal merged/done outcome. Reopening does not automatically resurrect an old
+approved plan or cancelled run.
+
+All roles share a plain-language writing rule for their messages, summaries and
+questions: explain what happened, what happens next and who needs to act, usually
+in one to three sentences. Routine notices omit internal IDs and raw errors;
+attempt history and diagnostics retain the technical details. Required approval
+commands and version identifiers remain exact.

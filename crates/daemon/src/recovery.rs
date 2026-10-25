@@ -104,7 +104,7 @@ pub fn retry(home: &Path, item: &str, expected: &str) -> anyhow::Result<Value> {
         item,
         &json!({"attempt":expected,"step":facts["step"],"previous_state":facts["state"]}),
     )?;
-    crate::workspace::operational(&tx,item,"Recovery queued",&format!("retry:{}:{}",expected,state["sequence"]),"Owner authorized a retry with a fresh passkey. The failed read-only step will start in a new checkpoint epoch; old history remains available. Watch Role attempts for progress. GitHub approval gates remain unchanged.")?;
+    crate::workspace::operational(&tx,item,"Recovery queued",&format!("retry:{}:{}",expected,state["sequence"]),"Retry queued. We will start this step again and keep its history. Any changes still need the usual approval.")?;
     tx.commit()?;
     Ok(json!({"queued":true,"step":facts["step"]}))
 }
@@ -121,7 +121,7 @@ pub fn announce_existing(home: &Path) -> anyhow::Result<()> {
         rows
     };
     for id in ids {
-        crate::workspace::operational(&db,&id,"Work remains frozen",&format!("frozen:{}",workflow::state(&db,&id)?.unwrap()["sequence"]),"Inspect the failed attempt in Engineering OS. Retry an eligible read-only step with Owner recovery; reconcile uncertain coding or external effects manually. Worker availability and execution resume do not unfreeze work.")?;
+        crate::workspace::operational(&db,&id,"Work remains frozen",&format!("frozen:{}",workflow::state(&db,&id)?.unwrap()["sequence"]),"This item is still paused. Open it to check the failed attempt and the available recovery action. Restarting the worker alone does not resume it.")?;
     }
     let gates = {
         let mut q=db.prepare("SELECT g.id,g.item_id,g.kind,g.state,g.target_digest,coalesce(g.target_sha,'') FROM gates g JOIN work_items i ON i.id=g.item_id WHERE i.kind='eos' AND i.deleted_at IS NULL AND g.state IN('pending','open','approved','rejected','changes_requested','superseded') AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.dedupe_key='ops:'||g.item_id||':gate:'||g.id||':'||g.state)")?;
@@ -431,7 +431,7 @@ pub fn announce_worker(home: &Path, available: bool) -> anyhow::Result<()> {
             },
             &format!("worker:{sequence}"),
             if available {
-                "Worker health is ready. Eligible queued work may run; frozen items still need Owner recovery."
+                "The worker is ready. Queued work can continue. Paused items still need the recovery action shown on each item."
             } else {
                 "Open Settings → Worker to inspect status and repair if needed. Error diagnostics are in worker-state/errors.log. Personal remains available. This does not change any approval."
             },
@@ -451,6 +451,9 @@ pub fn freeze_uncertain_start(home: &Path, item: &str) -> anyhow::Result<()> {
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if let Some(mut s) = workflow::state(&tx, item)? {
+        if s["closed_on_github"] == true {
+            return Ok(());
+        }
         if s["step"] != "escalated" {
             s["failed_step"] = s["step"].clone();
         }

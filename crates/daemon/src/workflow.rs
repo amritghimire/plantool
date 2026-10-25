@@ -59,6 +59,7 @@ pub fn check(db: &rusqlite::Connection, request: &Dispatch) -> anyhow::Result<bo
         s["frozen"] != true,
         "Item is frozen; owner intervention required"
     );
+    ensure!(s["closed_on_github"] != true, "Issue is closed on GitHub");
     let step = s["step"].as_str().context("Missing graph step")?;
     if step == "discussion" {
         ensure!(
@@ -426,7 +427,7 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
             );
         }
         "supervisor" => ensure!(
-            matches!(&result.details,Some(RoleDetails::Strategy{action,..}) if ["retry","replan","escalate"].contains(&action.as_str())),
+            matches!(&result.details,Some(RoleDetails::Strategy{action,..}) if ["retry","replan","escalate","clarify"].contains(&action.as_str())),
             "Supervisor strategy required"
         ),
         _ => {}
@@ -478,7 +479,16 @@ pub fn record(
         && (!coding(&result.role) || crate::loop_engine::read_step(&step) || step == "discussion")
     {
         save(tx, &result.item, &s)?;
-        crate::workspace::operational(tx,&result.item,"Model fallback",&format!("fallback:{}",result.attempt_id),&format!("{}\nThe failed attempt has ended. A new generation will try another permitted route; no model is switched mid-attempt.",result.summary))?;
+        crate::workspace::operational(
+            tx,
+            &result.item,
+            "Model fallback",
+            &format!("fallback:{}", result.attempt_id),
+            &format!(
+                "{} We are trying the next available model.",
+                crate::workspace::plain_failure(&result.summary)
+            ),
+        )?;
         database::audit(
             tx,
             "daemon",
@@ -611,6 +621,16 @@ pub fn record(
         let rounds = s["supervisor_rounds"].as_u64().unwrap_or(0) + 1;
         s["supervisor_rounds"] = json!(rounds);
         match &result.details {
+            Some(RoleDetails::Strategy { action, reason, .. }) if action == "clarify" => {
+                ensure!(
+                    !reason.trim().is_empty() && reason.len() <= 4096,
+                    "An exact owner question is required"
+                );
+                s["step"] = json!("owner_question");
+                s["owner_question"] = json!({"id":result.attempt_id,"question":reason});
+                let thread = crate::workspace::item_thread(tx, &result.item)?;
+                crate::workspace::append(tx, &thread, "daemon", &format!("A question before we continue\n\n{reason}\n\nReply in this thread. Your answer helps planning; any changes still need approval."), &format!("question:{}",result.attempt_id))?;
+            }
             Some(RoleDetails::Strategy { action, owner, .. })
                 if rounds <= 2
                     && action == "retry"
@@ -972,6 +992,9 @@ pub fn recover(home: &Path, attempt: &str, error: &str) -> anyhow::Result<()> {
         tx.query_row("SELECT item_id FROM attempts WHERE id=?1", [attempt], |r| {
             r.get(0)
         })?;
+    if state(&tx, &item)?.is_some_and(|s| s["closed_on_github"] == true) {
+        return Ok(());
+    }
     tx.execute("UPDATE attempts SET state='recovery_needed',ended_at=?2 WHERE id=?1 AND state IN('starting','running')",params![attempt,plantool_core::now()])?;
     if let Some(mut state) = state(&tx, &item)? {
         state["step"] = json!("escalated");
@@ -982,8 +1005,16 @@ pub fn recover(home: &Path, attempt: &str, error: &str) -> anyhow::Result<()> {
             params![item, error],
         )?;
     }
-    crate::workspace::operational(&tx,&item,"Recovery needed",&format!("recovery-needed:{attempt}"),
-        &format!("Reason: {error}\nOwner: inspect the attempt and reconcile uncertain effects before retrying. No approval or freeze state is changed by this notice."))?;
+    crate::workspace::operational(
+        &tx,
+        &item,
+        "Recovery needed",
+        &format!("recovery-needed:{attempt}"),
+        &format!(
+            "{} Work is paused. Check the attempt details and any changes it made before retrying.",
+            crate::workspace::plain_failure(error)
+        ),
+    )?;
     database::audit(
         &tx,
         "daemon",

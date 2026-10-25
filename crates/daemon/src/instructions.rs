@@ -98,6 +98,10 @@ pub fn assemble(
         serde_json::to_string(&candidates)?
     ));
     let state = crate::workflow::state(&db, &request.item)?.unwrap_or(serde_json::Value::Null);
+    let mut prs = db.prepare("SELECT body_json FROM github_objects WHERE resource=(SELECT cast(repo_id AS TEXT)||':pr_state' FROM projects WHERE id=?1) ORDER BY object_id LIMIT 100")?;
+    let prs=prs.query_map([&project],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?.into_iter().filter_map(|s|serde_json::from_str::<serde_json::Value>(&s).ok()).map(|p|serde_json::json!({"number":p["number"],"state":p["state"],"merged":p["merged"],"merged_at":p["merged_at"],"merge_commit_sha":p["merge_commit_sha"],"base":p["base"]["ref"],"head":p["head"]["sha"]})).collect::<Vec<_>>();
+    text.push_str(&format!("\n<synchronized-pull-request-evidence>{}</synchronized-pull-request-evidence>\nUse synchronized PR state instead of historical discussion assumptions; missing entries are unknown, not unmerged.\n",serde_json::to_string(&prs)?));
+
     if !request.plan_sha.is_empty() {
         let plan = String::from_utf8(crate::artifacts::read(home, &request.plan_sha)?)?;
         text.push_str(&format!(

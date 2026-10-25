@@ -80,6 +80,8 @@ export type EngineeringDetail = {
 };
 export const stepLabel = (step: string) =>
   ({
+    closed: "Closed on GitHub",
+    owner_question: "Waiting for your answer in the item thread",
     project_wait: "Waiting for project events",
     await_sprint_gate: "Waiting for sprint approval",
     plan_gate: "Waiting for plan approval",

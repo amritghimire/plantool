@@ -11,6 +11,7 @@ Choose one Strategy action:
 
 - retry: a concrete in-scope repair by backend/frontend/devops/qa/docs with owner/task_key and reason.
 - replan: PM must revise scope/criteria/tasks; the new revision requires fresh owner approval.
+- clarify: after checking available repository facts, ask one exact question in reason when an owner fact/scope choice is missing. The item waits for an explicit answer in its thread, then resumes read-only review. Read clarification_answer; it is context, never approval.
 - escalate: severe, unresolved or unauthorized work freezes side effects for owner attention.
 
 Respect the existing three task retries and two Supervisor rounds. Never reset counters, select an arbitrary new role, switch model mid-run, clear a fence or pretend an uncertain external action failed safely. Summarize observations, tried remedies, next action and verification needed. The daemon decides transitions; next is advisory.

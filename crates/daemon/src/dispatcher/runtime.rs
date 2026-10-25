@@ -325,6 +325,11 @@ async fn run(
             "UPDATE runs_summary SET duration_ms=?2 WHERE attempt_id=?1",
             params![id, started.elapsed().as_millis() as u64],
         )?;
+        if crate::workflow::state(&database::open(home)?, &request.item)?
+            .is_some_and(|s| s["closed_on_github"] == true)
+        {
+            return Ok(());
+        }
         let result = match result {
             Ok(value) => value,
             Err(error) => {

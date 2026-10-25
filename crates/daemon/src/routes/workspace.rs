@@ -26,6 +26,7 @@ struct Reply {
     thread: String,
     body: String,
     idempotency_key: String,
+    question_id: Option<String>,
 }
 async fn reply(
     State(state): State<AppState>,
@@ -33,11 +34,12 @@ async fn reply(
     Json(body): Json<Reply>,
 ) -> Result<Json<Value>, ApiError> {
     human(&state, &headers)?;
-    let id = crate::workspace::owner_reply(
+    let id = crate::workspace::reply_to_question(
         &state.config.home,
         &body.thread,
         &body.body,
         &body.idempotency_key,
+        body.question_id.as_deref(),
     )?;
     Ok(Json(json!({"id":id,"authority":"context_only"})))
 }

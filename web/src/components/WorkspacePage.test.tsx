@@ -125,3 +125,13 @@ it("searches thread messages and persists local unread markers when opening a th
     ).toBe("n"),
   );
 });
+it("answers the current clarification in the item thread with its question identity", async () => {
+  vi.mocked(api.workspace).mockResolvedValue({...value,threads:value.threads.map(t=>t.id==="item"?{...t,question:{id:"q1",question:"Document existing scripts only?"}}:t)});
+  const reply=vi.spyOn(api,"workspaceReply").mockResolvedValue({id:"answer",authority:"context_only"});
+  render(<MemoryRouter initialEntries={["/workspace?project=p&item=p%3A1"]}><WorkspacePage/></MemoryRouter>);
+  await screen.findByText("Document existing scripts only?");
+  fireEvent.change(screen.getByLabelText("Your answer"),{target:{value:"Yes, documentation only"}});
+  fireEvent.click(screen.getByRole("button",{name:"Answer question"}));
+  await waitFor(()=>expect(reply).toHaveBeenCalledWith(expect.objectContaining({thread:"item",question_id:"q1",body:"Yes, documentation only"})));
+  expect(screen.getByText(/does not approve implementation/)).toBeInTheDocument();
+});

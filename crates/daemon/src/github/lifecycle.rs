@@ -61,6 +61,10 @@ pub(super) async fn write(
     let previous = {
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        ensure!(
+            !workflow::state(&tx, item)?.is_some_and(|s| s["closed_on_github"] == true),
+            "Issue is closed on GitHub"
+        );
         let status_comment = if key.starts_with("status:") && method == "POST" {
             let expected: Option<String> = tx.query_row("SELECT '/repos/'||g.full_name||'/issues/'||i.github_issue_number||'/comments' FROM work_items i JOIN github_repositories g ON g.project_id=i.project_id WHERE i.id=?1 AND i.github_issue_number IS NOT NULL",[item],|r|r.get(0)).optional()?;
             expected.as_deref() == Some(path)
@@ -242,7 +246,7 @@ fn resume(tx: &rusqlite::Transaction<'_>, item: &str, event: &str) -> anyhow::Re
     dispatcher::enqueue(tx, item, "worker.resume", &serde_json::to_value(request)?)?;
     Ok(())
 }
-fn merged(home: &Path, item: &str, pr: &Value) -> anyhow::Result<()> {
+pub(super) fn merged(home: &Path, item: &str, pr: &Value) -> anyhow::Result<()> {
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let already: bool = tx.query_row(
@@ -783,7 +787,7 @@ pub async fn process_item(
 pub async fn proposals(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
     let rows = {
         let db = database::open(home)?;
-        let mut q=db.prepare("SELECT f.id,f.item_id,f.title,f.body FROM workflow_proposals f JOIN work_items i ON i.id=f.item_id WHERE i.project_id=?1 AND f.issue_number IS NULL AND NOT EXISTS(SELECT 1 FROM workflow_items w WHERE w.item_id=i.project_id||':finding:'||f.id)")?;
+        let mut q=db.prepare("SELECT f.id,f.item_id,f.title,f.body FROM workflow_proposals f JOIN work_items i ON i.id=f.item_id WHERE i.project_id=?1 AND i.closed_at IS NULL AND f.issue_number IS NULL AND NOT EXISTS(SELECT 1 FROM workflow_items w WHERE w.item_id=i.project_id||':finding:'||f.id)")?;
         let rows = q.query_map([&repo.project], |r| {
             Ok((
                 r.get::<_, String>(0)?,

@@ -273,6 +273,10 @@ pub async fn poll_at(
     )
     .await?;
 
+    for issue in &issues {
+        super::closure::sync(home, api, repo, issue).await?;
+    }
+
     // Recover a successful publication before consuming approvals posted while
     // the daemon was down. Global comment cursors may already be past them.
     gates::publish(home, api, repo).await?;
@@ -380,6 +384,33 @@ pub async fn poll_at(
             .request("GET", &format!("{base}/issues/{n}"), None, None)
             .await?;
         ensure!(fresh.status == 200, "Intake issue refetch failed");
+        super::closure::sync(home, api, repo, &fresh.body).await?;
+        if fresh.body["state"] != "open" {
+            continue;
+        }
+        // Refresh discussion/planning evidence without modifying the immutable approved plan.
+        if let Some(body) = fresh.body["body"].as_str() {
+            let db = database::open(home)?;
+            db.execute("UPDATE workflow_items SET state_json=json_set(state_json,'$.issue_body',?3) WHERE item_id IN(SELECT id FROM work_items WHERE project_id=?1 AND github_issue_number=?2)",params![repo.project,n,body])?;
+            let references = regex::Regex::new(r"#([1-9][0-9]*)")?;
+            let mut seen = std::collections::HashSet::new();
+            for cap in references.captures_iter(body).take(8) {
+                let number = cap[1].parse::<u64>()?;
+                if !seen.insert(number) {
+                    continue;
+                }
+                // A reference may name an issue rather than a PR. Missing/denied evidence
+                // stays unknown and must never be interpreted as an unmerged dependency.
+                if let Ok(reply) = api
+                    .request("GET", &format!("{base}/pulls/{number}"), None, None)
+                    .await
+                {
+                    if reply.status == 200 {
+                        db.execute("INSERT INTO github_objects VALUES(?1,?2,?3) ON CONFLICT(resource,object_id) DO UPDATE SET body_json=excluded.body_json",params![format!("{}:pr_state",repo.repo_id),number.to_string(),reply.body.to_string()])?;
+                    }
+                }
+            }
+        }
         super::loop_sync::labels(home, repo, &fresh.body)?;
         super::lifecycle::start_new(home, api, repo, &[fresh.body]).await?;
     }

@@ -133,7 +133,7 @@ def create_app(home: Path, token: str, transport=None):
                 graph = StateGraph(State)
                 graph.add_node("bridge",bridge)
                 graph.add_edge(START,"bridge")
-                graph.add_conditional_edges("bridge",lambda s: "bridge" if s.get("workflow") and s["workflow"]["step"] not in ("merged","escalated","loop_complete","declined_closed") else END)
+                graph.add_conditional_edges("bridge",lambda s: "bridge" if s.get("workflow") and s["workflow"]["step"] not in ("merged","closed","escalated","owner_question","loop_complete","declined_closed") else END)
                 app.state.graph = graph.compile(checkpointer=saver)
                 app.state.daemon = daemon
                 yield
