@@ -122,3 +122,7 @@ Use a disposable home/project, real passkey, and the playground for these checks
 - Keep Homebrew's system credential helper enabled. Confirm App Git fetch succeeds while
   repository-local URL/HTTP/credential/SSH overrides and malformed config remain denied.
 - Complete one playground issue through the normal GitHub plan and PR approval gates.
+
+Polling regression tests use an injected fixed clock. Previously they could pass before
+Sunday's default scan time and start a real scheduled scan against a mock checkout after
+that time; production polling continues to use the current time.

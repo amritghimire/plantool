@@ -34,7 +34,8 @@ pub fn snapshot(home: &Path, item: &str) -> anyhow::Result<Value> {
             | "docs"
             | "supervisor"
     ) && request["capability"] == "read";
-    let eligible = state["frozen"] == true
+    let eligible = state["checkpoint_uncertain"] != true
+        && state["frozen"] == true
         && state["step"] == "escalated"
         && status == "failed"
         && read
@@ -113,7 +114,7 @@ pub fn announce_existing(home: &Path) -> anyhow::Result<()> {
     let db = database::open(home)?;
     let ids = {
         let mut q = db.prepare(
-            "SELECT item_id FROM workflow_items WHERE json_extract(state_json,'$.frozen')=1",
+            "SELECT w.item_id FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE json_extract(w.state_json,'$.frozen')=1 AND i.deleted_at IS NULL",
         )?;
         let rows = q
             .query_map([], |r| r.get::<_, String>(0))?
@@ -124,7 +125,7 @@ pub fn announce_existing(home: &Path) -> anyhow::Result<()> {
         crate::workspace::operational(&db,&id,"Work remains frozen",&format!("frozen:{}",workflow::state(&db,&id)?.unwrap()["sequence"]),"Inspect the failed attempt in Engineering OS. Retry an eligible read-only step with Owner recovery; reconcile uncertain coding or external effects manually. Worker availability and execution resume do not unfreeze work.")?;
     }
     let gates = {
-        let mut q=db.prepare("SELECT g.id,g.item_id,g.kind,g.state,g.target_digest,coalesce(g.target_sha,'') FROM gates g JOIN work_items i ON i.id=g.item_id WHERE i.kind='eos' AND g.state IN('pending','open','approved','rejected','changes_requested','superseded') AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.dedupe_key='ops:'||g.item_id||':gate:'||g.id||':'||g.state)")?;
+        let mut q=db.prepare("SELECT g.id,g.item_id,g.kind,g.state,g.target_digest,coalesce(g.target_sha,'') FROM gates g JOIN work_items i ON i.id=g.item_id WHERE i.kind='eos' AND i.deleted_at IS NULL AND g.state IN('pending','open','approved','rejected','changes_requested','superseded') AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.dedupe_key='ops:'||g.item_id||':gate:'||g.id||':'||g.state)")?;
         let rows = q
             .query_map([], |r| {
                 Ok((
@@ -235,6 +236,48 @@ mod tests {
         dispatcher::enqueue(&tx, "i", "github.comment", &json!({"pending":true})).unwrap();
         tx.commit().unwrap();
         assert!(retry(t.path(), "i", "a").is_err());
+    }
+    #[test]
+    fn uncertain_acknowledgement_is_fenced_and_not_owner_retryable() {
+        let t = fixture();
+        let db = database::open(t.path()).unwrap();
+        db.execute("UPDATE attempts SET state='running'", [])
+            .unwrap();
+        db.execute("UPDATE workflow_items SET state_json='{\"item\":\"i\",\"step\":\"triage\",\"frozen\":false}'",[]).unwrap();
+        freeze_uncertain_start(t.path(), "i").unwrap();
+        freeze_uncertain_start(t.path(), "i").unwrap();
+        assert_eq!(
+            workflow::state(&db, "i").unwrap().unwrap()["failed_step"],
+            "triage"
+        );
+        assert_eq!(
+            db.query_row("SELECT state FROM attempts", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "recovery_needed"
+        );
+        assert!(retry(t.path(), "i", "a").is_err());
+    }
+    #[test]
+    fn gate_notices_are_deduped_context_and_do_not_create_decisions() {
+        let t = fixture();
+        let db = database::open(t.path()).unwrap();
+        db.execute("INSERT INTO gates(id,item_id,kind,target_digest,state,created_at) VALUES('g','i','plan','hash','open','now')",[]).unwrap();
+        announce_existing(t.path()).unwrap();
+        announce_existing(t.path()).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM messages WHERE body LIKE '%plan gate open%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
     #[test]
     fn coding_quota_fallback_retains_checkpoint_head() {
@@ -357,7 +400,7 @@ pub fn announce_worker(home: &Path, available: bool) -> anyhow::Result<()> {
     let db = database::open(home)?;
     let ids = {
         let mut q = db.prepare(
-            "SELECT item_id FROM workflow_items WHERE json_extract(state_json,'$.project')=1",
+            "SELECT w.item_id FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE json_extract(w.state_json,'$.project')=1 AND i.deleted_at IS NULL",
         )?;
         let rows = q
             .query_map([], |r| r.get::<_, String>(0))?
@@ -409,9 +452,12 @@ pub fn freeze_uncertain_start(home: &Path, item: &str) -> anyhow::Result<()> {
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if let Some(mut s) = workflow::state(&tx, item)? {
-        s["failed_step"] = s["step"].clone();
+        if s["step"] != "escalated" {
+            s["failed_step"] = s["step"].clone();
+        }
         s["step"] = json!("escalated");
         s["frozen"] = json!(true);
+        s["checkpoint_uncertain"] = json!(true);
         workflow::save(&tx, item, &s)?;
         tx.execute("UPDATE workflow_items SET last_error='Worker checkpoint acknowledgement is uncertain; manual reconciliation required' WHERE item_id=?1",[item])?;
         tx.execute("UPDATE attempts SET state='recovery_needed' WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle')",[item])?;

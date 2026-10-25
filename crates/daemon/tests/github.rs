@@ -384,11 +384,11 @@ async fn polling_etags_visibility_audit_and_inbox_dedupe() {
             json!([{"id":100,"number":1,"updated_at":"2026-10-23T12:00:00Z"}]),
         );
     }
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     let count = f.count("inbox");
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     f.fake.0.lock().unwrap().not_modified = true;
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     assert_eq!(f.count("inbox"), count);
     {
         let mut s = f.fake.0.lock().unwrap();
@@ -396,7 +396,7 @@ async fn polling_etags_visibility_audit_and_inbox_dedupe() {
         s.objects
             .insert("/repos/o/r".into(), json!({"id":42,"visibility":"private"}));
     }
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     let db = database::open(&f.home).unwrap();
     assert_eq!(
         db.query_row(
@@ -554,7 +554,7 @@ async fn failed_poll_does_not_advance_cursor_and_repository_identity_fails_close
         .unwrap()
         .objects
         .insert("/repos/o/r".into(), json!({"id":999,"visibility":"public"}));
-    assert!(sync::poll(&f.home, &f.fake, &f.repo).await.is_err());
+    assert!(poll(&f.home, &f.fake, &f.repo).await.is_err());
     assert_eq!(
         database::open(&f.home)
             .unwrap()
@@ -670,10 +670,10 @@ async fn paginated_etag_pages_keep_later_items_and_label_actors() {
         s.objects.insert(p2, json!([{"id":101,"number":2}]));
         s.objects.insert("/repos/o/r/issues/2/events".into(),json!([{"id":20,"event":"labeled","actor":{"id":7,"type":"User"},"label":{"name":"plantool:accept"}}]));
     }
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     assert!(sync::authorized_label(&f.home, "p", 2, "plantool:accept").unwrap());
     f.fake.0.lock().unwrap().not_modified = true;
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     assert!(sync::authorized_label(&f.home, "p", 2, "plantool:accept").unwrap());
     assert!(f
         .fake
@@ -730,8 +730,8 @@ async fn publication_recovery_backfills_approval_past_the_global_cursor() {
         fake.comments.push(c);
     }
     database::open(&f.home).unwrap().execute("INSERT INTO github_cursors(resource,last_seen_at) VALUES('42:/repos/o/r/issues/comments?sort=updated&direction=asc','2026-10-23T14:00:00Z')",[]).unwrap();
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     assert_eq!(f.count("decisions"), 1);
     assert_eq!(f.fake.0.lock().unwrap().posts, 1);
     let resumes: i64 = database::open(&f.home)
@@ -879,7 +879,7 @@ async fn missing_visibility_does_not_guess_that_a_repository_is_public() {
         .unwrap()
         .objects
         .insert("/repos/o/r".into(), json!({"id":42}));
-    assert!(sync::poll(&f.home, &f.fake, &f.repo).await.is_err());
+    assert!(poll(&f.home, &f.fake, &f.repo).await.is_err());
     assert_eq!(f.count("audit"), 0);
 }
 #[tokio::test]
@@ -908,12 +908,12 @@ async fn pr_reviews_checks_and_state_refresh_when_the_head_changes_or_pr_closes(
             json!({"check_runs":[{"id":303,"head_sha":new,"conclusion":null}]}),
         );
     }
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     f.fake.0.lock().unwrap().objects.insert(
         "/repos/o/r/pulls/2".into(),
         json!({"id":300,"state":"open","head":{"sha":new}}),
     );
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     let db = database::open(&f.home).unwrap();
     let state: String = db
         .query_row(
@@ -944,7 +944,7 @@ async fn pr_reviews_checks_and_state_refresh_when_the_head_changes_or_pr_closes(
             json!({"id":300,"state":"closed","head":{"sha":new}}),
         );
     }
-    sync::poll(&f.home, &f.fake, &f.repo).await.unwrap();
+    poll(&f.home, &f.fake, &f.repo).await.unwrap();
     let state: String = db
         .query_row(
             "SELECT body_json FROM github_objects WHERE resource='42:pr_state' AND object_id='2'",
@@ -991,4 +991,11 @@ async fn effective_rulesets_satisfy_protection_and_missing_checks_are_advisory()
         .as_str()
         .unwrap()
         .contains("first PR"));
+}
+
+async fn poll(home: &std::path::Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-19T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    sync::poll_at(home, api, repo, now).await
 }
