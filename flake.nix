@@ -69,7 +69,7 @@
           workerEnv = pythonSet.mkVirtualEnv "plantool-worker" workspace.deps.default;
           web = pkgs.buildNpmPackage {
             pname = "plantool-web";
-            version = "0.1.0-alpha.1";
+            version = "0.1.0-alpha.2";
             src = ./web;
             nodejs = pkgs.nodejs_22;
             npmDeps = pkgs.importNpmLock { npmRoot = ./web; };
@@ -87,7 +87,7 @@
           common = {
             inherit src;
             pname = "plantool";
-            version = "0.1.0-alpha.1";
+            version = "0.1.0-alpha.2";
             strictDeps = true;
             postUnpack = "mkdir -p $sourceRoot/web; cp -r ${web} $sourceRoot/web/dist";
             nativeBuildInputs = [ pkgs.pkg-config pkgs.perl ];
@@ -98,7 +98,7 @@
         in craneLib.buildPackage (common // {
           inherit cargoArtifacts;
           pname = "plantool";
-          version = "0.1.0-alpha.1";
+          version = "0.1.0-alpha.2";
           cargoExtraArgs = "-p plantool";
           doCheck = false; # The test jobs need sockets; CI runs them separately.
           meta.mainProgram = "plantool";
