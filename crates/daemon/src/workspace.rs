@@ -378,7 +378,7 @@ pub fn operational(
             percent_encoding::utf8_percent_encode(item, percent_encoding::NON_ALPHANUMERIC)
         )
     };
-    let body=format!("{event}: {title} ({item}).\n{detail}\nOpen {url}. This message is status/context only, never an approval.");
+    let body=format!("{event}: {title} ({item}).\n{detail}\nOpen {url}\nThis message is status/context only, never an approval.");
     append(
         db,
         &format!("{project}:channel:general:thread"),

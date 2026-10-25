@@ -157,3 +157,35 @@ outbox thread alongside healthy work. Confirm worker health remains ready when
 healthy, no duplicate attempt is admitted on checkpoint replay, and owner recovery
 still requires a fresh action-bound assertion. Open the project scheduler from the
 running list and inspect its history. These native checks cannot run on Linux.
+
+## Provider result compatibility and discussion context
+
+The worker now includes the complete RoleResult schema and step-specific required
+details in its prompt as well as response_format. A complete JSON Markdown fence
+is accepted; surrounding prose, arrays, reasoning-only text and incomplete JSON
+are not guessed into a result. Invalid output, truncated output, wrong step details
+or an unprepared sprint choice gets at most one same-model correction. Correction
+has a distinct proxy idempotency key, normal request/token accounting and no tools.
+If still invalid, normal attempt failure/fallback applies. Raw output is not logged.
+This improves compatibility but cannot fix upstream rate limits, missing backends
+or guarantee any free provider's schema compliance.
+
+Sprint PM receives exact daemon-prepared candidate identities. With zero prepared
+candidates the worker returns a typed empty selection without a provider call; it
+never promotes a frozen/unplanned issue from discussion history. Nonempty selections
+still undergo daemon validation and owner approval.
+
+Instructions distinguish current dispatch/execution/freeze facts from historical
+workspace messages. Successful fallback is not a current infrastructure outage;
+missing approval prevents implementation but does not prevent scope clarification
+or sizing. Discussion decisions cannot halt global execution. Past messages are
+retained; installing new instructions does not rewrite existing decisions or
+unfreeze items. Operational links no longer append sentence punctuation to URLs.
+
+Manual verification on macOS: retry issue triage and scheduler separately after
+installing the fixed build. Exercise your configured OpenRouter and Ollama Cloud
+routes; check complete typed output, one bounded formatting correction where needed,
+normal accounting and no duplicate tool effects. Verify malformed responses still
+fail safely, an empty sprint waits for prepared plans, and successful fallback does
+not lead discussion to demand worker Repair based only on old errors. Real provider
+execution and native passkey/sandbox behavior are not verified in Linux tests.

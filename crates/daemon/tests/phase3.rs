@@ -2268,3 +2268,25 @@ fn accepted_dispatch_replays_after_workflow_freezes_or_changes_capability() {
     fresh.idempotency_key = "new".into();
     assert!(dispatcher::admit(&f.home, &fresh, 0).is_err());
 }
+
+#[test]
+fn discussion_instructions_distinguish_current_facts_from_historical_outages() {
+    let f = Fixture::new();
+    let request = Dispatch {
+        item: f.item.clone(),
+        role: "pm".into(),
+        generation: 1,
+        inputs: json!({"step":"discussion"}),
+        plan_sha: "".into(),
+        policy_version: 1,
+        capability: "read".into(),
+        idempotency_key: "instructions".into(),
+        thread_id: f.item.clone(),
+        interrupt_id: "i".into(),
+    };
+    let prompt = plantool_daemon::instructions::assemble(&f.home, &request, "a").unwrap();
+    assert!(prompt.contains("<daemon-dispatch-facts>"));
+    assert!(prompt.contains("\"execution_stopped\":false"));
+    assert!(prompt.contains("Empty plan hashes before approval are normal"));
+    assert!(prompt.contains("not proof of a current worker outage"));
+}

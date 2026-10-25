@@ -301,8 +301,17 @@ async fn run(
             "INSERT INTO runs_summary(attempt_id,provider,model) VALUES(?1,?2,?3)",
             params![id, selected.route.provider, selected.route.model],
         )?;
+        let mut role_request = request.clone();
+        if request.inputs["step"] == "sprint_plan" {
+            let facts = crate::workflow::state(&database::open(home)?, &request.item)?;
+            role_request.inputs["prepared_candidates"] = facts
+                .as_ref()
+                .and_then(|s| s.get("candidates"))
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+        }
         let call = plantool_contract::RoleCall {
-            request: request.clone(),
+            request: role_request,
             attempt_id: id.into(),
             prompt,
         };

@@ -129,3 +129,58 @@ async def test_failed_read_role_fallback_creates_fresh_generation_interrupt(tmp_
             assert reply.json()['state']=='interrupted'
             assert [r['generation'] for r in requests]==[1,2]
             assert requests[0]['interrupt_id']!=requests[1]['interrupt_id']
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('first', ['prose','fenced','wrong_details'])
+async def test_provider_format_correction_is_bounded_validated_and_cached(tmp_path,first):
+    calls=[]
+    good={"item":"forged","role":"pm","attempt_id":"wrong","generation":999,"outcome":"done","summary":"fits","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"details":{"kind":"triage","disposition":"fits","reason":"Small docs task","duplicate_of":None}}
+    async def daemon(request):
+        if request.url.path.endswith('/health'):return httpx.Response(200,json=VERSIONS)
+        body=json.loads(request.content);calls.append(body)
+        assert 'JSON Schema' in body['messages'][0]['content']
+        if len(calls)==1:
+            content='I recommend this task.' if first=='prose' else '```json\n'+json.dumps(good)+'\n```' if first=='fenced' else json.dumps({**good,'details':None})
+        else:
+            assert body['tools']==[]
+            content=json.dumps(good)
+        return httpx.Response(200,json={'choices':[{'message':{'content':content},'finish_reason':'stop'}]})
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    payload={'request':{'item':'p:1','role':'pm','generation':1,'inputs':{'step':'triage'},'plan_sha':'','policy_version':1,'capability':'read','idempotency_key':'d','thread_id':'p:1','interrupt_id':'i'},'attempt_id':'a','prompt':'Triage only'}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={'x-plantool-worker-token':'t'*40,'x-plantool-contract-version':'5'}) as client:
+            response=await client.post('/internal/v1/role',json=payload)
+            assert response.status_code==200,response.text
+            assert response.json()['details']['kind']=='triage'
+            assert (await client.post('/internal/v1/role',json=payload)).json()==response.json()
+            assert len(calls)==(1 if first=='fenced' else 2)
+
+@pytest.mark.asyncio
+async def test_empty_prepared_sprint_does_not_invent_items_or_call_provider(tmp_path):
+    async def daemon(request):
+        assert request.url.path.endswith('/health')
+        return httpx.Response(200,json=VERSIONS)
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    payload={'request':{'item':'p:project','role':'pm','generation':1,'inputs':{'step':'sprint_plan','prepared_candidates':[]},'plan_sha':'','policy_version':1,'capability':'read','idempotency_key':'d','thread_id':'p:project','interrupt_id':'i'},'attempt_id':'a','prompt':'Known issue #1 is frozen'}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={'x-plantool-worker-token':'t'*40,'x-plantool-contract-version':'5'}) as client:
+            response=await client.post('/internal/v1/role',json=payload)
+            assert response.status_code==200,response.text
+            assert response.json()['details']['items']==[]
+
+@pytest.mark.asyncio
+async def test_unfixable_output_stops_after_one_formatting_retry(tmp_path):
+    calls=[]
+    async def daemon(request):
+        if request.url.path.endswith('/health'):return httpx.Response(200,json=VERSIONS)
+        calls.append(json.loads(request.content))
+        return httpx.Response(200,json={'choices':[{'message':{'content':'Not JSON'},'finish_reason':'length'}]})
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    payload={'request':{'item':'p:1','role':'pm','generation':1,'inputs':{'step':'triage'},'plan_sha':'','policy_version':1,'capability':'read','idempotency_key':'d','thread_id':'p:1','interrupt_id':'i'},'attempt_id':'a','prompt':'Triage only'}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={'x-plantool-worker-token':'t'*40,'x-plantool-contract-version':'5'}) as client:
+            response=await client.post('/internal/v1/role',json=payload)
+            assert response.status_code==502
+            assert len(calls)==2
+            assert calls[0]['plantool']['idempotency_key']!=calls[1]['plantool']['idempotency_key']
+            assert (await client.get('/internal/v1/health')).status_code==200
