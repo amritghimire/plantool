@@ -1,3 +1,4 @@
+export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;http_status?:number|null;retry_at?:number|null}[]};
 import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
@@ -64,8 +65,9 @@ export const api = {
   configureGithub: (body:{app_id:number;installation_id:number;repo:string;checkout:string;private_key:string|null}) => request<{preflight:{warnings:string[];advisories?:string[]};project?:string}>("POST","/api/settings/github",body),
   githubPreflight: (project:string) => request<{warnings:string[];advisories?:string[]}>("POST","/api/settings/github/preflight",{project}),
   githubAllowlist: (login:string,remove:boolean) => request("POST","/api/settings/github/allowlist",{login,remove}),
-  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null}[]}>("GET","/api/settings/models"),
+  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null;diagnostic?:ProviderDiagnostic|null}[]}>("GET","/api/settings/models"),
   saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),
+  diagnoseModel: (route:string) => request<ProviderDiagnostic>("POST","/api/settings/models/diagnose",{route}),
   verifyModels: () => request("POST","/api/settings/models/verify",{}),
   workerStatus: () => request<{worker:{available:boolean;message:string};items?:{item:string;title:string;state:{step:string;frozen?:boolean};error:string|null;summary:string|null}[]}>("GET","/api/engineering-os/status"),
   repairWorker: () => request<{worker:{available:boolean;message:string}}>("POST","/api/engineering-os/repair", {}),

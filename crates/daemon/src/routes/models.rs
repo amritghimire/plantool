@@ -49,13 +49,23 @@ async fn settings(
             Ok(project)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let routes = {
+    let mut routes = {
         let mut q = db
             .prepare("SELECT route,available,model,error FROM route_health")
             .map_err(anyhow::Error::from)?;
         let rows=q.query_map([],|r|Ok(json!({"route":r.get::<_,String>(0)?,"available":r.get::<_,bool>(1)?,"model":r.get::<_,Option<String>>(2)?,"error":r.get::<_,Option<String>>(3)?}))).map_err(anyhow::Error::from)?.collect::<Result<Vec<_>,_>>().map_err(anyhow::Error::from)?;
         rows
     };
+    for route in &mut routes {
+        route["diagnostic"] = database::get::<Value>(
+            &db,
+            &format!(
+                "provider.diagnostic:{}",
+                route["route"].as_str().unwrap_or("")
+            ),
+        )?
+        .unwrap_or(Value::Null);
+    }
     Ok(Json(
         json!({"yaml":serde_yaml::to_string(&router::config(&state.config.home)?).map_err(anyhow::Error::from)?,"projects":projects,"routes":routes}),
     ))
@@ -102,6 +112,11 @@ async fn save(
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(anyhow::Error::from)?;
     database::set(&tx, "model_chains", &cfg)?;
+    tx.execute(
+        "DELETE FROM settings WHERE key LIKE 'provider.diagnostic:%'",
+        [],
+    )
+    .map_err(anyhow::Error::from)?;
     tx.execute("DELETE FROM route_health", [])
         .map_err(anyhow::Error::from)?;
     if let (Some(project), Some(providers)) = (&body.project, &body.allowed_providers) {
@@ -130,6 +145,24 @@ async fn verify(
     Ok(Json(
         gateway::verify(&state.config.home, &gateway::HttpGateway).await?,
     ))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Diagnostic {
+    route: String,
+}
+async fn diagnose(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
+    Json(body): Json<Diagnostic>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    approval.recheck(&state)?;
+    crate::models::diagnostics::run(&state, &body.route)
+        .await
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))
 }
 async fn completions(
     State(state): State<AppState>,
@@ -200,6 +233,7 @@ pub fn browser_routes() -> Router<AppState> {
     Router::new()
         .route("/settings/models", get(settings).post(save))
         .route("/settings/models/verify", post(verify))
+        .route("/settings/models/diagnose", post(diagnose))
 }
 pub fn proxy_routes() -> Router<AppState> {
     Router::new().route("/v1/chat/completions", post(completions))

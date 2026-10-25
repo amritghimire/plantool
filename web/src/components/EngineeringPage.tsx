@@ -415,6 +415,8 @@ export function EngineeringItemPage() {
           </Link>
         </div>
       </div>
+      {(data.notification_delivery?.pending ?? 0)>0 && <p role="status">{data.notification_delivery?.pending} issue status update(s) pending GitHub delivery. The item thread already contains them. Check App access/rate limits if this persists; pending informational updates do not block recovery.</p>}
+      <Link to="/settings/models">Diagnose model providers</Link>
       {item.frozen && <RecoveryControls item={item.id} onRecovered={refresh} />}
       <nav className="detail-tabs" aria-label="Item activity">
         {[

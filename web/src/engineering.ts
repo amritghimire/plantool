@@ -58,6 +58,7 @@ export type EngineeringOverview = {
   }[];
 };
 export type EngineeringDetail = {
+  notification_delivery?: {pending:number};
   item: EngineeringItem;
   repository: string | null;
   base: string;

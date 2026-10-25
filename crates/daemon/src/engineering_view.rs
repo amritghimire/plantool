@@ -4,6 +4,42 @@ use anyhow::Context;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::Path;
+fn activity_state(db: &Connection, id: &str, stored: &str) -> anyhow::Result<String> {
+    if !["queued", "starting", "running", "waiting", "idle"].contains(&stored) {
+        return Ok(stored.into());
+    }
+    let held: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM leases WHERE id=1 AND holder_attempt_id=?1)",
+        [id],
+        |r| r.get(0),
+    )?;
+    if held {
+        return Ok("running".into());
+    }
+    let queued: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM model_queue WHERE attempt_id=?1)",
+        [id],
+        |r| r.get(0),
+    )?;
+    Ok(if queued || stored == "queued" {
+        "queued"
+    } else {
+        "processing"
+    }
+    .into())
+}
+fn annotate_activity(db: &Connection, rows: &mut [Value]) -> anyhow::Result<()> {
+    for row in rows {
+        let stored = row["state"].as_str().unwrap_or("").to_owned();
+        row["stored_state"] = json!(stored);
+        row["state"] = json!(activity_state(
+            db,
+            row["id"].as_str().unwrap_or(""),
+            &stored
+        )?);
+    }
+    Ok(())
+}
 fn item_rows(
     db: &Connection,
     project: Option<&str>,
@@ -64,7 +100,8 @@ pub fn overview(home: &Path) -> anyhow::Result<Value> {
             database::get::<Value>(&db, &format!("github_preflight:{id}"))?.unwrap_or(Value::Null);
     }
     let mut q=db.prepare("SELECT a.id,a.item_id,i.project_id,i.title,a.role,a.state,a.model_route,a.started_at,s.provider,s.model FROM attempts a JOIN work_items i ON i.id=a.item_id LEFT JOIN runs_summary s ON s.attempt_id=a.id WHERE i.kind='eos' AND a.state IN('queued','starting','running','waiting','idle') ORDER BY a.started_at,a.id")?;
-    let active=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item":r.get::<_,String>(1)?,"project":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"role":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"route":r.get::<_,String>(6)?,"started_at":r.get::<_,String>(7)?,"provider":r.get::<_,Option<String>>(8)?,"model":r.get::<_,Option<String>>(9)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut active=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"item":r.get::<_,String>(1)?,"project":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"role":r.get::<_,String>(4)?,"state":r.get::<_,String>(5)?,"route":r.get::<_,String>(6)?,"started_at":r.get::<_,String>(7)?,"provider":r.get::<_,Option<String>>(8)?,"model":r.get::<_,Option<String>>(9)?})))?.collect::<Result<Vec<_>,_>>()?;
+    annotate_activity(&db, &mut active)?;
     Ok(
         json!({"projects":projects,"items":items(&db,None)?,"active":active,"roles":roles(home,&db,None)?}),
     )
@@ -77,13 +114,15 @@ pub fn item(home: &Path, id: &str) -> anyhow::Result<Value> {
         .find(|v| v["id"] == id)
         .context("Work item not found")?;
     let mut q=db.prepare("SELECT a.id,a.role,a.generation,a.state,a.model_route,a.started_at,a.ended_at,json_extract(a.outcome_json,'$.summary'),s.provider,s.model,s.tokens_in,s.tokens_out,s.duration_ms FROM attempts a LEFT JOIN runs_summary s ON s.attempt_id=a.id WHERE a.item_id=?1 ORDER BY a.generation DESC LIMIT 200")?;
-    let attempts=q.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"role":r.get::<_,String>(1)?,"generation":r.get::<_,u64>(2)?,"state":r.get::<_,String>(3)?,"route":r.get::<_,String>(4)?,"started_at":r.get::<_,String>(5)?,"ended_at":r.get::<_,Option<String>>(6)?,"summary":r.get::<_,Option<String>>(7)?,"provider":r.get::<_,Option<String>>(8)?,"model":r.get::<_,Option<String>>(9)?,"tokens_in":r.get::<_,Option<u64>>(10)?,"tokens_out":r.get::<_,Option<u64>>(11)?,"duration_ms":r.get::<_,Option<u64>>(12)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut attempts=q.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"role":r.get::<_,String>(1)?,"generation":r.get::<_,u64>(2)?,"state":r.get::<_,String>(3)?,"route":r.get::<_,String>(4)?,"started_at":r.get::<_,String>(5)?,"ended_at":r.get::<_,Option<String>>(6)?,"summary":r.get::<_,Option<String>>(7)?,"provider":r.get::<_,Option<String>>(8)?,"model":r.get::<_,Option<String>>(9)?,"tokens_in":r.get::<_,Option<u64>>(10)?,"tokens_out":r.get::<_,Option<u64>>(11)?,"duration_ms":r.get::<_,Option<u64>>(12)?})))?.collect::<Result<Vec<_>,_>>()?;
+    annotate_activity(&db, &mut attempts)?;
     let mut q=db.prepare("SELECT id,kind,state,target_digest,target_sha,github_comment_id,created_at FROM gates WHERE item_id=?1 ORDER BY created_at DESC LIMIT 100")?;
     let gates=q.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"hash":r.get::<_,String>(3)?,"sha":r.get::<_,Option<String>>(4)?,"comment":r.get::<_,Option<u64>>(5)?,"at":r.get::<_,String>(6)?})))?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,at,action,json_extract(metadata_json,'$.step') FROM audit WHERE subject=?1 AND action IN('workflow.projected','workflow.started','workflow.recovery_needed','loop.result') ORDER BY id DESC LIMIT 200")?;
     let events=q.query_map([id],|r|Ok(json!({"id":r.get::<_,u64>(0)?,"at":r.get::<_,String>(1)?,"action":r.get::<_,String>(2)?,"step":r.get::<_,Option<String>>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let pending:u64=db.query_row("SELECT count(*) FROM outbox WHERE aggregate_id=?1 AND kind='github.status' AND delivered_at IS NULL",[id],|r|r.get(0))?;
     Ok(
-        json!({"item":item,"repository":repo,"base":base,"head":head,"attempts":attempts,"gates":gates,"events":events,"history_limit":200}),
+        json!({"notification_delivery":{"pending":pending},"item":item,"repository":repo,"base":base,"head":head,"attempts":attempts,"gates":gates,"events":events,"history_limit":200}),
     )
 }
 #[cfg(test)]
@@ -111,6 +150,21 @@ mod tests {
         assert_eq!(value["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(value["attempts"][0]["id"], "one");
         assert!(!value.to_string().contains("do-not-expose"));
+        db.execute("INSERT INTO leases(id,holder_attempt_id,holder_kind,model_route,acquired_at,expires_at) VALUES(1,'one','attempt:one','{}','now',9999999999)",[]).unwrap();
+        db.execute("INSERT INTO model_queue(id,attempt_id,route,provider,model,urgent,sprint_order,enqueued_at,execution_generation) VALUES('other','two','route','ollama','m',0,0,1,0)",[]).unwrap();
+        let active = overview(tmp.path()).unwrap()["active"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(active.iter().filter(|r| r["state"] == "running").count(), 1);
+        assert_eq!(
+            active.iter().find(|r| r["id"] == "two").unwrap()["state"],
+            "queued"
+        );
+        assert_eq!(
+            item(tmp.path(), "two").unwrap()["attempts"][0]["state"],
+            "queued"
+        );
         assert!(item(tmp.path(), "unknown").is_err());
         db.execute("UPDATE workflow_items SET state_json='{\"step\":\"project_wait\",\"project\":true}' WHERE item_id='one'", []).unwrap();
         assert_eq!(

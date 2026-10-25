@@ -241,6 +241,21 @@ pub fn select(
         .or_else(|| candidates.into_iter().next())
         .ok_or_else(|| anyhow::anyhow!("No available, allowed route within budget"))
 }
+/// Explicit diagnostic requests use only the unreserved provider allowance.
+pub fn diagnostic_capacity(home: &Path, selected: &Selected) -> anyhow::Result<()> {
+    let cfg = config(home)?;
+    if let Some(budget) = cfg.budgets.get(&selected.route.provider) {
+        if let Some(max) = budget.requests {
+            let (kind, start, _) = window(Some(budget), crate::database::unix_now());
+            let used:u64=database::open(home)?.query_row("SELECT coalesce(sum(used_requests),0) FROM budgets WHERE route=?1 AND window_kind=?2 AND window_start=?3",params![selected.route.provider,kind,start],|r|r.get(0))?;
+            anyhow::ensure!(
+                used < max.saturating_mul(100 - budget.reserve_pct) / 100,
+                "Diagnostic budget exhausted; reserved requests remain for implementation/review"
+            );
+        }
+    }
+    Ok(())
+}
 pub fn count(
     home: &Path,
     selected: &Selected,

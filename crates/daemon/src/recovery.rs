@@ -15,7 +15,7 @@ pub fn snapshot(home: &Path, item: &str) -> anyhow::Result<Value> {
         [item],
         |r| r.get(0),
     )?;
-    let external:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%')",[item],|r|r.get(0))?;
+    let external:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status')",[item],|r|r.get(0))?;
     let (id, status, request) = attempt.unwrap_or_default();
     let request: Value = serde_json::from_str(&request).unwrap_or(Value::Null);
     let step = request["inputs"]["step"].as_str().unwrap_or("");
@@ -65,7 +65,7 @@ pub fn retry(home: &Path, item: &str, expected: &str) -> anyhow::Result<Value> {
     )?;
     ensure!(latest == expected, "Attempt changed; refresh");
     // Recheck mutable blockers under the write lock, rather than trusting the UI snapshot.
-    let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle','recovery_needed')) OR EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND state IN('open','pending')) OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%')",[item],|r|r.get(0))?;
+    let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle','recovery_needed')) OR EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND state IN('open','pending')) OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status')",[item],|r|r.get(0))?;
     ensure!(!blocked, "Recovery blockers changed; refresh");
     let mut state = facts["state"].clone();
     state["step"] = facts["step"].clone();
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(
             db.query_row("SELECT count(*) FROM messages", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            2
+            4 // Each notification appears in #general and the item thread.
         );
         assert_eq!(
             db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
@@ -270,7 +270,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            1
+            2 // One per destination, even after repeated announcement.
         );
         assert_eq!(
             db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))
