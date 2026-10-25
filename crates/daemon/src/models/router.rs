@@ -275,6 +275,63 @@ pub fn select(
             )
         })
 }
+/// Earliest automatic retry among permitted routes. Permanent access/policy errors need an owner.
+pub fn retry_at(home: &Path, project: &str, role: &str, now: i64) -> anyhow::Result<Option<i64>> {
+    let cfg = config(home)?;
+    cfg.validate()?;
+    let db = database::open(home)?;
+    let permitted = allowed(&db, project)?;
+    let mut times = vec![];
+    for name in cfg
+        .chains
+        .get(role)
+        .ok_or_else(|| anyhow::anyhow!("Unknown role chain"))?
+    {
+        let route = &cfg.routes[name];
+        if !permitted.contains(&route.provider) {
+            continue;
+        }
+        let health: Option<(bool, Option<String>)> = db
+            .query_row(
+                "SELECT available,error FROM route_health WHERE route=?1",
+                [name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if health
+            .as_ref()
+            .and_then(|h| h.1.as_ref())
+            .is_some_and(|e| e.starts_with("Owner "))
+        {
+            continue;
+        }
+        if !health.as_ref().is_some_and(|h| h.0) {
+            times.push(now + 300);
+            continue;
+        }
+        let cooldown:Option<i64>=db.query_row("SELECT max(CAST(exhausted_until AS INTEGER)) FROM budgets WHERE route IN(?1,?2) AND CAST(exhausted_until AS INTEGER)>?3",params![name,route.provider,now],|r|r.get(0))?;
+        let mut next = cooldown.unwrap_or(now + 30);
+        if let Some(budget) = cfg.budgets.get(&route.provider) {
+            let (kind, start, end) = window(Some(budget), now);
+            let used:u64=db.query_row("SELECT coalesce(sum(used_requests),0) FROM budgets WHERE route=?1 AND window_kind=?2 AND window_start=?3",params![route.provider,kind,start],|r|r.get(0))?;
+            if let Some(max) = budget.requests {
+                let limit = if budget.reserve_for.contains(&role.to_string()) {
+                    max
+                } else {
+                    max.saturating_mul(100 - budget.reserve_pct) / 100
+                };
+                if used >= limit {
+                    if budget.window == "provider" {
+                        continue;
+                    }
+                    next = next.max(end);
+                }
+            }
+        }
+        times.push(next);
+    }
+    Ok(times.into_iter().min())
+}
 /// Explicit diagnostic requests use only the unreserved provider allowance.
 pub fn diagnostic_capacity(home: &Path, selected: &Selected) -> anyhow::Result<()> {
     let cfg = config(home)?;

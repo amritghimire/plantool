@@ -167,6 +167,30 @@ pub fn record(
         &format!("turn:{}", result.attempt_id),
     )?;
     let round = d["round"].as_u64().unwrap_or(0);
+    let normalized = body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    if round < 3 && d["previous_body"].as_str() == Some(normalized.as_str()) {
+        let summary = format!(
+            "Discussion ended because no new information was added. Latest comment: {body}"
+        );
+        tx.execute(
+            "UPDATE discussion_topics SET state='closed',summary=?2 WHERE id=?1",
+            params![d["id"].as_str(), summary],
+        )?;
+        s["discussion_summary"] = json!(summary);
+        s["step"] = d["after"].clone();
+        append(
+            tx,
+            d["thread"].as_str().context("Missing thread")?,
+            "daemon",
+            "This round repeated the previous update. Moving on to prepare a proposal.",
+            &format!("discussion-stalled:{}", result.attempt_id),
+        )?;
+        return Ok(());
+    }
     let mut participants = d["participants"].as_array().cloned().unwrap_or_default();
     if !participants.contains(&json!(result.role)) {
         participants.push(json!(result.role))
@@ -196,6 +220,7 @@ pub fn record(
         s["discussion"]["speaker"] = json!(speaker);
         s["discussion"]["round"] = json!(next_round);
         s["discussion"]["participants"] = json!(participants);
+        s["discussion"]["previous_body"] = json!(normalized);
         tx.execute("UPDATE discussion_topics SET speaker=?2,round=?3,participants_json=?4,sequence=sequence+1 WHERE id=?1",params![d["id"].as_str(),speaker,next_round,json!(participants).to_string()])?;
     }
     Ok(())
@@ -211,12 +236,29 @@ pub fn snapshot(home: &Path) -> anyhow::Result<Value> {
     let mut q=db.prepare("SELECT t.id,t.project_id,t.item_id,c.name,t.title FROM threads t LEFT JOIN channels c ON c.id=t.channel_id ORDER BY t.project_id,t.id")?;
     let mut threads=q.query_map([],|r|Ok(json!({"id":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"item":r.get::<_,Option<String>>(2)?,"channel":r.get::<_,Option<String>>(3)?,"title":r.get::<_,String>(4)?})))?.collect::<Result<Vec<_>,_>>()?;
     for t in &mut threads {
+        if let Some(item) = t["item"].as_str().map(str::to_owned) {
+            if let Some(state) = crate::workflow::state(&db, &item)? {
+                if state["step"] == "owner_question" {
+                    t["question"] = state["owner_question"].clone();
+                    t["question"]["settling"] = json!(db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind LIKE 'worker.%')", [item], |r| r.get::<_,bool>(0))?);
+                }
+            }
+        }
         let mut q=db.prepare("SELECT id,sender_role,body,mentions_json,created_at FROM messages WHERE thread_id=?1 ORDER BY created_at,rowid")?;
         t["messages"]=json!(q.query_map([t["id"].as_str().unwrap()],|r|Ok(json!({"id":r.get::<_,String>(0)?,"sender":r.get::<_,String>(1)?,"body":r.get::<_,String>(2)?,"mentions":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!([])),"at":r.get::<_,String>(4)?})))?.collect::<Result<Vec<_>,_>>()?);
     }
     Ok(json!({"projects":projects,"threads":threads}))
 }
 pub fn owner_reply(home: &Path, thread: &str, body: &str, key: &str) -> anyhow::Result<String> {
+    reply_to_question(home, thread, body, key, None)
+}
+pub fn reply_to_question(
+    home: &Path,
+    thread: &str,
+    body: &str,
+    key: &str,
+    question_id: Option<&str>,
+) -> anyhow::Result<String> {
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (project,root):(String,String)=tx.query_row("SELECT p.id,p.local_checkout FROM threads t JOIN projects p ON p.id=t.project_id WHERE t.id=?1 AND p.mode='eos'",[thread],|r|Ok((r.get(0)?,r.get(1)?)))?;
@@ -227,6 +269,42 @@ pub fn owner_reply(home: &Path, thread: &str, body: &str, key: &str) -> anyhow::
         &json!({"body":body}),
     )?;
     let id = append(&tx, thread, "owner", body, key)?;
+    if let Some(question_id) = question_id {
+        let item: String = tx.query_row(
+            "SELECT item_id FROM threads WHERE id=?1 AND item_id IS NOT NULL",
+            [thread],
+            |r| r.get(0),
+        )?;
+        let mut state = crate::workflow::state(&tx, &item)?.context("Workflow missing")?;
+        // A replay of the same answer is harmless; a stale answer cannot wake a new question.
+        if state["clarification_answer"]["message_id"] != id {
+            ensure!(
+                state["step"] == "owner_question"
+                    && state["frozen"] != true
+                    && state["owner_question"]["id"] == question_id,
+                "Question changed; refresh the thread before answering"
+            );
+            let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle','recovery_needed')) OR EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND state IN('open','pending')) OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind<>'github.status')", [&item], |r| r.get(0))?;
+            ensure!(!blocked, "The question is still being recorded, or an active attempt, approval gate or uncertain external effect needs attention. Refresh and retry after pending workflow delivery completes");
+            state["clarification_answer"] = json!({"question":state["owner_question"]["question"],"answer":body,"message_id":id});
+            state["owner_question"] = Value::Null;
+            state["step"] = json!("supervisor");
+            state["supervisor_rounds"] = json!(0);
+            state["sequence"] = json!(state["sequence"].as_u64().unwrap_or(0) + 1);
+            crate::workflow::save(&tx, &item, &state)?;
+            tx.execute("UPDATE outbox SET delivered_at=?2,result_json='{\"superseded_by_clarification\":true}' WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind IN('worker.start','worker.resume')", params![item,plantool_core::now()])?;
+            let start = plantool_contract::Start {
+                thread_id: item.clone(),
+                graph: plantool_contract::Graph::WorkItem,
+                input: json!({"workflow":state}),
+                idempotency_key: format!("clarification:{id}"),
+                contract_version: plantool_contract::CONTRACT_VERSION,
+                graph_version: plantool_contract::GRAPH_VERSION,
+            };
+            dispatcher::enqueue(&tx, &item, "worker.recover", &serde_json::to_value(start)?)?;
+            append(&tx, thread, "daemon", "Thanks. The team will review your answer and continue planning when it can run. Any changes still need the usual approval.", &format!("answer:{id}"))?;
+        }
+    }
     database::audit(
         &tx,
         "human",
@@ -256,6 +334,66 @@ mod tests {
             db,
             json!({"step":"research","sequence":1,"generation":0}),
         )
+    }
+    #[test]
+    fn explicit_answer_wakes_only_matching_question_and_never_approves() {
+        let (home, db, _) = setup();
+        let question = json!({"item":"p:1","step":"owner_question","frozen":false,"sequence":2,"generation":0,"approved":false,"owner_question":{"id":"q1","question":"Document existing scripts only?"}});
+        db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES('p:1',?1,'base','base')", [question.to_string()]).unwrap();
+        let thread = item_thread(&db, "p:1").unwrap();
+        owner_reply(home.path(), &thread, "General context", "context1").unwrap();
+        assert_eq!(
+            crate::workflow::state(&db, "p:1").unwrap().unwrap()["step"],
+            "owner_question"
+        );
+        assert!(reply_to_question(home.path(), &thread, "yes", "stale", Some("old")).is_err());
+        let pending =
+            dispatcher::enqueue(&db, "p:1", "worker.resume", &json!({"pending":true})).unwrap();
+        assert!(reply_to_question(home.path(), &thread, "yes", "too-early", Some("q1")).is_err());
+        database::finish_intent(home.path(), &pending, &json!({"recorded":true})).unwrap();
+        let id = reply_to_question(
+            home.path(),
+            &thread,
+            "Document existing scripts only",
+            "answer1",
+            Some("q1"),
+        )
+        .unwrap();
+        assert_eq!(
+            reply_to_question(
+                home.path(),
+                &thread,
+                "Document existing scripts only",
+                "answer1",
+                Some("q1")
+            )
+            .unwrap(),
+            id
+        );
+        let state = crate::workflow::state(&db, "p:1").unwrap().unwrap();
+        assert_eq!(state["step"], "supervisor");
+        assert_eq!(state["approved"], false);
+        assert_eq!(
+            state["clarification_answer"]["answer"],
+            "Document existing scripts only"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(
+            reply_to_question(home.path(), &thread, "different", "answer2", Some("q1")).is_err()
+        );
     }
     fn result(role: &str, n: u64, body: &str, decision: Option<&str>) -> RoleResult {
         RoleResult {
@@ -378,7 +516,15 @@ pub fn operational(
             percent_encoding::utf8_percent_encode(item, percent_encoding::NON_ALPHANUMERIC)
         )
     };
-    let body=format!("{event}: {title} ({item}).\n{detail}\nOpen {url}\nThis message is status/context only, never an approval.");
+    let label = match event {
+        "Model fallback" => "Trying another model",
+        "Recovery needed" => "Work needs attention",
+        "Recovery queued" => "Retry queued",
+        "Issue decision / status" => "Update",
+        "Final issue decision" => "Decision",
+        _ => event,
+    };
+    let body = format!("{label}: {title}\n{detail}\nOpen {url}");
     append(
         db,
         &format!("{project}:channel:general:thread"),
@@ -399,13 +545,33 @@ pub fn operational(
         [item],
         |r| r.get(0),
     )?;
-    if let Some(issue) = issue {
+    if let Some(issue) = issue.filter(|_| {
+        matches!(
+            event,
+            "Final issue decision" | "Recovery needed" | "Blocked"
+        )
+    }) {
         dispatcher::enqueue(
             db,
             item,
             "github.status",
-            &json!({"key":key,"issue":issue,"body":body}),
+            &json!({"key":format!("decision:{}",plantool_core::sha256_hex(detail)),"issue":issue,"body":format!("{label}\n\n{detail}"),"publish":true}),
         )?;
     }
     Ok(())
+}
+
+/// Short public explanation; raw errors remain in attempt diagnostics and the audit log.
+pub fn plain_failure(error: &str) -> &'static str {
+    if error.contains("429") {
+        "The model provider is limiting requests. Another available model may be tried."
+    } else if error.contains("No available, allowed route") {
+        "No model is ready for this work. Check model availability and request limits in Settings."
+    } else if error.contains("ReadTimeout") || error.to_ascii_lowercase().contains("timed out") {
+        "The model took too long to reply. Check the attempt details for the next available model or retry."
+    } else if error.contains("JSONDecodeError") || error.contains("invalid_role_result") {
+        "The model's reply could not be used. Another available model may be tried."
+    } else {
+        "This attempt could not finish. Open the item to see the error and the next step."
+    }
 }

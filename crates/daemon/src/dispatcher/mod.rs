@@ -59,8 +59,8 @@ pub fn admit(
             approved || planning,
             "Approved immutable plan required for this hash"
         );
-        let deps:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM work_item_deps d JOIN work_items i ON i.id=d.depends_on_id WHERE d.item_id=?1 AND i.state NOT IN('done','merged'))",[&request.item],|r|r.get(0))?;
-        anyhow::ensure!(!deps, "Dependencies are incomplete");
+        // Planning may proceed while prerequisites are unfinished. Implementation
+        // waits in the durable runtime queue, before a model or coding process starts.
         let generation: u64 = tx.query_row(
             "SELECT coalesce((SELECT generation FROM item_generations WHERE item_id=?1),0)",
             [&request.item],
@@ -216,17 +216,23 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
             tx.execute("INSERT INTO task_progress VALUES(?1,?2,'done',?3,?4) ON CONFLICT(item_id,task_key) DO UPDATE SET status='done',updated_by_attempt=excluded.updated_by_attempt,updated_at=excluded.updated_at",params![result.item,key,result.attempt_id,plantool_core::now()])?;
         }
         crate::workflow::record(home,tx,result,Path::new(&worktree))?;
+        if result.outcome == Outcome::Done { database::set(tx,&format!("format_failures:{}:{}",result.item,result.role),&0u64)?; }
         if result.outcome != Outcome::Done || matches!(result.details,
             Some(plantool_contract::RoleDetails::Triage{..}|plantool_contract::RoleDetails::Strategy{..}|plantool_contract::RoleDetails::Discussion{..})) {
             let facts=crate::workflow::state(tx,&result.item)?.unwrap_or(Value::Null);
             let decision=match &result.details {
-                Some(plantool_contract::RoleDetails::Triage{disposition,reason,duplicate_of})=>format!("Triage: {disposition}. {reason}. Duplicate of: {duplicate_of:?}"),
-                Some(plantool_contract::RoleDetails::Strategy{action,owner,task_key,reason})=>format!("Strategy: {action}. {reason}. Owner: {owner:?}. Task: {task_key:?}"),
+                Some(plantool_contract::RoleDetails::Triage{disposition,reason,duplicate_of})=>format!("Triage: {disposition}. {reason}{}", duplicate_of.map(|n|format!(" Duplicate of #{n}.")).unwrap_or_default()),
+                Some(plantool_contract::RoleDetails::Strategy{action,owner,task_key,reason})=>format!("Decision: {action}. {reason}{}{}", owner.as_ref().map(|o|format!(" Owner: {o}.")).unwrap_or_default(),task_key.as_ref().map(|t|format!(" Task: {t}.")).unwrap_or_default()),
                 Some(plantool_contract::RoleDetails::Discussion{decision:Some(decision),..})=>format!("Discussion recommendation: {decision}"),
                 _=>String::new(),
             };
-            crate::workspace::operational(tx,&result.item,"Issue decision / status",&format!("result:{}",result.attempt_id),
-                &format!("Role: {}. Outcome: {:?}. Reason: {}\n{}\nCurrent step: {}. Frozen: {}. Next action: {}.\nA role recommendation is not owner approval.",result.role,result.outcome,result.summary,decision,facts["step"],facts["frozen"],if facts["frozen"]==true {"Owner: inspect failure and eligible recovery"}else{"Follow the current graph step; owner acts only on an open approval gate"}))?;
+            let final_decision = facts["frozen"] == true || match &result.details {
+                Some(plantool_contract::RoleDetails::Triage{disposition,..}) => disposition != "fits",
+                Some(plantool_contract::RoleDetails::Strategy{action,..}) => action != "retry",
+                _ => false,
+            };
+            crate::workspace::operational(tx,&result.item,if final_decision {"Final issue decision"} else {"Issue decision / status"},&format!("result:{}",result.attempt_id),
+                &if final_decision { format!("{}\nNext action: {}.", if decision.is_empty() { if result.summary.starts_with("Dispatch stopped:") { crate::workspace::plain_failure(&result.summary) } else { &result.summary } } else { &decision }, if facts["frozen"]==true {"Open the item, check what failed, and use Retry if it is available"} else if facts["step"] == "owner_question" {"Reply to the question in the item thread"} else if facts["step"] == "prerequisite_wait" {"We will check the prerequisite and continue automatically"} else {"Review the proposed plan on the issue when it is ready"}) } else { format!("{}\nThe team is continuing this work.", if result.summary.starts_with("Dispatch stopped:") { crate::workspace::plain_failure(&result.summary) } else { &result.summary }) })?;
         }
         let (thread,interrupt):(String,String)=tx.query_row("SELECT thread_id,interrupt_id FROM dispatches WHERE attempt_id=?1",[&result.attempt_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         let resume=plantool_contract::Resume{thread_id:thread,interrupt_id:interrupt,value:body.clone(),idempotency_key:format!("result:{}:{}",result.attempt_id,result.generation),contract_version:plantool_contract::CONTRACT_VERSION,graph_version:plantool_contract::GRAPH_VERSION};
@@ -283,6 +289,41 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
                 review_guide: None,
                 details: None,
             };
+            let raw: String = db.query_row(
+                "SELECT request_json FROM dispatches WHERE attempt_id=?1",
+                [&id],
+                |r| r.get(0),
+            )?;
+            let request: Value = serde_json::from_str(&raw)?;
+            let read = pid.is_none()
+                && result.role != "docs"
+                && request["capability"] == "read"
+                && (!crate::workflow::coding(&result.role)
+                    || crate::loop_engine::read_step(
+                        request["inputs"]["step"].as_str().unwrap_or(""),
+                    )
+                    || request["inputs"]["step"] == "discussion");
+            let blocked:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND state IN('open','pending')) OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status')",[&item],|r|r.get(0))?;
+            let safe_state = crate::workflow::state(&db, &item)?.is_some_and(|s| {
+                s["frozen"] != true
+                    && s["checkpoint_uncertain"] != true
+                    && s["closed_on_github"] != true
+            });
+            if read && !blocked && safe_state {
+                db.execute(
+                    "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
+                    [&id],
+                )?;
+                report(home, &result)?;
+                database::audit(
+                    &db,
+                    "daemon",
+                    "attempt.read_restart",
+                    &id,
+                    &json!({"automatic":true}),
+                )?;
+                continue;
+            }
             report(home, &result)?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute(

@@ -82,6 +82,7 @@ export function WorkspacePage() {
         thread: id,
         body: draft.body,
         idempotency_key: draft.key,
+        ...(thread.question ? {question_id:thread.question.id} : {}),
       });
       setDrafts((d) => ({
         ...d,
@@ -260,7 +261,8 @@ export function WorkspacePage() {
                 void reply();
               }}
             >
-              <label htmlFor="owner-context">Owner reply · context only</label>
+              {thread.question && <section className="panel" role="status"><h3>Answer needed</h3><p>{thread.question.question}</p>{thread.question.settling && <p>Recording the question… You can answer when this finishes.</p>}<p>Your answer queues a read-only review. It does not approve implementation or change approval gates.</p></section>}
+              <label htmlFor="owner-context">{thread.question ? "Your answer" : "Owner reply · context only"}</label>
               <textarea
                 id="owner-context"
                 placeholder={`Share context in ${thread.title}`}
@@ -282,9 +284,9 @@ export function WorkspacePage() {
                 </span>
                 <button
                   className="btn primary"
-                  disabled={!!sending || !drafts[thread.id]?.body.trim()}
+                  disabled={!!sending || !!thread.question?.settling || !drafts[thread.id]?.body.trim()}
                 >
-                  {sending === thread.id ? "Sending…" : "Send context"}
+                  {sending === thread.id ? "Sending…" : thread.question ? "Answer question" : "Send context"}
                 </button>
               </div>
               {sendError && <p role="alert">{sendError}</p>}

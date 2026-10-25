@@ -39,7 +39,7 @@ async def test_project_checkpoints_event_turns_free_sizing_gate_and_return_to_wa
             status=await resume({"id":"due","kind":"sprint_planning_due","payload":{"week":"2026-W43"}},"due")
             for index in range(4):
                 role=facts["discussion"]["speaker"]
-                result={"item":item,"role":role,"attempt_id":f'a{index}',"generation":index+1,"outcome":"done","summary":"Inspected candidate risk","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":None,"review_guide":None,"details":{"kind":"discussion","body":"@CTO inspect contract","decision":"Three prepared items fit" if index==3 else None}}
+                result={"item":item,"role":role,"attempt_id":f'a{index}',"generation":index+1,"outcome":"done","summary":"Inspected candidate risk","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":None,"review_guide":None,"details":{"kind":"discussion","body":f"@CTO inspect contract round {index}","decision":"Three prepared items fit" if index==3 else None}}
                 facts=advance(facts,result);facts.update(generation=index+1,sequence=facts["sequence"]+1)
                 status=await resume(result,f'turn:{index}')
             assert facts["step"]=="sprint_plan"

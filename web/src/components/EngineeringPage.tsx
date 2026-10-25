@@ -1,3 +1,5 @@
+import {SprintBoard} from "./SprintBoard";
+import {NextAction} from "./NextAction";
 import { useCallback, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
@@ -27,7 +29,7 @@ export function EngineeringPage() {
   const active = data?.active.filter((a) => a.project === project?.id) ?? [];
   const worker = status.data?.worker;
   const attention = items.filter(
-    (i) => i.frozen || i.error || i.waiting_gates > 0,
+    (i) => i.frozen || i.error || i.waiting_gates > 0 || i.step === "owner_question",
   );
   return (
     <main className="engineering-page">
@@ -201,6 +203,7 @@ export function EngineeringPage() {
                 <Link to="/settings/github">Review GitHub preflight</Link>
               </aside>
             ) : null}
+            <SprintBoard key={project.id} project={project.id}/>
             {project.scheduler === "escalated" && <RecoveryControls item={`${project.id}:project`} onRecovered={refresh} />}
             {project.error && (
               <p role="alert" className="error">
@@ -242,7 +245,7 @@ export function EngineeringPage() {
                         {a.provider ? `· ${a.provider}` : ""}
                       </small>
                     </span>
-                    <span className="state-chip">{a.state}</span>
+                    <span className="state-chip">{a.state==="retry_wait"?"Waiting to retry":a.state}</span>
                   </Link>
                 ))
               ) : (
@@ -295,6 +298,7 @@ export function EngineeringPage() {
                           {i.waiting_gates === 1 ? "gate" : "gates"}
                         </p>
                       )}
+                      {i.next_action && <p>{i.next_action.message}</p>}
                       {i.error && <p className="error">{i.error}</p>}
                     </Link>
                   ))}
@@ -388,10 +392,11 @@ export function EngineeringItemPage() {
         </p>
       )}
       {!!data.scan_sources?.length && <section className="next-action" aria-label="Scan evidence coverage"><strong>Scan evidence coverage</strong>{data.scan_snapshot&&<p>Evidence snapshot: <code>{data.scan_snapshot}</code>. Upgrading does not refresh historical scan evidence.</p>}{data.scan_sources.map(source=><div key={source.name}><p>{source.name}: {source.available?"available":"unavailable — coverage unknown"}{source.http_status?` (HTTP ${source.http_status})`:""}{source.truncated?" · bounded snapshot, additional pages not inspected":""}</p>{!source.available&&<><p>{source.reason}</p><p>Next: {source.next_step}</p></>}</div>)}<p>Missing optional sources do not establish worker failure or a clean repository.</p></section>}
-      <div className="next-action">
+      <NextAction action={item.next_action}/>
+      {!item.next_action && <div className="next-action">
         <strong>Next action</strong>
         <p>
-          {item.frozen
+          {item.step === "closed" ? "This issue is closed. No further work will run. Check the item thread for any changes that need your attention." : item.step === "owner_question" ? "Answer the specific clarification question in this item’s discussion thread. Your reply resumes read-only review and does not approve implementation." : item.frozen
             ? "Review the failure and recovery state before restarting work. Side effects remain frozen."
             : item.waiting_gates
               ? "Review the current gate and its exact plan hash or commit on GitHub."
@@ -412,10 +417,10 @@ export function EngineeringItemPage() {
             className="btn"
             to={`/workspace?project=${encodeURIComponent(item.project)}&item=${encodeURIComponent(item.id)}`}
           >
-            Open discussion
+            {item.step === "owner_question" ? "Answer in item thread" : "Open discussion"}
           </Link>
         </div>
-      </div>
+      </div>}
       {(data.notification_delivery?.pending ?? 0)>0 && <p role="status">{data.notification_delivery?.pending} issue status update(s) pending GitHub delivery. The item thread already contains them. Check App access/rate limits if this persists; pending informational updates do not block recovery.</p>}
       <Link to="/settings/models">Diagnose model providers</Link>
       {item.frozen && <RecoveryControls item={item.id} onRecovered={refresh} />}
@@ -448,7 +453,7 @@ export function EngineeringItemPage() {
                     {a.role}{" "}
                     <span className="small muted">Attempt {a.generation}</span>
                   </h3>
-                  <span className="state-chip">{a.state}</span>
+                  <span className="state-chip">{a.state==="retry_wait"?"Waiting to retry":a.state}</span>
                 </div>
                 <p>
                   {a.model ?? (a.route==="pending"?"No model started":a.route)}

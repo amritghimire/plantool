@@ -648,3 +648,5 @@ input[type="checkbox"], input[type="radio"] { width: auto; flex: none; accent-co
  .context-composer {padding:12px;flex-shrink:0;}
  .context-composer textarea {min-height:60px;}
 }
+
+.sprint-section{margin:1.5rem 0;padding:1rem;border:1px solid var(--line);border-radius:12px}.sprint-board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:1rem}.sprint-column{min-width:0;background:var(--bg-2);padding:10px;border-radius:8px}.sprint-column .item-card{display:block;margin-bottom:10px;padding:12px}.sprint-column .item-card h4{margin:8px 0;overflow-wrap:anywhere}@media(max-width:1000px){.sprint-board{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.sprint-board{grid-template-columns:1fr}}

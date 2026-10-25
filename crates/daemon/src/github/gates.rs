@@ -514,7 +514,7 @@ pub async fn publish(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
                     &tx,
                     &repo.project,
                     "plan_ready",
-                    &json!({"item":item,"planning_due":crate::scheduler::schedule(&tx,&repo.project,chrono::Utc::now())?.1.is_some()}),
+                    &json!({"item":item,"planning_due":crate::scheduler::planning_open(&tx,&repo.project,chrono::Utc::now())?}),
                     &format!("plan:{gate}"),
                 )?;
             }

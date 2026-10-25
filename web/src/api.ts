@@ -1,3 +1,5 @@
+export type SprintIssue={id:string;issue:number|null;title:string;step:string;membership:string;estimate:string;plan_hash:string;pr:number|null;frozen:boolean};
+export type SprintBoardData={project:string;repository:string;current_week:string;planning_queued:boolean;backlog_count:number;sprints:{id:string;week:string;state:string;issue:number|null;items:SprintIssue[]}[]};
 export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;http_status?:number|null;retry_at?:number|null}[]};
 import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
@@ -58,8 +60,10 @@ export const api = {
   oversight: () => request<{projects:{id:string;name:string|null;version:number;preset:"minimal"|"standard"|"strict";day:number;time:string;timezone:string;review_globs:string[]}[];plans:{item:string;title:string;state:{preset:string;plan_sha:string;phases?:{name:string;tagged:boolean}[]}}[]}>("GET","/api/settings/oversight"),
   saveOversight: (body:{project:string;version:number;preset:string;day:number;time:string;timezone:string;review_globs:string[]}) => request("POST","/api/settings/oversight",body),
   saveReviewTags: (body:{item:string;hash:string;tags:boolean[]}) => request("POST","/api/settings/oversight/tags",body),
-  workspace: () => request<{projects:{id:string;name:string|null}[];threads:{id:string;project:string;item:string|null;channel:string|null;title:string;messages:{id:string;sender:string;body:string;mentions:string[];at:string}[]}[]}>("GET","/api/workspace"),
-  workspaceReply: (body:{thread:string;body:string;idempotency_key:string}) => request<{id:string;authority:string}>("POST","/api/workspace/reply",body),
+  sprints: (project:string) => request<SprintBoardData>("GET",`/api/engineering-os/projects/${encodeURIComponent(project)}/sprints`),
+  planSprint: (project:string,key:string) => request<{queued:boolean;week:string;message:string}>("POST",`/api/engineering-os/projects/${encodeURIComponent(project)}/sprints/plan`,{idempotency_key:key}),
+  workspace: () => request<{projects:{id:string;name:string|null}[];threads:{id:string;project:string;item:string|null;channel:string|null;title:string;question?:{id:string;question:string;settling?:boolean};messages:{id:string;sender:string;body:string;mentions:string[];at:string}[]}[]}>("GET","/api/workspace"),
+  workspaceReply: (body:{thread:string;body:string;idempotency_key:string;question_id?:string}) => request<{id:string;authority:string}>("POST","/api/workspace/reply",body),
   githubPlan: (id:string) => request<{gate:{number:number;hash:string;state:string};summary:string;plan:string;messages:{role:string;body:string}[]}>("GET",`/api/github/plans/${encodeURIComponent(id)}`),
   githubSettings: () => request<{repositories:{project:string;repo_id:number;full_name:string;app_id?:number;installation_id?:number;visibility?:string|null;preflight?:{warnings:string[];advisories?:string[];checked_at?:string}|null}[];status?:{supported:boolean;worker:{available:boolean;message:string}};allowlist:{id:number;login:string}[];sync:{project:string;error:string|null;synced_at:string|null}[]}>("GET","/api/settings/github"),
   configureGithub: (body:{app_id:number;installation_id:number;repo:string;checkout:string;private_key:string|null}) => request<{preflight:{warnings:string[];advisories?:string[]};project?:string}>("POST","/api/settings/github",body),

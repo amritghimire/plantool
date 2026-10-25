@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { api } from "../api";
 import { EngineeringPage, EngineeringItemPage } from "./EngineeringPage";
 import type { EngineeringOverview, EngineeringDetail } from "../engineering";
+vi.mock("./SprintBoard",()=>({SprintBoard:()=>null}));
 vi.mock("./GithubSettings", () => ({ GithubSettings: () => null }));
 const overview: EngineeringOverview = {
   projects: [

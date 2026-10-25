@@ -87,11 +87,21 @@ async fn fenced_chat(
     body: Value,
     execution: &crate::execution::Execution,
     generation: u64,
+    home: &Path,
+    attempt: Option<&str>,
 ) -> anyhow::Result<Reply> {
+    if let Some(attempt) = attempt {
+        let cancelled: bool = database::open(home)?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND state='cancelled')",
+            [attempt],
+            |r| r.get(0),
+        )?;
+        anyhow::ensure!(!cancelled, "Work item closed or cancelled");
+    }
     let future = gateway.chat(provider, body);
     tokio::pin!(future);
     loop {
-        tokio::select! {reply=&mut future=>return reply,_=tokio::time::sleep(std::time::Duration::from_millis(50))=>{let status=execution.status();anyhow::ensure!(!status.stopped&&status.generation==generation,"Stop All cancelled the model request");}}
+        tokio::select! {reply=&mut future=>return reply,_=tokio::time::sleep(std::time::Duration::from_millis(50))=>{if let Some(attempt)=attempt { let cancelled:bool=database::open(home)?.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND state='cancelled')",[attempt],|r|r.get(0))?; anyhow::ensure!(!cancelled,"Work item closed or cancelled"); } let status=execution.status();anyhow::ensure!(!status.stopped&&status.generation==generation,"Stop All cancelled the model request");}}
     }
 }
 pub async fn complete(
@@ -286,6 +296,8 @@ pub async fn complete(
         body.clone(),
         &execution,
         execution_generation,
+        home,
+        context.attempt_id.as_deref(),
     )
     .await;
     if reply.as_ref().is_err() || reply.as_ref().is_ok_and(|r| r.status >= 500) {
@@ -298,6 +310,8 @@ pub async fn complete(
                 body,
                 &execution,
                 execution_generation,
+                home,
+                context.attempt_id.as_deref(),
             )
             .await;
         }
@@ -305,12 +319,24 @@ pub async fn complete(
     let reply = match reply {
         Ok(reply) => reply,
         Err(error) => {
-            router::exhaust(home, &selected, None, database::unix_now())?;
+            router::exhaust(
+                home,
+                &selected,
+                Some(database::unix_now() + 60),
+                database::unix_now(),
+            )?;
             return Err(error);
         }
     };
     if router::quota(reply.status, &reply.body) || reply.status >= 500 {
-        router::exhaust(home, &selected, reply.reset, database::unix_now())?;
+        router::exhaust(
+            home,
+            &selected,
+            reply
+                .reset
+                .or_else(|| (reply.status >= 500).then(|| database::unix_now() + 60)),
+            database::unix_now(),
+        )?;
         if let Some(attempt) = &context.attempt_id {
             db.execute(
                 "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",

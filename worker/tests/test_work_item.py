@@ -33,3 +33,27 @@ def test_failed_triage_retries_route_before_escalating():
     assert route(state,{"outcome":"failed"})['step']=='triage'
     state['route_retry']=False
     assert route(state,{"outcome":"failed"})['frozen'] is True
+
+
+def test_clarification_waits_for_owner_without_freezing_or_implementation():
+    state = {"step":"supervisor", "supervisor_rounds":2, "approved":False}
+    updated = route(state, {"outcome":"done", "details":{"action":"clarify", "reason":"Should scope remain documentation-only?"}})
+    assert updated["step"] == "owner_question"
+    assert not updated.get("frozen", False)
+    assert updated["approved"] is False
+    assert updated["owner_question"]["question"] == "Should scope remain documentation-only?"
+
+def test_prerequisite_wait_has_no_implementation_authority():
+    state={"step":"supervisor","supervisor_rounds":1,"approved":False}
+    updated=route(state,{"outcome":"done","details":{"action":"wait","task_key":"pr:3"}})
+    assert updated["step"]=="prerequisite_wait"
+    assert updated["approved"] is False
+
+def test_identical_discussion_moves_to_proposal_without_claiming_agreement():
+    from plantool_worker.discussion import advance
+    state={"step":"discussion","discussion":{"round":1,"after":"plan","previous_body":"same update"}}
+    result={"outcome":"done","details":{"body":"Same  update","decision":None}}
+    updated=advance(state,result)
+    assert updated["step"]=="plan"
+    assert "no new information" in updated["discussion_summary"]
+    assert not updated.get("approved",False)

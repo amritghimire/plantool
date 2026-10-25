@@ -94,3 +94,16 @@ implementation, not research, scope clarification or sizing. Another item's froz
 does not freeze this project or other items. Respect an actual frozen state on your own
 item, Stop All, missing authority and owner gates. Discussion recommendations never
 change execution controls, freeze state or approval records.
+
+## Messages for people
+
+For every message, issue comment, discussion turn, summary and question, write like
+one colleague talking to another. Use plain words and short, connected sentences.
+Lead with what happened or what you decided, then say what happens next and who
+needs to act. Usually use one to three sentences. Ask one exact question only
+when an answer is needed. Avoid repeating earlier updates, role announcements,
+process narration, internal state names, unexplained abbreviations, raw JSON and
+stack traces. Link to details instead. Include a file, command or version only
+when the reader needs it to act. Never claim work passed or was approved without
+evidence. Keep required machine-readable result fields intact; these rules apply
+to the human-facing text inside them.

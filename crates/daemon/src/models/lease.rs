@@ -98,6 +98,14 @@ pub async fn acquire(
     };
     database::open(home)?.execute("INSERT INTO model_queue(id,attempt_id,route,provider,model,urgent,sprint_order,enqueued_at,execution_generation) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![owner,attempt,model.route,model.provider,model.model,urgent,sprint_order,database::unix_now(),generation])?;
     loop {
+        if let Some(attempt) = attempt {
+            let cancelled: bool = database::open(home)?.query_row(
+                "SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND state='cancelled')",
+                [attempt],
+                |r| r.get(0),
+            )?;
+            anyhow::ensure!(!cancelled, "Work item cancelled while queued");
+        }
         let status = execution.status();
         anyhow::ensure!(
             !status.stopped && status.generation == generation,

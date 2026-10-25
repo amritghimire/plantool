@@ -1,0 +1,46 @@
+name: Continuous workflow checks
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: continuity-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  continuity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: amritghimire/plantool-playground
+          ref: 54c1183d54e33f0978a01add342c4d967a46dabb
+          path: .continuity-playground
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          python-version: '3.12'
+      - run: scripts/check-continuity.sh "$GITHUB_WORKSPACE/.continuity-playground"
+        env:
+          CARGO_BUILD_JOBS: '2'
+      - if: always()
+        run: |
+          {
+            echo '### Workflow checks'
+            echo 'Pinned playground baseline plus daemon, browser and worker regression tests.'
+            echo 'Coverage includes fallback, cooldown waits, restart recovery, prerequisites, clarification, approvals, closure and the global model lease.'
+            echo 'No live provider accounts or native macOS approval flow are exercised here.'
+          } >> "$GITHUB_STEP_SUMMARY"

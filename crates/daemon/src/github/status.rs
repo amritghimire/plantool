@@ -30,6 +30,15 @@ pub async fn deliver(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::R
             break;
         }
         let payload: Value = serde_json::from_str(&raw)?;
+        // Older queued operational notices must not flood issues after upgrading.
+        if payload["publish"] != true {
+            database::finish_intent(
+                home,
+                &id,
+                &json!({"suppressed":"routine operational update"}),
+            )?;
+            continue;
+        }
         let issue = payload["issue"]
             .as_u64()
             .ok_or_else(|| anyhow::anyhow!("Status issue missing"))?;
@@ -143,6 +152,31 @@ mod tests {
             .unwrap(),
             1
         );
+        for event in [
+            "Recovery queued",
+            "Model fallback",
+            "Issue decision / status",
+            "Work remains frozen",
+            "Step recovered",
+        ] {
+            crate::workspace::operational(&db, "i", event, event, "Routine progress").unwrap();
+        }
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='github.status'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        crate::dispatcher::enqueue(
+            &db,
+            "i",
+            "github.status",
+            &json!({"key":"old-fallback","issue":1,"body":"Model fallback"}),
+        )
+        .unwrap();
         let api = Fake(Default::default());
         let repo = Repository {
             project: "p".into(),
