@@ -156,6 +156,21 @@ pub fn next_action(db: &rusqlite::Connection, item: &str, state: &Value) -> anyh
             );
         }
     }
+    let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle'))",[item],|r|r.get(0))?;
+    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND kind LIKE 'worker.%' AND delivered_at IS NULL)",[item],|r|r.get(0))?;
+    if !active
+        && !pending
+        && crate::graph_recovery::safe_step(step)
+        && state["frozen"] != true
+        && !matches!(
+            step,
+            "backlog" | "declined_wait" | "project_wait" | "await_sprint_gate"
+        )
+    {
+        return Ok(
+            json!({"kind":"stalled","message":"This step is not running. We are checking its saved progress."}),
+        );
+    }
     let (kind, message, href, button) = if step == "closed" || step == "merged" {
         ("done", "This item is finished.", String::new(), "")
     } else if step == "owner_question" {

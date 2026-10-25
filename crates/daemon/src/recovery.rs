@@ -36,13 +36,13 @@ pub fn snapshot(home: &Path, item: &str) -> anyhow::Result<Value> {
     let eligible = state["checkpoint_uncertain"] != true
         && state["frozen"] == true
         && state["step"] == "escalated"
-        && status == "failed"
+        && ["failed", "completed"].contains(&status.as_str())
         && read
         && !active
         && !gates
         && !external;
     Ok(
-        json!({"state":state,"attempt_id":id,"step":step,"eligible":eligible,"active":active,"gates":gates,"external":external}),
+        json!({"state":state,"attempt_id":id,"step":step,"eligible":eligible,"review":status=="completed","active":active,"gates":gates,"external":external}),
     )
 }
 pub fn retry(home: &Path, item: &str, expected: &str) -> anyhow::Result<Value> {
@@ -71,6 +71,9 @@ pub fn retry(home: &Path, item: &str, expected: &str) -> anyhow::Result<Value> {
     state["step"] = facts["step"].clone();
     state["frozen"] = json!(false);
     state["route_retry"] = json!(false);
+    if facts["step"] == "supervisor" {
+        state["supervisor_rounds"] = json!(0);
+    }
     state["sequence"] = json!(state["sequence"].as_u64().unwrap_or(0) + 1);
     state["generation"] = json!(tx.query_row(
         "SELECT generation FROM item_generations WHERE item_id=?1",
@@ -176,6 +179,32 @@ mod tests {
         db.execute("INSERT INTO attempts VALUES('a','i','pm',1,'route','failed','/checkout','now','now','{}','attempt','{}',0)",[]).unwrap();
         db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('a','{\"inputs\":{\"step\":\"triage\"},\"capability\":\"read\"}','d','i','old',0)",[]).unwrap();
         temp
+    }
+    #[test]
+    fn completed_supervisor_decision_can_be_reviewed_without_approving() {
+        let t = fixture();
+        let db = database::open(t.path()).unwrap();
+        db.execute(
+            "UPDATE attempts SET role='supervisor',state='completed'",
+            [],
+        )
+        .unwrap();
+        db.execute("UPDATE dispatches SET request_json='{\"inputs\":{\"step\":\"supervisor\"},\"capability\":\"read\"}'",[]).unwrap();
+        db.execute(
+            "UPDATE workflow_items SET state_json=json_set(state_json,'$.supervisor_rounds',3)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(snapshot(t.path(), "i").unwrap()["eligible"], true);
+        retry(t.path(), "i", "a").unwrap();
+        let state = workflow::state(&db, "i").unwrap().unwrap();
+        assert_eq!(state["step"], "supervisor");
+        assert_eq!(state["supervisor_rounds"], 0);
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
     }
     #[test]
     fn recovery_is_audited_preserves_attempt_and_refuses_replay() {

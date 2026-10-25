@@ -21,9 +21,7 @@ export function RecoveryControls({
       {data?.eligible && (
         <>
           <p>
-            Retry {stepLabel(data.step)} in a new checkpoint history. This does
-            not approve a plan, milestone or PR. Recover the project scheduler
-            separately if it is frozen.
+            {data.review ? "Review" : "Retry"} {stepLabel(data.step)} using current evidence. This does not approve changes. The project scheduler has its own recovery action if it is paused.
           </p>
           <button
             className="btn"
@@ -42,7 +40,7 @@ export function RecoveryControls({
               }
             }}
           >
-            {busy ? "Queueing recovery…" : "Retry failed step with passkey"}
+            {busy ? "Queueing recovery…" : data.review ? "Review paused step with passkey" : "Retry failed step with passkey"}
           </button>
         </>
       )}

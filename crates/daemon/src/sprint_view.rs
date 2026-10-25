@@ -17,6 +17,55 @@ pub fn week(
     let local = now.with_timezone(&zone).iso_week();
     Ok(format!("{:04}-W{:02}", local.year(), local.week()))
 }
+pub fn progress(db: &rusqlite::Connection, project: &str) -> anyhow::Result<Value> {
+    let item = format!("{project}:project");
+    let state = workflow::state(db, &item)?.unwrap_or(Value::Null);
+    let step = state["step"].as_str().unwrap_or("");
+    let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle'))",[&item],|r|r.get(0))?;
+    let held:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM leases l JOIN attempts a ON a.id=l.holder_attempt_id WHERE a.item_id=?1)",[&item],|r|r.get(0))?;
+    let timed_wait:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM attempt_waits w JOIN attempts a ON a.id=w.attempt_id WHERE a.item_id=?1 AND a.state='queued')",[&item],|r|r.get(0))?;
+    let recover:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND kind='worker.recover' AND delivered_at IS NULL)",[&item],|r|r.get(0))?;
+    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND kind LIKE 'worker.%' AND delivered_at IS NULL)",[&item],|r|r.get(0))?;
+    let events:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM project_events WHERE project_id=?1 AND delivered_at IS NULL AND kind='sprint_planning_due')",[project],|r|r.get(0))?;
+    let waiter: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM graph_waiters WHERE item_id=?1)",
+        [&item],
+        |r| r.get(0),
+    )?;
+    let checkpoint =
+        database::get::<Value>(db, &format!("graph.status:{item}"))?.unwrap_or(Value::Null);
+    let busy = matches!(step, "discussion" | "sprint_plan" | "publish_plans");
+    let (status, message) = if state["frozen"] == true {
+        (
+            "blocked",
+            "Planning is paused. Open the project scheduler to review its recovery action.",
+        )
+    } else if held {
+        ("running", "Planning is running.")
+    } else if active && timed_wait {
+        (
+            "waiting",
+            "Planning is waiting for an available model and will retry automatically.",
+        )
+    } else if active {
+        (
+            "queued",
+            "Planning is queued. It will start when a model is free.",
+        )
+    } else if recover {
+        ("restoring", "Restoring planning after a restart.")
+    } else if checkpoint["state"] == "cancelled" || ((events || busy) && !waiter && !pending) {
+        ("stalled","Planning has not started. We are checking its saved progress; you can also request a resume.")
+    } else if pending || (events && waiter) {
+        ("queued", "Planning is waiting for the worker to continue.")
+    } else {
+        (
+            "idle",
+            "No planning attempt is running. Prepared issues can be selected when planning starts.",
+        )
+    };
+    Ok(json!({"state":status,"message":message,"scheduler":item}))
+}
 pub fn view(home: &Path, project: &str) -> anyhow::Result<Value> {
     let db = database::open(home)?;
     let name: String = db.query_row(
@@ -34,9 +83,9 @@ pub fn view(home: &Path, project: &str) -> anyhow::Result<Value> {
         sprint["items"] = json!(items);
     }
     let backlog:u64=db.query_row("SELECT count(*) FROM work_items WHERE project_id=?1 AND github_issue_number IS NOT NULL AND closed_at IS NULL AND (sprint_id IS NULL OR NOT EXISTS(SELECT 1 FROM sprint_items si WHERE si.item_id=work_items.id AND si.sprint_id=work_items.sprint_id AND si.state IN('pending','approved','started')))",[project],|r|r.get(0))?;
-    let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM project_events WHERE project_id=?1 AND kind='sprint_planning_due' AND delivered_at IS NULL)",[project],|r|r.get(0))?;
+    let planning = progress(&db, project)?;
     Ok(
-        json!({"project":project,"repository":name,"current_week":current,"sprints":sprints,"backlog_count":backlog,"planning_queued":pending || crate::workflow::state(&db,&format!("{project}:project"))?.is_some_and(|s|matches!(s["step"].as_str(),Some("discussion"|"sprint_plan"|"publish_plans")))}),
+        json!({"planning":planning,"project":project,"repository":name,"current_week":current,"sprints":sprints,"backlog_count":backlog,"planning_queued":matches!(planning["state"].as_str(),Some("running"|"queued"|"restoring"|"waiting"))}),
     )
 }
 pub fn trigger(home: &Path, project: &str, key: &str) -> anyhow::Result<Value> {
@@ -82,6 +131,7 @@ pub fn trigger(home: &Path, project: &str, key: &str) -> anyhow::Result<Value> {
                 &format!("manual-prepare:{week}:{key}"),
             )?;
         }
+        scheduler::deliver(tx, &item)?;
         database::audit(
             tx,
             "human",
@@ -90,7 +140,7 @@ pub fn trigger(home: &Path, project: &str, key: &str) -> anyhow::Result<Value> {
             &json!({"week":week}),
         )?;
         Ok(
-            json!({"queued":true,"week":week,"message":"Planning is queued. Approved work will continue; proposed changes still need approval."}),
+            json!({"queued":true,"week":week,"message":"Planning requested. The board will show when work starts. Approved work and approval requirements are unchanged."}),
         )
     })
 }

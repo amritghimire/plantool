@@ -41,7 +41,44 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
                                 && e.detail.contains("Stale interrupt or cancelled graph")
                         }) =>
                 {
-                    Ok(json!({"ignored":"stale or cancelled interrupt"}))
+                    let restored = if let Some(item) = body["thread_id"].as_str() {
+                        crate::graph_recovery::restore(
+                            &state.config.home,
+                            item,
+                            "orphaned_interrupt",
+                        )?
+                    } else {
+                        false
+                    };
+                    if restored {
+                        Ok(json!({"restored":true}))
+                    } else {
+                        let db = database::open(&state.config.home)?;
+                        let superseded = if let Some(item) = body["thread_id"].as_str() {
+                            crate::workflow::state(&db, item)?.is_some_and(|s| {
+                                s["frozen"] == true
+                                    || matches!(
+                                        s["step"].as_str(),
+                                        Some(
+                                            "closed"
+                                                | "merged"
+                                                | "escalated"
+                                                | "loop_complete"
+                                                | "owner_question"
+                                                | "prerequisite_wait"
+                                                | "declined_closed"
+                                        )
+                                    )
+                            })
+                        } else {
+                            false
+                        };
+                        if superseded {
+                            Ok(json!({"ignored":"terminal or frozen graph"}))
+                        } else {
+                            Err(error)
+                        }
+                    }
                 }
                 other => other,
             }
@@ -63,6 +100,7 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
     if state.runs.execution.status().stopped {
         return Ok(());
     }
+    crate::graph_recovery::reconcile(state).await?;
     let db = database::open(&state.config.home)?;
     let catalog_due:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM attempt_waits w JOIN attempts a ON a.id=w.attempt_id WHERE a.state='queued' AND w.reason NOT LIKE 'Waiting for a prerequisite work item%')",[],|r|r.get(0))?;
     let last = database::get::<i64>(&db, "automatic.catalog_checked_at")?.unwrap_or(0);

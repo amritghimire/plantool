@@ -90,15 +90,23 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             }
         }
     });
+    let scheduler_home = config.home.clone();
+    let scheduler_job = tokio::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(5));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            timer.tick().await;
+            if let Err(error) = scheduler::tick(&scheduler_home, chrono::Utc::now()) {
+                tracing::warn!("Project scheduler paused: {error}");
+            }
+        }
+    });
     let github_home = config.home.clone();
     let github_sync = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            if let Err(error) = scheduler::tick(&github_home, chrono::Utc::now()) {
-                tracing::warn!("Project scheduler paused: {error}");
-            }
             if let Err(e) = github::sync::tick(&github_home).await {
                 tracing::warn!("GitHub sync: {e}");
             }
@@ -226,6 +234,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     }
     github_sync.abort();
+    scheduler_job.abort();
     idle_sweep.abort();
     dispatch_job.abort();
     retention_job.abort();
@@ -246,3 +255,5 @@ pub mod engineering_view;
 pub mod recovery;
 
 pub mod sprint_view;
+
+pub mod graph_recovery;

@@ -49,7 +49,9 @@ pub fn context(home: &Path, item: &str) -> anyhow::Result<Value> {
         [project],
         |r| r.get(0),
     )?;
-    Ok(json!({"state":state,"policy_version":policy}))
+    Ok(
+        json!({"state":state,"policy_version":policy,"execution_enabled":!crate::execution::Execution::load(home)?.status().stopped}),
+    )
 }
 pub fn check(db: &rusqlite::Connection, request: &Dispatch) -> anyhow::Result<bool> {
     let Some(s) = state(db, &request.item)? else {

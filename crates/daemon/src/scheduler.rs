@@ -108,7 +108,7 @@ pub fn event(
     )?;
     Ok(id)
 }
-fn deliver(tx: &Transaction<'_>, item: &str) -> anyhow::Result<()> {
+pub(crate) fn deliver(tx: &Transaction<'_>, item: &str) -> anyhow::Result<()> {
     let Some((thread, interrupt, kind)) = tx
         .query_row(
             "SELECT thread_id,interrupt_id,kind FROM graph_waiters WHERE item_id=?1",

@@ -180,7 +180,7 @@ async fn recovery(
         None
     };
     Ok(Json(
-        json!({"routing_error":routing_error,"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":if facts["eligible"]==true{"Retry this failed read-only step. Existing approvals and old checkpoints are preserved."}else{"Recovery requires a failed read-only step, no active/uncertain attempts, no pending external effects and no open gates. Reconcile other work manually."}}),
+        json!({"routing_error":routing_error,"review":facts["review"],"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":if facts["eligible"]==true {if facts["review"]==true {"Review this paused planning decision using current evidence. Existing approvals are preserved."}else{"Retry this failed read-only step. Existing approvals and old checkpoints are preserved."}}else{"Recovery requires a failed read-only step, no active/uncertain attempts, no pending external effects and no open gates. Reconcile other work manually."}}),
     ))
 }
 async fn retry(
@@ -239,9 +239,10 @@ async fn plan_sprint(
             "Resume execution before requesting sprint planning.".into(),
         ));
     }
-    crate::sprint_view::trigger(&state.config.home, &id, &body.idempotency_key)
-        .map(Json)
-        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))
+    let result = crate::sprint_view::trigger(&state.config.home, &id, &body.idempotency_key)
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
+    crate::graph_recovery::reconcile_project(&state, &id).await?;
+    Ok(Json(result))
 }
 pub fn browser_routes() -> Router<AppState> {
     Router::new()
