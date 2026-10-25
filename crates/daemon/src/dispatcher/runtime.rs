@@ -286,7 +286,7 @@ async fn run(
     if read_call && selected.route.adapter != "codex" {
         let prompt = crate::instructions::assemble(home, request, id)?;
         database::open(home)?.execute(
-            "UPDATE attempts SET state='running',model_route=?2 WHERE id=?1",
+            "UPDATE attempts SET state='starting',model_route=?2 WHERE id=?1",
             params![id, selected.name],
         )?;
         database::open(home)?.execute(

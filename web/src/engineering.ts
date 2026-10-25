@@ -58,6 +58,9 @@ export type EngineeringOverview = {
   }[];
 };
 export type EngineeringDetail = {
+  scan_snapshot?: string|null;
+  scan_sources?: {name:string;available:boolean;http_status:number|null;reason:string;next_step:string;truncated:boolean}[];
+  notification_delivery?: {pending:number};
   item: EngineeringItem;
   repository: string | null;
   base: string;

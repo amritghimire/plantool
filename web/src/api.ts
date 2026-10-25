@@ -1,3 +1,4 @@
+export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;http_status?:number|null;retry_at?:number|null}[]};
 import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
@@ -48,7 +49,7 @@ export const api = {
   setupProgress: () => request<{step:string;project:string|null}>("GET","/api/engineering-os/setup"),
   saveSetupProgress: (body:{step:string;project:string|null}) => request<{step:string;project:string|null}>("POST","/api/engineering-os/setup",body),
   engineering: () => request<import("./engineering").EngineeringOverview>("GET","/api/engineering-os/projects"),
-  recovery: (item:string) => request<{eligible:boolean;attempt_id:string;step:string;message:string}>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`),
+  recovery: (item:string) => request<{eligible:boolean;attempt_id:string;step:string;message:string;routing_error?:string|null}>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`),
   retryEngineering: (item:string,attempt_id:string) => request<{queued:boolean}>("POST",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`,{attempt_id}),
   engineeringItem: (item:string) => request<import("./engineering").EngineeringDetail>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}`),
   loop: () => request<{projects:{id:string;name:string|null;version:number;scan_day:number;scan_time:string;nix_enabled:boolean}[];declines:{item:string;title:string;reason:string;reset_at:string;active:boolean}[];notifications:{id:string;body:string;created_at:string}[]}>("GET","/api/settings/loop"),
@@ -64,8 +65,9 @@ export const api = {
   configureGithub: (body:{app_id:number;installation_id:number;repo:string;checkout:string;private_key:string|null}) => request<{preflight:{warnings:string[];advisories?:string[]};project?:string}>("POST","/api/settings/github",body),
   githubPreflight: (project:string) => request<{warnings:string[];advisories?:string[]}>("POST","/api/settings/github/preflight",{project}),
   githubAllowlist: (login:string,remove:boolean) => request("POST","/api/settings/github/allowlist",{login,remove}),
-  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null}[]}>("GET","/api/settings/models"),
+  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null;diagnostic?:ProviderDiagnostic|null}[]}>("GET","/api/settings/models"),
   saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),
+  diagnoseModel: (route:string) => request<ProviderDiagnostic>("POST","/api/settings/models/diagnose",{route}),
   verifyModels: () => request("POST","/api/settings/models/verify",{}),
   workerStatus: () => request<{worker:{available:boolean;message:string};items?:{item:string;title:string;state:{step:string;frozen?:boolean};error:string|null;summary:string|null}[]}>("GET","/api/engineering-os/status"),
   repairWorker: () => request<{worker:{available:boolean;message:string}}>("POST","/api/engineering-os/repair", {}),

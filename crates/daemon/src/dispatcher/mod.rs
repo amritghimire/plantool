@@ -1,7 +1,7 @@
 //! Durable dispatch admission. Graph events are claims, never authority.
 use crate::{artifacts, database};
 use plantool_contract::{Dispatch, DispatchReply, Outcome, RoleResult};
-use rusqlite::{params, Transaction};
+use rusqlite::params;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 pub fn item(db: &rusqlite::Connection, id: &str) -> anyhow::Result<(String, PathBuf)> {
@@ -106,7 +106,7 @@ pub fn admit(
     Ok(reply)
 }
 pub fn enqueue(
-    tx: &Transaction<'_>,
+    tx: &rusqlite::Connection,
     aggregate: &str,
     kind: &str,
     payload: &Value,
@@ -216,6 +216,18 @@ pub fn report(home: &Path, result: &RoleResult) -> anyhow::Result<Value> {
             tx.execute("INSERT INTO task_progress VALUES(?1,?2,'done',?3,?4) ON CONFLICT(item_id,task_key) DO UPDATE SET status='done',updated_by_attempt=excluded.updated_by_attempt,updated_at=excluded.updated_at",params![result.item,key,result.attempt_id,plantool_core::now()])?;
         }
         crate::workflow::record(home,tx,result,Path::new(&worktree))?;
+        if result.outcome != Outcome::Done || matches!(result.details,
+            Some(plantool_contract::RoleDetails::Triage{..}|plantool_contract::RoleDetails::Strategy{..}|plantool_contract::RoleDetails::Discussion{..})) {
+            let facts=crate::workflow::state(tx,&result.item)?.unwrap_or(Value::Null);
+            let decision=match &result.details {
+                Some(plantool_contract::RoleDetails::Triage{disposition,reason,duplicate_of})=>format!("Triage: {disposition}. {reason}. Duplicate of: {duplicate_of:?}"),
+                Some(plantool_contract::RoleDetails::Strategy{action,owner,task_key,reason})=>format!("Strategy: {action}. {reason}. Owner: {owner:?}. Task: {task_key:?}"),
+                Some(plantool_contract::RoleDetails::Discussion{decision:Some(decision),..})=>format!("Discussion recommendation: {decision}"),
+                _=>String::new(),
+            };
+            crate::workspace::operational(tx,&result.item,"Issue decision / status",&format!("result:{}",result.attempt_id),
+                &format!("Role: {}. Outcome: {:?}. Reason: {}\n{}\nCurrent step: {}. Frozen: {}. Next action: {}.\nA role recommendation is not owner approval.",result.role,result.outcome,result.summary,decision,facts["step"],facts["frozen"],if facts["frozen"]==true {"Owner: inspect failure and eligible recovery"}else{"Follow the current graph step; owner acts only on an open approval gate"}))?;
+        }
         let (thread,interrupt):(String,String)=tx.query_row("SELECT thread_id,interrupt_id FROM dispatches WHERE attempt_id=?1",[&result.attempt_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         let resume=plantool_contract::Resume{thread_id:thread,interrupt_id:interrupt,value:body.clone(),idempotency_key:format!("result:{}:{}",result.attempt_id,result.generation),contract_version:plantool_contract::CONTRACT_VERSION,graph_version:plantool_contract::GRAPH_VERSION};
         enqueue(tx,&result.item,"worker.resume",&serde_json::to_value(resume)?)?;

@@ -11,6 +11,12 @@ pub fn read_step(step: &str) -> bool {
         "triage" | "scan_devops" | "scan_qa" | "scan_pm" | "route_finding"
     )
 }
+pub fn scan_sources(context: &Value) -> Vec<Value> {
+    ["ci","dependency_advisories"].into_iter().filter_map(|name|{
+        let source=context.get(name)?;
+        Some(json!({"name":name,"available":source["available"]==true,"http_status":source["http_status"],"reason":source["reason"].as_str().unwrap_or("Source unavailable in this scan snapshot"),"next_step":source["next_step"].as_str().unwrap_or("Owner: check GitHub App source read permissions and repository feature settings; continue with partial coverage"),"truncated":source["truncated"]==true}))
+    }).collect()
+}
 pub fn validate(result: &RoleResult, s: &Value) -> anyhow::Result<()> {
     ensure!(
         result.tasks_done.is_empty() && result.artifacts.is_empty() && result.checks.is_empty(),
@@ -104,6 +110,16 @@ pub fn record(tx: &Transaction<'_>, result: &RoleResult, s: &mut Value) -> anyho
         }
         Some(RoleDetails::Scan { summary }) if step == "scan_devops" || step == "scan_qa" => {
             s[format!("{step}_summary")] = json!(summary);
+            let gaps: Vec<Value> = scan_sources(&s["loop_context"])
+                .into_iter()
+                .filter(|v| v["available"] == false)
+                .collect();
+            if !gaps.is_empty() {
+                s["scan_partial"] = json!(true);
+                s["scan_coverage_gaps"] = json!(gaps);
+                crate::workspace::operational(tx,&result.item,"Scan coverage incomplete",&format!("scan-coverage:{}",result.attempt_id),
+                    &format!("Available-source scan continued. Unavailable sources remain unknown, not clean: {}. Owner: check GitHub App read permissions and repository feature availability. No model/worker Repair or global hold is implied.",s["scan_coverage_gaps"]))?;
+            }
             s["step"] = json!(if step == "scan_devops" {
                 "scan_qa"
             } else {

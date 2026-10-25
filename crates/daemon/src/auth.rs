@@ -907,6 +907,7 @@ mod tests {
     fn approvals_and_existing_security_changes_require_assertions() {
         for path in [
             "/api/settings/difftool",
+            "/api/settings/models/diagnose",
             "/api/settings/loop",
             "/api/settings/loop/override",
             "/api/settings/worktree-dir",

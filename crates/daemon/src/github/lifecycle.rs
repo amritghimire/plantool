@@ -61,8 +61,17 @@ pub(super) async fn write(
     let previous = {
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let status_comment = if key.starts_with("status:") && method == "POST" {
+            let expected: Option<String> = tx.query_row("SELECT '/repos/'||g.full_name||'/issues/'||i.github_issue_number||'/comments' FROM work_items i JOIN github_repositories g ON g.project_id=i.project_id WHERE i.id=?1 AND i.github_issue_number IS NOT NULL",[item],|r|r.get(0)).optional()?;
+            expected.as_deref() == Some(path)
+                && body["body"]
+                    .as_str()
+                    .is_some_and(|b| b.starts_with("PlanTool status update (not an approval)"))
+        } else {
+            false
+        };
         ensure!(
-            workflow::state(&tx, item)?.is_some_and(|s| s["frozen"] != true),
+            status_comment || workflow::state(&tx, item)?.is_some_and(|s| s["frozen"] != true),
             "Item is frozen"
         );
         tx.execute("INSERT OR IGNORE INTO workflow_actions(id,item_id,kind,payload_json) VALUES(?1,?2,?3,?4)",params![id,item,key,payload.to_string()])?;

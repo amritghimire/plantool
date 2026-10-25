@@ -164,8 +164,23 @@ async fn recovery(
 ) -> Result<Json<Value>, ApiError> {
     human(&state, &headers)?;
     let facts = crate::recovery::snapshot(&state.config.home, &id)?;
+    let routing_error = if facts["eligible"] == true {
+        let db = crate::database::open(&state.config.home)?;
+        let (project,role):(String,String)=db.query_row("SELECT i.project_id,a.role FROM work_items i JOIN attempts a ON a.item_id=i.id WHERE a.id=?1",[facts["attempt_id"].as_str().unwrap_or("")],|r|Ok((r.get(0)?,r.get(1)?))).map_err(anyhow::Error::from)?;
+        crate::models::router::select(
+            &state.config.home,
+            &project,
+            &id,
+            &role,
+            crate::database::unix_now(),
+        )
+        .err()
+        .map(|e| e.to_string())
+    } else {
+        None
+    };
     Ok(Json(
-        json!({"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":if facts["eligible"]==true{"Retry this failed read-only step. Existing approvals and old checkpoints are preserved."}else{"Recovery requires a failed read-only step, no active/uncertain attempts, no pending external effects and no open gates. Reconcile other work manually."}}),
+        json!({"routing_error":routing_error,"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":if facts["eligible"]==true{"Retry this failed read-only step. Existing approvals and old checkpoints are preserved."}else{"Recovery requires a failed read-only step, no active/uncertain attempts, no pending external effects and no open gates. Reconcile other work manually."}}),
     ))
 }
 async fn retry(

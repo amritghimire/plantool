@@ -2290,3 +2290,36 @@ fn discussion_instructions_distinguish_current_facts_from_historical_outages() {
     assert!(prompt.contains("Empty plan hashes before approval are normal"));
     assert!(prompt.contains("not proof of a current worker outage"));
 }
+
+#[test]
+fn partial_scan_advances_without_claiming_missing_advisories_are_clean() {
+    let f = Fixture::new();
+    let mut db = database::open(&f.home).unwrap();
+    let mut state = f.state();
+    state["step"] = json!("scan_devops");
+    state["loop_context"] = json!({"ci":{"available":true,"runs":[]},"dependency_advisories":{"available":false,"http_status":403,"reason":"Access denied","next_step":"Owner: enable read access"}});
+    let result = RoleResult {
+        item: f.item.clone(),
+        role: "devops".into(),
+        attempt_id: "scan-result".into(),
+        generation: 1,
+        outcome: Outcome::Done,
+        summary: "Available CI inspected; advisories unavailable, coverage partial".into(),
+        tasks_done: vec![],
+        artifacts: vec![],
+        checks: vec![],
+        findings: vec![],
+        next: None,
+        review_guide: None,
+        details: Some(RoleDetails::Scan {
+            summary: "CI inspected; advisories unknown (403)".into(),
+        }),
+    };
+    let tx = db.transaction().unwrap();
+    plantool_daemon::loop_engine::validate(&result, &state).unwrap();
+    plantool_daemon::loop_engine::record(&tx, &result, &mut state).unwrap();
+    assert_eq!(state["step"], "scan_qa");
+    assert_ne!(state["frozen"], true);
+    assert_eq!(state["scan_partial"], true);
+    assert_eq!(state["scan_coverage_gaps"][0]["http_status"], 403);
+}

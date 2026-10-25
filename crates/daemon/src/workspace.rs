@@ -386,5 +386,26 @@ pub fn operational(
         &body,
         &format!("ops:{item}:{key}"),
     )?;
+    let thread = item_thread(db, item)?;
+    append(
+        db,
+        &thread,
+        "daemon",
+        &body,
+        &format!("item-ops:{item}:{key}"),
+    )?;
+    let issue: Option<u64> = db.query_row(
+        "SELECT github_issue_number FROM work_items WHERE id=?1",
+        [item],
+        |r| r.get(0),
+    )?;
+    if let Some(issue) = issue {
+        dispatcher::enqueue(
+            db,
+            item,
+            "github.status",
+            &json!({"key":key,"issue":issue,"body":body}),
+        )?;
+    }
     Ok(())
 }

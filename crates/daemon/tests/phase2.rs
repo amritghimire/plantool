@@ -1154,3 +1154,54 @@ async fn one_failed_outbox_delivery_does_not_starve_other_threads() {
         1
     );
 }
+
+#[test]
+fn codex_first_is_supported_for_every_role_and_route_errors_explain_exclusions() {
+    let f = Fixture::new();
+    let db = database::open(&f.home).unwrap();
+    let mut cfg = router::config(&f.home).unwrap();
+    for chain in cfg.chains.values_mut() {
+        chain.retain(|r| r != "codex-sol");
+        chain.insert(0, "codex-sol".into());
+    }
+    cfg.validate().unwrap();
+    database::set(&db, "model_chains", &cfg).unwrap();
+    verified(&f);
+    let now = database::unix_now();
+    for role in [
+        "cto",
+        "pm",
+        "backend",
+        "frontend",
+        "devops",
+        "qa",
+        "reviewer",
+        "docs",
+        "supervisor",
+    ] {
+        assert_eq!(
+            router::select(&f.home, &f.project, &f.item, role, now)
+                .unwrap()
+                .name,
+            "codex-sol"
+        );
+    }
+    db.execute("UPDATE route_health SET available=0", [])
+        .unwrap();
+    let error = router::select(&f.home, &f.project, &f.item, "pm", now)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("codex-sol: catalog availability"));
+    assert!(error.contains("local-qwen36a3: catalog availability"));
+    db.execute(
+        "UPDATE route_health SET available=1 WHERE route='codex-sol'",
+        [],
+    )
+    .unwrap();
+    let codex = router::select(&f.home, &f.project, &f.item, "pm", now).unwrap();
+    router::exhaust(&f.home, &codex, Some(now + 60), now).unwrap();
+    let error = router::select(&f.home, &f.project, &f.item, "pm", now)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("codex-sol: cooling down until"));
+}

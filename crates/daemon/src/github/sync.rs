@@ -262,6 +262,7 @@ pub async fn poll_at(
         }
         tx.commit()?;
     }
+    super::status::deliver(home, api, repo).await?;
     let issues = collection(
         home,
         api,
