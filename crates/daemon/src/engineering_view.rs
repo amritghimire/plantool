@@ -112,5 +112,14 @@ mod tests {
         assert_eq!(value["attempts"][0]["id"], "one");
         assert!(!value.to_string().contains("do-not-expose"));
         assert!(item(tmp.path(), "unknown").is_err());
+        db.execute("UPDATE workflow_items SET state_json='{\"step\":\"project_wait\",\"project\":true}' WHERE item_id='one'", []).unwrap();
+        assert_eq!(
+            item(tmp.path(), "one").unwrap()["item"]["step"],
+            "project_wait"
+        );
+        assert!(!items(&db, Some("one"))
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == "one"));
     }
 }

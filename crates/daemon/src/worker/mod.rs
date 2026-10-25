@@ -514,6 +514,10 @@ mod tests {
         assert!(dir.join("plantool_worker/models.py").is_file());
         assert!(verify_checksum(b"tampered", &"0".repeat(64)).is_err());
         assert!(unpack(t.path(), "../escape").is_err());
+        assert!(!has_installed_worker(t.path()));
+        std::fs::create_dir_all(dir.join(".venv/bin")).unwrap();
+        std::fs::write(dir.join(".venv/bin/python"), "fixture").unwrap();
+        assert!(has_installed_worker(t.path()));
     }
 }
 
