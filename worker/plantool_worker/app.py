@@ -74,6 +74,24 @@ class Store:
             db.execute("UPDATE bridge_inbox SET result=? WHERE id=?", (json.dumps(value),key))
         return value
 
+DETAIL_KINDS={"triage":"triage","scan_devops":"scan","scan_qa":"scan","scan_pm":"routes","route_finding":"routes","research":"research","plan":"plan","reviewer":"security","docs":"docs","supervisor":"strategy","discussion":"discussion","sprint_plan":"sprint"}
+
+def parse_role_content(content):
+    """Accept a complete JSON object, optionally wrapped in one Markdown fence.
+
+    Never extract a guessed object from prose or treat reasoning as a result.
+    """
+    if not isinstance(content,str):
+        raise ValueError("Role response must contain JSON text")
+    text=content.strip()
+    if text.startswith("```json\n") or text.startswith("```\n"):
+        lines=text.splitlines()
+        if lines[-1].strip()!="```":raise ValueError("Incomplete JSON fence")
+        text="\n".join(lines[1:-1])
+    data=json.loads(text)
+    if not isinstance(data,dict):raise ValueError("Role result must be an object")
+    return data
+
 def create_app(home: Path, token: str, transport=None):
     locks: dict[str, asyncio.Lock] = {}
     store = Store(home/"worker-state/checkpoints.db")
@@ -245,15 +263,27 @@ def create_app(home: Path, token: str, transport=None):
         async with lock(key):
             receipt=await asyncio.to_thread(store.receipt,key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
+            expected_kind=DETAIL_KINDS.get(request.request.inputs.get("step"))
+            candidates=request.request.inputs.get("prepared_candidates") if request.request.inputs.get("step")=="sprint_plan" else None
+            if candidates==[]:
+                result=RoleResult.model_validate({"item":request.request.item,"role":request.request.role,"attempt_id":request.attempt_id,"generation":request.request.generation,"outcome":"done","summary":"No prepared sprint candidates; waiting for item plans.","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"details":{"kind":"sprint","items":[],"notes":"No eligible prepared plans. Frozen or unplanned issues remain outside this sprint; continue their own planning/recovery separately."}}).model_dump(mode="json")
+                with store.db() as db:db.execute("UPDATE bridge_inbox SET result=? WHERE id=?",(json.dumps(result),key))
+                return result
             daemon=app.state.daemon
-            messages=[{"role":"system","content":"Return only the typed RoleResult JSON. Never approve or publish."},{"role":"user","content":request.prompt}]
+            messages=[{"role":"system","content":"Use supplied tools when needed. Your final answer must be one RoleResult JSON object, without prose or Markdown. Never approve or publish. The complete JSON Schema follows: " + json.dumps(RoleResult.model_json_schema())},{"role":"user","content":request.prompt}]
+            if expected_kind:
+                messages.append({"role":"system","content":f"This step requires non-null details with kind={expected_kind}. Use that schema variant, not another role variant. Return all required fields for it."})
+            if candidates is not None:
+                messages.append({"role":"system","content":"Only these exact prepared sprint candidate IDs may appear in details.items: " + json.dumps([c["item"] for c in candidates]) + ". Known issues and discussion mentions are not eligible unless listed. Return items=[] if none selected."})
             # This is a separate role invocation, not the interrupting workflow node.
             async def call_role(state):
                 tools=[{"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":{arg:{"type":"string"}},"required":[arg],"additionalProperties":False}}} for name,arg,description in [("read_repo_file","path","Read a regular default-branch file; never-sent files are denied"),("read_artifact","sha256","Read an item-bound immutable artifact")]]
                 tools.append({"type":"function","function":{"name":"request_urgent","description":"Request owner urgency; never promotes or approves","parameters":{"type":"object","properties":{},"additionalProperties":False}}})
+                formatting_retry=False
                 for index in range(12):
-                    response=await daemon.post("/v1/chat/completions",json={"plantool":{"item":request.request.item,"role":request.request.role,"generation":request.request.generation,"attempt_id":request.attempt_id,"idempotency_key":f"{key}:{index}"},"messages":messages,"tools":tools,"stream":False,"response_format":{"type":"json_schema","json_schema":{"name":"role_result","schema":RoleResult.model_json_schema()}}})
+                    response=await daemon.post("/v1/chat/completions",json={"plantool":{"item":request.request.item,"role":request.request.role,"generation":request.request.generation,"attempt_id":request.attempt_id,"idempotency_key":f"{key}:{index}"},"messages":messages,"tools":[] if formatting_retry else tools,"stream":False,"response_format":{"type":"json_schema","json_schema":{"name":"role_result","schema":RoleResult.model_json_schema()}}})
                     response.raise_for_status();message=response.json()["choices"][0]["message"]
+                    if formatting_retry and message.get("tool_calls"):raise ValueError("Formatting correction cannot call tools")
                     if message.get("tool_calls"):
                         messages.append(message)
                         for call in message["tool_calls"]:
@@ -267,12 +297,26 @@ def create_app(home: Path, token: str, transport=None):
                             reply=await daemon.post(f"/internal/v1/{name}",json=arguments);reply.raise_for_status()
                             messages.append({"role":"tool","tool_call_id":call["id"],"content":json.dumps(reply.json())})
                         continue
-                    content=message.get("content")
-                    if not isinstance(content,str):raise ValueError("Role response must contain JSON text")
-                    data=json.loads(content)
-                    if not isinstance(data,dict):raise ValueError("Role result must be an object")
-                    data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
-                    return {"result":RoleResult.model_validate(data).model_dump(mode="json")}
+                    try:
+                        choice=response.json()["choices"][0]
+                        if choice.get("finish_reason")=="length":raise ValueError("Truncated role result")
+                        data=parse_role_content(message.get("content"))
+                        data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
+                        if expected_kind and (not isinstance(data.get("details"),dict) or data["details"].get("kind")!=expected_kind):
+                            raise ValueError("Wrong step-specific result details")
+                        if candidates is not None:
+                            allowed={c["item"] for c in candidates}
+                            details=data.get("details") or {}
+                            if details.get("kind")!="sprint" or any(c.get("item") not in allowed for c in details.get("items",[])):
+                                raise ValueError("Sprint choice is not a prepared candidate")
+                        return {"result":RoleResult.model_validate(data).model_dump(mode="json")}
+                    except (ValueError,TypeError):
+                        if formatting_retry or index==11:raise
+                        # One same-route correction uses normal proxy accounting. No
+                        # tools are supplied, so prior tool effects are not repeated.
+                        formatting_retry=True
+                        messages.append({"role":"assistant","content":message.get("content") if isinstance(message.get("content"),str) else ""})
+                        messages.append({"role":"user","content":"The final response was not a complete valid RoleResult. Return one complete JSON object matching the system schema, using only evidence already obtained. No tools, Markdown, commentary or new claims. Keep the summary concise."})
                 raise ValueError("Role tool/call budget exhausted")
             graph=StateGraph(State);graph.add_node("role",call_role);graph.add_edge(START,"role");graph.add_edge("role",END)
             result=(await graph.compile().ainvoke({}))["result"]

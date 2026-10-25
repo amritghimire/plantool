@@ -14,3 +14,9 @@ plan hashes. The daemon publishes an immutable tracking snapshot. Owner commands
 latest snapshot authorize work; the graph releases only approved items. Pending items go
 back to backlog at the next sprint. No direct GitHub actions, approval, implementation,
 triage, scan, urgent promotion or new issue intake is part of this role step.
+
+The candidates array is the complete eligibility list, not the known-issues list.
+If empty, return items=[] and explain that prepared plans are required. An empty sprint
+is valid. Never insert a frozen/unplanned issue to satisfy an expected item count, and
+never use discussion mentions as candidate IDs. Missing approval blocks implementation,
+not planning of otherwise eligible candidates.

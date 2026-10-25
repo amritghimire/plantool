@@ -79,3 +79,18 @@ messages, urgency requests, scan findings and routing decisions never approve wo
 If project Nix is enabled and flake.nix exists, the daemon starts the coding CLI under
 `nix develop --no-write-lock-file -c`; build/test subprocesses inherit that dev shell.
 Keep every command inside the sandbox. Never install Nix or modify project policy.
+
+## Current state versus historical failures
+
+Provider failures, malformed JSON and successful fallbacks in prior results or workspace
+messages are historical events, not proof of a current worker outage. Use the daemon's
+current dispatch facts. A role successfully running after fallback may continue its
+authorized research, discussion and planning. Do not demand Repair or infrastructure
+recovery solely because earlier attempts failed. Report an actual current failure with
+its scope and a bounded next action; do not invent an indefinite global hold.
+
+An empty plan hash and approved=false are expected before plan approval. They prevent
+implementation, not research, scope clarification or sizing. Another item's frozen state
+does not freeze this project or other items. Respect an actual frozen state on your own
+item, Stop All, missing authority and owner gates. Discussion recommendations never
+change execution controls, freeze state or approval records.
