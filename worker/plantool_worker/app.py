@@ -302,7 +302,7 @@ def create_app(home: Path, token: str, transport=None):
                         if choice.get("finish_reason")=="length":raise ValueError("Truncated role result")
                         data=parse_role_content(message.get("content"))
                         data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
-                        if expected_kind and (data.get("details") or {}).get("kind")!=expected_kind:
+                        if expected_kind and (not isinstance(data.get("details"),dict) or data["details"].get("kind")!=expected_kind):
                             raise ValueError("Wrong step-specific result details")
                         if candidates is not None:
                             allowed={c["item"] for c in candidates}

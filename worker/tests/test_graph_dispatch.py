@@ -131,7 +131,7 @@ async def test_failed_read_role_fallback_creates_fresh_generation_interrupt(tmp_
             assert requests[0]['interrupt_id']!=requests[1]['interrupt_id']
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('first', ['prose','fenced','wrong_details'])
+@pytest.mark.parametrize('first', ['prose','fenced','wrong_details','wrong_shape'])
 async def test_provider_format_correction_is_bounded_validated_and_cached(tmp_path,first):
     calls=[]
     good={"item":"forged","role":"pm","attempt_id":"wrong","generation":999,"outcome":"done","summary":"fits","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"details":{"kind":"triage","disposition":"fits","reason":"Small docs task","duplicate_of":None}}
@@ -140,7 +140,7 @@ async def test_provider_format_correction_is_bounded_validated_and_cached(tmp_pa
         body=json.loads(request.content);calls.append(body)
         assert 'JSON Schema' in body['messages'][0]['content']
         if len(calls)==1:
-            content='I recommend this task.' if first=='prose' else '```json\n'+json.dumps(good)+'\n```' if first=='fenced' else json.dumps({**good,'details':None})
+            content='I recommend this task.' if first=='prose' else '```json\n'+json.dumps(good)+'\n```' if first=='fenced' else json.dumps({**good,'details':[] if first=='wrong_shape' else None})
         else:
             assert body['tools']==[]
             content=json.dumps(good)
