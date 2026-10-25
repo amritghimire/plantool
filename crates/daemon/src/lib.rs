@@ -195,13 +195,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let worker_restore = tokio::spawn(async move {
         if sandbox::supported()
             && !restore_state.runs.execution.status().stopped
-            && restore_state
-                .config
-                .home
-                .join("worker")
-                .join(&restore_state.config.version)
-                .join(".venv/bin/python")
-                .is_file()
+            && worker::has_installed_worker(&restore_state.config.home)
         {
             if let Err(error) = restore_state.runs.worker.repair(&restore_state).await {
                 tracing::warn!("Installed worker restore failed: {error}");

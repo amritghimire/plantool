@@ -1107,3 +1107,50 @@ async fn personal_cloud_model_retains_remote_allowlist_and_lease_checks() {
     );
     assert_eq!(gateway.calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn one_failed_outbox_delivery_does_not_starve_other_threads() {
+    let f = Fixture::new();
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    dispatcher::enqueue(
+        &tx,
+        "one",
+        "worker.resume",
+        &json!({"idempotency_key":"one"}),
+    )
+    .unwrap();
+    dispatcher::enqueue(
+        &tx,
+        "two",
+        "worker.resume",
+        &json!({"idempotency_key":"two"}),
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    assert!(
+        dispatcher::deliver_pending(&f.home, &["worker.resume"], move |_, _| {
+            let index = count.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if index == 0 {
+                    anyhow::bail!("graph conflict")
+                }
+                Ok(json!({"done":true}))
+            }
+        })
+        .await
+        .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM outbox WHERE delivered_at IS NOT NULL",
+            [],
+            |r| r.get::<_, u64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}

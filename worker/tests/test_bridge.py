@@ -54,3 +54,18 @@ async def test_recovery_uses_new_checkpoint_epoch_preserves_old_and_replays(tmp_
                 assert db.execute('SELECT count(DISTINCT thread_id) FROM checkpoints').fetchone()[0]==2
             stale={"thread_id":"p:1","interrupt_id":first['interrupt_id'],"value":{},"idempotency_key":"stale",**VERSIONS}
             assert (await client.post('/internal/v1/resume',json=stale)).status_code==409
+
+@pytest.mark.asyncio
+async def test_dispatch_conflict_does_not_break_worker_health(tmp_path):
+    async def daemon(request):
+        if request.url.path.endswith('health'):return httpx.Response(200,json=VERSIONS)
+        return httpx.Response(409,json={"error":"Item is frozen"})
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    headers={"x-plantool-worker-token":'t'*40,"x-plantool-contract-version":"5"}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers=headers) as client:
+            request={"item":"p:i","role":"pm","generation":1,"inputs":{},"plan_sha":"","policy_version":1,"capability":"read","thread_id":"p:i","interrupt_id":"i","idempotency_key":"d"}
+            response=await client.post('/internal/v1/start',json={"thread_id":"p:i","graph":"work_item","input":{"dispatch":request},"idempotency_key":"start",**VERSIONS})
+            assert response.status_code==409
+            assert response.json()['detail']['kind']=='daemon_rejected'
+            assert (await client.get('/internal/v1/health')).json()==VERSIONS
