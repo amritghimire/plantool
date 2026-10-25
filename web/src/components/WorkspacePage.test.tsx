@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { api } from "../api";
 import { WorkspacePage } from "./WorkspacePage";
@@ -99,7 +99,21 @@ it("searches thread messages and persists local unread markers when opening a th
     </MemoryRouter>,
   );
   await screen.findByText("Alpha context");
-  expect(screen.getByLabelText("1 unread messages")).toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      JSON.parse(localStorage.getItem("plantool.workspace.read") ?? "{}").general,
+    ).toBe("m"),
+  );
+  expect(
+    within(screen.getByRole("button", { name: /Auth contract/ })).getByLabelText(
+      "1 unread messages",
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(screen.getByRole("button", { name: /# general/ })).queryByLabelText(
+      /unread messages/,
+    ),
+  ).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Search this project"), {
     target: { value: "interface" },
   });
