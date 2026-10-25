@@ -27,6 +27,12 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
                 .call(kind.strip_prefix("worker.").unwrap(), Some(&body))
                 .await;
             match result {
+                Ok(value) if value["state"] == "recovery_needed" => {
+                    if let Some(item) = body["thread_id"].as_str() {
+                        crate::recovery::freeze_uncertain_start(&state.config.home, item)?;
+                    }
+                    Ok(value)
+                }
                 Err(error)
                     if error
                         .downcast_ref::<crate::worker::CallError>()
@@ -47,6 +53,10 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
 }
 pub async fn tick(state: &AppState) -> anyhow::Result<()> {
     crate::recovery::announce_existing(&state.config.home)?;
+    crate::recovery::announce_worker(
+        &state.config.home,
+        state.runs.worker.availability().available,
+    )?;
     deliver_worker(state).await?;
     if state.runs.execution.status().stopped {
         return Ok(());
@@ -605,4 +615,31 @@ fn read_result(text: &str, request: &Dispatch, id: &str) -> anyhow::Result<RoleR
     value["generation"] = json!(request.generation);
     serde_json::from_value(value)
         .map_err(|_| anyhow::anyhow!("Final JSON does not satisfy RoleResult"))
+}
+
+#[cfg(test)]
+mod read_result_tests {
+    use super::*;
+    #[test]
+    fn codex_read_claims_are_scoped_and_invalid_output_is_not_exposed() {
+        let request = Dispatch {
+            item: "i".into(),
+            role: "pm".into(),
+            generation: 2,
+            inputs: json!({"step":"triage"}),
+            plan_sha: "".into(),
+            policy_version: 1,
+            capability: "read".into(),
+            thread_id: "i".into(),
+            interrupt_id: "x".into(),
+            idempotency_key: "d".into(),
+        };
+        let text = r#"{"item":"forged","role":"backend","attempt_id":"bad","generation":9,"outcome":"done","summary":"Triage","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":null,"review_guide":null,"details":{"kind":"triage","disposition":"fits","reason":"small docs task","duplicate_of":null}}"#;
+        let result = read_result(text, &request, "a").unwrap();
+        assert_eq!(result.item, "i");
+        assert_eq!(result.role, "pm");
+        assert_eq!(result.generation, 2);
+        let error = read_result("SECRET invalid JSON", &request, "a").unwrap_err();
+        assert!(!error.to_string().contains("SECRET"));
+    }
 }

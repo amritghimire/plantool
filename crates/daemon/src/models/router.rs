@@ -265,7 +265,7 @@ pub fn exhaust(
     let until = reset.filter(|r| *r > now).unwrap_or(end);
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    tx.execute("INSERT INTO budgets(route,window_kind,window_start,exhausted_until) VALUES(?1,?2,?3,?4) ON CONFLICT(route,window_kind,window_start) DO UPDATE SET exhausted_until=excluded.exhausted_until",params![selected.name,kind,start,until])?;
+    tx.execute("INSERT INTO budgets(route,window_kind,window_start,exhausted_until) VALUES(?1,?2,?3,?4) ON CONFLICT(route,window_kind,window_start) DO UPDATE SET exhausted_until=max(coalesce(budgets.exhausted_until,0),excluded.exhausted_until)",params![selected.name,kind,start,until])?;
     database::audit(
         &tx,
         "daemon",
@@ -324,5 +324,39 @@ pub fn provider_failed(home: &Path, selected: &Selected, now: i64) -> anyhow::Re
         Ok(true)
     } else {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    #[test]
+    fn cooldown_moves_down_pm_chain_and_recovers_without_bypassing_policy() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let db = database::open(home).unwrap();
+        db.execute(
+            "INSERT INTO projects VALUES('p','o/r',NULL,'/checkout','eos','private','now')",
+            [],
+        )
+        .unwrap();
+        let cfg = config(home).unwrap();
+        for name in &cfg.chains["pm"] {
+            db.execute("INSERT INTO route_health(route,available,model,verified_at) VALUES(?1,1,'resolved-model',0)",[name]).unwrap();
+        }
+        let first = select(home, "p", "i", "pm", 100).unwrap();
+        assert_eq!(first.name, cfg.chains["pm"][0]);
+        exhaust(home, &first, Some(3700), 100).unwrap();
+        let second = select(home, "p", "i", "pm", 101).unwrap();
+        assert_eq!(second.name, cfg.chains["pm"][1]);
+        assert_eq!(select(home, "p", "i", "pm", 3701).unwrap().name, first.name);
+        db.execute("INSERT INTO project_settings(project_id,version,allowed_providers_json,effective_at,set_by) VALUES('p',1,'[\"ollama\"]','now','owner')",[]).unwrap();
+        assert_eq!(
+            select(home, "p", "i", "pm", 3701).unwrap().route.provider,
+            "ollama"
+        );
+        db.execute("UPDATE route_health SET available=0", [])
+            .unwrap();
+        assert!(select(home, "p", "i", "pm", 3701).is_err());
     }
 }

@@ -189,7 +189,27 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         });
         task
     };
+    // Restore an already-installed worker after listeners are serving. Fresh
+    // installations/upgrades still use the owner-authorized Repair action.
+    let restore_state = state.clone();
+    let worker_restore = tokio::spawn(async move {
+        if sandbox::supported()
+            && !restore_state.runs.execution.status().stopped
+            && restore_state
+                .config
+                .home
+                .join("worker")
+                .join(&restore_state.config.version)
+                .join(".venv/bin/python")
+                .is_file()
+        {
+            if let Err(error) = restore_state.runs.worker.repair(&restore_state).await {
+                tracing::warn!("Installed worker restore failed: {error}");
+            }
+        }
+    });
     let _ = shutdown_rx.recv().await;
+    worker_restore.abort();
     state.runs.tokens.revoke_all();
     let _ = stop_tx.send(true);
     // A watch client must not hold the daemon open during a restart.

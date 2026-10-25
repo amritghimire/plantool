@@ -84,3 +84,48 @@ async def test_role_errors_preserve_safe_cause_without_leaking_prompt(tmp_path, 
     output=capsys.readouterr().err+reply.text
     assert 'SECRET' not in output and token not in output
     assert '429' in output if failure=='http' else 'JSONDecodeError' in output
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status',[404,429,500])
+async def test_upstream_failures_are_not_hidden_as_generic_500(tmp_path,status):
+    async def daemon(request):
+        if request.url.path.endswith('health'):return httpx.Response(200,json=VERSIONS)
+        return httpx.Response(status,json={'error':{'message':'private provider details'}})
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    payload={"request":{"item":"p:1","role":"pm","generation":1,"inputs":{"step":"triage"},"plan_sha":"","policy_version":1,"capability":"read","idempotency_key":"d","thread_id":"p:1","interrupt_id":"i"},"attempt_id":"a1","prompt":"triage"}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={'x-plantool-worker-token':'t'*40,'x-plantool-contract-version':'5'}) as client:
+            response=await client.post('/internal/v1/role',json=payload)
+            assert response.status_code==502
+            assert response.json()['detail']['upstream_status']==status
+            assert 'private provider details' not in response.text
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('project',[False,True])
+async def test_failed_read_role_fallback_creates_fresh_generation_interrupt(tmp_path,project):
+    step='sprint_plan' if project else 'triage'
+    facts={'item':'p:1','step':step,'project':project,'sequence':0,'generation':0,'plan_sha':'','frozen':False}
+    original=dict(facts);requests=[]
+    async def daemon(request):
+        path=request.url.path
+        if path.endswith('health'):return httpx.Response(200,json=VERSIONS)
+        if path.endswith('workflow_context'):return httpx.Response(200,json={'state':facts,'policy_version':1})
+        if path.endswith('request_dispatch'):
+            data=json.loads(request.content)
+            existing=next((r for r in requests if r['idempotency_key']==data['idempotency_key']),None)
+            if existing is None: requests.append(data)
+            else: assert existing==data
+            return httpx.Response(200,json={'attempt_id':'a'+str(data['generation']),'generation':data['generation']})
+        raise AssertionError(path)
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={'x-plantool-worker-token':'t'*40,'x-plantool-contract-version':'5'}) as client:
+            first=await client.post('/internal/v1/start',json={'thread_id':'p:1','graph':'project' if project else 'work_item','input':{'workflow':original},'idempotency_key':'start',**VERSIONS})
+            assert first.status_code==200,first.text
+            facts.update(sequence=1,generation=1,route_retry=True)
+            failed={'item':'p:1','role':'pm','attempt_id':'a1','generation':1,'outcome':'failed','summary':'upstream 429','tasks_done':[],'artifacts':[],'checks':[],'findings':[],'next':None,'review_guide':None,'details':None}
+            reply=await client.post('/internal/v1/resume',json={'thread_id':'p:1','interrupt_id':first.json()['interrupt_id'],'value':failed,'idempotency_key':'resume',**VERSIONS})
+            assert reply.status_code==200,reply.text
+            assert reply.json()['state']=='interrupted'
+            assert [r['generation'] for r in requests]==[1,2]
+            assert requests[0]['interrupt_id']!=requests[1]['interrupt_id']

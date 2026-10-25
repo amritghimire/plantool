@@ -445,6 +445,20 @@ pub fn record(
     let step = s["step"].as_str().unwrap_or("").to_owned();
     s["generation"] = json!(result.generation);
     s["phase_restart"] = json!(false);
+    if result.outcome == Outcome::Done {
+        let had_error: bool = tx.query_row(
+            "SELECT last_error IS NOT NULL FROM workflow_items WHERE item_id=?1",
+            [&result.item],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "UPDATE workflow_items SET last_error=NULL WHERE item_id=?1",
+            [&result.item],
+        )?;
+        if had_error {
+            crate::workspace::operational(tx,&result.item,"Step recovered",&format!("recovered:{}",result.attempt_id),"The new role attempt completed and its evidence was accepted. Follow the item for the next step; any owner approval is still required on GitHub.")?;
+        }
+    }
     s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
     let retry: bool = tx.query_row(
         "SELECT quota_pending FROM dispatches WHERE attempt_id=?1",
@@ -459,7 +473,10 @@ pub fn record(
         )?;
         s["failed_step"] = json!(step);
     }
-    if retry && result.outcome != Outcome::Done {
+    if retry
+        && result.outcome != Outcome::Done
+        && (!coding(&result.role) || crate::loop_engine::read_step(&step) || step == "discussion")
+    {
         save(tx, &result.item, &s)?;
         crate::workspace::operational(tx,&result.item,"Model fallback",&format!("fallback:{}",result.attempt_id),&format!("{}\nThe failed attempt has ended. A new generation will try another permitted route; no model is switched mid-attempt.",result.summary))?;
         database::audit(

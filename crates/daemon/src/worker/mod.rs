@@ -482,5 +482,7 @@ fn worker_log(home: &Path) -> anyhow::Result<std::process::Stdio> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(dir.join("errors.log"))?;
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     Ok(file.into())
 }

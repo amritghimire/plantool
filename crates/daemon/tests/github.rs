@@ -965,3 +965,30 @@ async fn pr_reviews_checks_and_state_refresh_when_the_head_changes_or_pr_closes(
         .iter()
         .any(|(_, path, tag)| path == "/repos/o/r/pulls/2" && tag.is_some()));
 }
+
+#[tokio::test]
+async fn effective_rulesets_satisfy_protection_and_missing_checks_are_advisory() {
+    let fake = Fake::default();
+    let path = "/repos/o/r/rules/branches/main?per_page=100&page=1";
+    fake.0.lock().unwrap().objects.insert(path.into(),json!([
+      {"type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}},
+      {"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci"}]}}
+    ]));
+    let facts = plantool_daemon::github::api::preflight(&fake, "/repos/o/r", "main")
+        .await
+        .unwrap();
+    assert_eq!(facts["rulesets_checked"], true);
+    assert_eq!(facts["required_checks_configured"], true);
+    assert_eq!(facts["warnings"], json!([]));
+    fake.0.lock().unwrap().objects.insert(path.into(),json!([{ "type":"pull_request","parameters":{"required_approving_review_count":1,"dismiss_stale_reviews_on_push":true}}]));
+    let facts = plantool_daemon::github::api::preflight(&fake, "/repos/o/r", "main")
+        .await
+        .unwrap();
+    assert_eq!(facts["blocking"], false);
+    assert_eq!(facts["warnings"], json!([]));
+    assert_eq!(facts["required_checks_configured"], false);
+    assert!(facts["advisories"][0]
+        .as_str()
+        .unwrap()
+        .contains("first PR"));
+}

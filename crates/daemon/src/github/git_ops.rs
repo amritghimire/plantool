@@ -205,3 +205,19 @@ fn validate_transport(root: &Path) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn repo_transport_overrides_and_bad_config_fail_closed() {
+        let t = tempfile::tempdir().unwrap();
+        crate::git::git(t.path(), &["init"]).unwrap();
+        validate_transport(t.path()).unwrap();
+        crate::git::git(t.path(), &["config", "credential.helper", "unsafe-helper"]).unwrap();
+        assert!(validate_transport(t.path()).is_err());
+        crate::git::git(t.path(), &["config", "--unset", "credential.helper"]).unwrap();
+        std::fs::write(t.path().join(".git/config"), "broken[").unwrap();
+        assert!(validate_transport(t.path()).is_err());
+    }
+}
