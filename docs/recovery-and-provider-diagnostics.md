@@ -60,7 +60,7 @@ tests the installed Ollama model. This is not an Engineering OS acceptance test.
 5. In the project dashboard, use **Owner recovery → Retry failed step with passkey** for
    the frozen scheduler. On issue #1's activity page, do the same for failed PM triage.
    Recovery requires a failed read-only step and refuses active or recovery-needed attempts,
-   coding steps, pending external effects and open gates. Other uncertainty requires
+   coding steps, Docs steps that can apply repository edits, pending external effects and open gates. Other uncertainty requires
    manual reconciliation; this PR does not provide an override for uncertain writes.
 6. Watch Role attempts and `#general`. Each failed read attempt ends before a fresh
    generation tries another permitted catalog-verified route. Failed routes cool down;

@@ -994,7 +994,7 @@ async fn effective_rulesets_satisfy_protection_and_missing_checks_are_advisory()
 }
 
 async fn poll(home: &std::path::Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
-    let now = chrono::DateTime::parse_from_rfc3339("2026-10-19T00:00:00Z")
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-20T12:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
     sync::poll_at(home, api, repo, now).await

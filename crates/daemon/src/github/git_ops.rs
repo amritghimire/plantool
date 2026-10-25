@@ -184,6 +184,11 @@ impl GitOps for AppGit {
 #[cfg(unix)]
 fn validate_transport(root: &Path) -> anyhow::Result<()> {
     let out = std::process::Command::new("git")
+        .env_clear()
+        .envs(crate::sandbox::environment::filtered(
+            None,
+            std::env::vars_os(),
+        ))
         .current_dir(root)
         .args([
             "config",

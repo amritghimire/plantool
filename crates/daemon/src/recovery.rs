@@ -31,7 +31,6 @@ pub fn snapshot(home: &Path, item: &str) -> anyhow::Result<Value> {
             | "scan_pm"
             | "route_finding"
             | "discussion"
-            | "docs"
             | "supervisor"
     ) && request["capability"] == "read";
     let eligible = state["checkpoint_uncertain"] != true
