@@ -1216,3 +1216,59 @@ async fn engineering_activity_and_setup_cursor_are_owner_only_and_cursor_is_not_
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn recovery_is_browser_only_and_requires_fresh_action_bound_proof() {
+    let h = harness();
+    let db = plantool_daemon::database::open(&h.state.config.home).unwrap();
+    db.execute(
+        "INSERT INTO projects VALUES('p','o/r',NULL,'/checkout','eos','private','now')",
+        [],
+    )
+    .unwrap();
+    db.execute("INSERT INTO work_items(id,project_id,kind,title,state,created_at,repo_slug,slug,session_json) VALUES('i','p','eos','Issue','escalated','now','p','i','{}')",[]).unwrap();
+    db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES('i','{\"step\":\"escalated\",\"frozen\":true}','base','head')",[]).unwrap();
+    let path = "/api/engineering-os/items/i/recover";
+    let body = json!({"attempt_id":"a"});
+    assert_ne!(
+        raw(&h.app, "GET", path, json!(null), None, None)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let mut browser = Browser::register(&h.app, &h.state.config.home).await;
+    assert_eq!(
+        raw(
+            &h.app,
+            "POST",
+            path,
+            body.clone(),
+            Some(&browser.cookie),
+            None
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    let proof = browser.proof(&h.app, "POST", path, body.clone()).await;
+    db.execute("UPDATE workflow_items SET state_json='{\"step\":\"escalated\",\"frozen\":true,\"sequence\":2}'",[]).unwrap();
+    let response = raw(
+        &h.app,
+        "POST",
+        path,
+        body,
+        Some(&browser.cookie),
+        Some(&proof),
+    )
+    .await;
+    assert_ne!(response.status(), StatusCode::OK);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}

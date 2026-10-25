@@ -239,6 +239,7 @@ export function WorkspacePage() {
                         </time>
                       </header>
                       <p>{m.body}</p>
+                      {m.sender === "daemon" && m.body.match(/\/engineering(?:\/items\/|\?project=)[A-Za-z0-9%._~-]+/) && <Link to={m.body.match(/\/engineering(?:\/items\/|\?project=)[A-Za-z0-9%._~-]+/)![0]}>View item and next action →</Link>}
                     </div>
                   </article>
                 ))

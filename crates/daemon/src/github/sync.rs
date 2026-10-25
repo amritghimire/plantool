@@ -220,6 +220,15 @@ async fn object(
     Ok(response.body)
 }
 pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Result<()> {
+    poll_at(home, api, repo, chrono::Utc::now()).await
+}
+/// Inject time in polling tests so scheduled scans do not depend on the CI clock.
+pub async fn poll_at(
+    home: &Path,
+    api: &dyn Api,
+    repo: &Repository,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
     crate::workspace::ensure_channels(&database::open(home)?, &repo.project)?;
 
     let base = repo.path()?;
@@ -373,8 +382,8 @@ pub async fn poll(home: &Path, api: &dyn Api, repo: &Repository) -> anyhow::Resu
         super::loop_sync::labels(home, repo, &fresh.body)?;
         super::lifecycle::start_new(home, api, repo, &[fresh.body]).await?;
     }
-    super::loop_sync::declines(home, api, repo, chrono::Utc::now()).await?;
-    super::loop_sync::scans(home, api, repo, chrono::Utc::now(), &super::git_ops::AppGit).await?;
+    super::loop_sync::declines(home, api, repo, now).await?;
+    super::loop_sync::scans(home, api, repo, now, &super::git_ops::AppGit).await?;
     super::loop_sync::findings(home, api, repo).await?;
     super::loop_sync::urgent_requests(home, api, repo).await?;
     let pulls = collection(

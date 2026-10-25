@@ -14,7 +14,12 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
     }
     super::deliver_pending(
         &state.config.home,
-        &["worker.start", "worker.resume", "worker.cancel"],
+        &[
+            "worker.start",
+            "worker.resume",
+            "worker.cancel",
+            "worker.recover",
+        ],
         |kind, body| async move {
             let result = state
                 .runs
@@ -22,6 +27,12 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
                 .call(kind.strip_prefix("worker.").unwrap(), Some(&body))
                 .await;
             match result {
+                Ok(value) if value["state"] == "recovery_needed" => {
+                    if let Some(item) = body["thread_id"].as_str() {
+                        crate::recovery::freeze_uncertain_start(&state.config.home, item)?;
+                    }
+                    Ok(value)
+                }
                 Err(error)
                     if error
                         .downcast_ref::<crate::worker::CallError>()
@@ -41,6 +52,11 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 pub async fn tick(state: &AppState) -> anyhow::Result<()> {
+    crate::recovery::announce_existing(&state.config.home)?;
+    crate::recovery::announce_worker(
+        &state.config.home,
+        state.runs.worker.availability().available,
+    )?;
     deliver_worker(state).await?;
     if state.runs.execution.status().stopped {
         return Ok(());
@@ -261,11 +277,11 @@ async fn run(
         &request.role,
         database::unix_now(),
     )?;
-    if !crate::workflow::coding(&request.role)
+    let read_call = !crate::workflow::coding(&request.role)
         || request.inputs["step"] == "discussion"
         || request.inputs["step"] == "sprint_plan"
-        || crate::loop_engine::read_step(request.inputs["step"].as_str().unwrap_or(""))
-    {
+        || crate::loop_engine::read_step(request.inputs["step"].as_str().unwrap_or(""));
+    if read_call && selected.route.adapter != "codex" {
         let prompt = crate::instructions::assemble(home, request, id)?;
         database::open(home)?.execute(
             "UPDATE attempts SET state='running',model_route=?2 WHERE id=?1",
@@ -292,7 +308,42 @@ async fn run(
             .runs
             .worker
             .call("role", Some(&serde_json::to_value(call)?))
-            .await?;
+            .await;
+        let result = match result {
+            Ok(value) => value,
+            Err(error) => {
+                // Role calls cannot write a worktree or publish. End this attempt,
+                // cool down the failed route, then let a new generation select another.
+                if error
+                    .downcast_ref::<crate::worker::CallError>()
+                    .is_some_and(|e| e.status >= 500)
+                    && !state.runs.execution.status().stopped
+                    && state.runs.execution.status().generation == generation
+                {
+                    router::exhaust(
+                        home,
+                        &selected,
+                        Some(database::unix_now() + 3600),
+                        database::unix_now(),
+                    )?;
+                    if router::select(
+                        home,
+                        &project,
+                        &request.item,
+                        &request.role,
+                        database::unix_now(),
+                    )
+                    .is_ok()
+                    {
+                        database::open(home)?.execute(
+                            "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
+                            [id],
+                        )?;
+                    }
+                }
+                return Err(error);
+            }
+        };
         let result: RoleResult = serde_json::from_value(result)?;
         report(home, &result)?;
         return Ok(());
@@ -348,7 +399,7 @@ async fn run(
             worktree: dir.clone(),
             docs: dir.join("docs"),
         },
-        if request.role == "reviewer" {
+        if read_call || request.role == "reviewer" {
             crate::sandbox::Role::EosReviewer
         } else if request.role == "qa" && crate::workflow::state(&db, &request.item)?.is_some() {
             crate::sandbox::Role::EosQa
@@ -392,12 +443,20 @@ async fn run(
     let environment = credential
         .environment(home.clone(), state.config.port)
         .with_proxy(format!("http://localhost:{}/v1", state.config.port));
-    let plan = String::from_utf8(crate::artifacts::read(home, &request.plan_sha)?)?;
-    let prompt = if crate::workflow::state(&db, &request.item)?.is_some() {
+    let plan = if request.plan_sha.is_empty() {
+        String::new()
+    } else {
+        String::from_utf8(crate::artifacts::read(home, &request.plan_sha)?)?
+    };
+    let mut prompt = if crate::workflow::state(&db, &request.item)?.is_some() {
         crate::instructions::assemble(home, request, id)?
     } else {
         format!("You are the {} role. Immutable approved plan:\n{plan}\nReport the typed RoleResult for item={}, attempt_id={}, generation={}. Never approve or publish.",request.role,request.item,id,request.generation)
     };
+    if read_call {
+        prompt.push_str("\nReturn a single RoleResult JSON object as your final answer. Do not write files or invoke approval/publishing commands.\n");
+        prompt.push_str(&plantool_contract::result_schema());
+    }
     let provider = if selected.route.adapter == "codex" {
         plantool_core::Provider::Codex
     } else {
@@ -412,7 +471,7 @@ async fn run(
         effort: None,
         resume: None,
         executable: crate::providers::executable_for(provider),
-        writable_roots: vec![dir.clone()],
+        writable_roots: if read_call { vec![] } else { vec![dir.clone()] },
         permission_mode: plantool_core::PermissionMode::Auto,
     };
     let (input, rx) = mpsc::channel::<RunInput>(16);
@@ -425,12 +484,22 @@ async fn run(
     let started = std::time::Instant::now();
     let mut error = None;
     let mut joined = false;
+    let mut role_reply: Option<String> = None;
     loop {
         tokio::select! {
               _=&mut deadline=>{error=Some("45 minute checkpoint limit reached".to_string());break;}
               result=&mut provider=>{joined=true;match result{Ok(Err(e))=>error=Some(e.to_string()),Err(e)=>error=Some(e.to_string()),_=>{}}break;}
               _=tokio::time::sleep(std::time::Duration::from_millis(100))=>{let pending:bool=database::open(home)?.query_row("SELECT quota_pending FROM dispatches WHERE attempt_id=?1",[id],|r|r.get(0))?;if pending{quota=true;error=Some("Quota reached; checkpoint required before changing routes".into());break}let completed:bool=database::open(home)?.query_row("SELECT state NOT IN('starting','running') FROM attempts WHERE id=?1",[id],|r|r.get(0))?;if completed{break}}
         event=ev.recv()=>if let Some(event)=event{
+                if read_call {
+                    if let ProviderEvent::Message{role,content,..}=&event {if role=="assistant" { role_reply=Some(content.clone()); }}
+                    if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
+                        if turn_error.is_none() && status=="completed" {
+                            let parsed=role_reply.as_deref().ok_or_else(||anyhow::anyhow!("Codex produced no final JSON")).and_then(|text|read_result(text,request,id));
+                            match parsed.and_then(|result|report(home,&result).map(|_|())) {Ok(())=>{},Err(e)=>{error=Some(format!("Invalid Codex role result: {e}"));break;}}
+                        }
+                    }
+                }
                 seq+=1;let value=serde_json::to_value(&event)?;quota|=match &event {ProviderEvent::TurnCompleted{error:Some(error),..}=>router::quota(200,error),ProviderEvent::Raw{line}=>serde_json::from_str::<Value>(line).ok().is_some_and(|v|!v["error"].is_null()&&router::quota(200,line)),_=>false};
                 let mut db=database::open(home)?;let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let bytes=format!("{value}\n");let sha=artifacts::put(home,bytes.as_bytes())?;artifacts::register(&tx,&sha,bytes.len())?;
@@ -460,6 +529,31 @@ async fn run(
         |r| r.get(0),
     )?;
     if active {
+        if read_call
+            && !state.runs.execution.status().stopped
+            && state.runs.execution.status().generation == generation
+        {
+            router::exhaust(
+                home,
+                &selected,
+                Some(database::unix_now() + 3600),
+                database::unix_now(),
+            )?;
+            if router::select(
+                home,
+                &project,
+                &request.item,
+                &request.role,
+                database::unix_now(),
+            )
+            .is_ok()
+            {
+                database::open(home)?.execute(
+                    "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
+                    [id],
+                )?;
+            }
+        }
         if error.is_some() && !quota {
             router::provider_failed(home, &selected, database::unix_now())?;
         }
@@ -509,4 +603,43 @@ async fn run(
         }
     }
     Ok(())
+}
+
+fn read_result(text: &str, request: &Dispatch, id: &str) -> anyhow::Result<RoleResult> {
+    let mut value: serde_json::Value = serde_json::from_str(text.trim())
+        .map_err(|_| anyhow::anyhow!("Final answer is not JSON"))?;
+    anyhow::ensure!(value.is_object(), "Final answer is not an object");
+    value["item"] = json!(request.item);
+    value["role"] = json!(request.role);
+    value["attempt_id"] = json!(id);
+    value["generation"] = json!(request.generation);
+    serde_json::from_value(value)
+        .map_err(|_| anyhow::anyhow!("Final JSON does not satisfy RoleResult"))
+}
+
+#[cfg(test)]
+mod read_result_tests {
+    use super::*;
+    #[test]
+    fn codex_read_claims_are_scoped_and_invalid_output_is_not_exposed() {
+        let request = Dispatch {
+            item: "i".into(),
+            role: "pm".into(),
+            generation: 2,
+            inputs: json!({"step":"triage"}),
+            plan_sha: "".into(),
+            policy_version: 1,
+            capability: "read".into(),
+            thread_id: "i".into(),
+            interrupt_id: "x".into(),
+            idempotency_key: "d".into(),
+        };
+        let text = r#"{"item":"forged","role":"backend","attempt_id":"bad","generation":9,"outcome":"done","summary":"Triage","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":null,"review_guide":null,"details":{"kind":"triage","disposition":"fits","reason":"small docs task","duplicate_of":null}}"#;
+        let result = read_result(text, &request, "a").unwrap();
+        assert_eq!(result.item, "i");
+        assert_eq!(result.role, "pm");
+        assert_eq!(result.generation, 2);
+        let error = read_result("SECRET invalid JSON", &request, "a").unwrap_err();
+        assert!(!error.to_string().contains("SECRET"));
+    }
 }

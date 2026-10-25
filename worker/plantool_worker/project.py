@@ -23,6 +23,8 @@ async def build_step(daemon,store,state):
         response=await daemon.post("/internal/v1/request_dispatch",json=request.model_dump(mode="json"));response.raise_for_status()
         result=RoleResult.model_validate(interrupt({"attempt":response.json(),"interrupt_id":identity}))
         next_step="publish_plans" if result.outcome.value=="done" else "escalated"
+        facts=await daemon.post("/internal/v1/workflow_context",json={"item":item});facts.raise_for_status()
+        if facts.json()["state"].get("route_retry"): next_step="sprint_plan"
     elif step in ("publish_plans","start_items"):
         response=await daemon.post("/internal/v1/"+("project_publish" if step=="publish_plans" else "project_start_items"),json=context);response.raise_for_status()
         next_step=("project_wait" if response.json().get("empty") else "await_sprint_gate") if step=="publish_plans" else None

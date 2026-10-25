@@ -154,9 +154,48 @@ async fn save_cursor(
     crate::database::set(&db, "engineering.setup_cursor", &value)?;
     Ok(Json(value))
 }
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Retry {
+    attempt_id: String,
+}
+async fn recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    let facts = crate::recovery::snapshot(&state.config.home, &id)?;
+    Ok(Json(
+        json!({"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":if facts["eligible"]==true{"Retry this failed read-only step. Existing approvals and old checkpoints are preserved."}else{"Recovery requires a failed read-only step, no active/uncertain attempts, no pending external effects and no open gates. Reconcile other work manually."}}),
+    ))
+}
+async fn retry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
+    Json(body): Json<Retry>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    approval.recheck(&state)?;
+    if state.runs.execution.status().stopped || !state.runs.worker.availability().available {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Enable execution and repair the worker before recovery".into(),
+        ));
+    }
+    crate::recovery::retry(&state.config.home, &id, &body.attempt_id)
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))
+}
 pub fn browser_routes() -> Router<AppState> {
     Router::new()
         .route("/engineering-os/status", get(status))
+        .route(
+            "/engineering-os/items/{id}/recover",
+            get(recovery).post(retry),
+        )
         .route("/engineering-os/setup", get(setup_cursor).post(save_cursor))
         .route("/engineering-os/projects", get(projects))
         .route("/engineering-os/items/{id}", get(item))

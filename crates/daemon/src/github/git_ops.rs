@@ -35,19 +35,7 @@ async fn transport(
         os::{fd::AsRawFd, unix::fs::PermissionsExt},
     };
     super::api::repo_path(repo)?;
-    let overrides = crate::git::git(
-        root,
-        &[
-            "config",
-            "--get-regexp",
-            r"^(url\.|http\.|credential\.|core\.ssh)",
-        ],
-    )
-    .unwrap_or_default();
-    ensure!(
-        overrides.is_empty(),
-        "Unsafe repository transport override; inspect repository configuration"
-    );
+    validate_transport(root)?;
     let temp = tempfile::tempdir()?;
     let helper = temp.path().join("credential");
     std::fs::write(&helper,format!("#!/bin/sh\n[ \"$1\" = get ] || exit 0\nprotocol= host= path=\nwhile IFS='=' read -r name value; do case \"$name\" in protocol) protocol=$value;; host) host=$value;; path) path=$value;; esac; done\n[ \"$protocol\" = https ] && [ \"$host\" = github.com ] && [ \"$path\" = '{repo}.git' ] || exit 1\nIFS= read -r token <&3 || exit 1\nprintf 'username=x-access-token\\npassword=%s\\n' \"$token\"\n"))?;
@@ -80,6 +68,7 @@ async fn transport(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "/bin/false")
         .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -188,5 +177,52 @@ impl GitOps for AppGit {
             transport(api, root, repo, &args).await?;
             Ok(())
         })
+    }
+}
+
+/// Match the actual isolated transport environment; ignore ordinary global/system helpers.
+#[cfg(unix)]
+fn validate_transport(root: &Path) -> anyhow::Result<()> {
+    let out = std::process::Command::new("git")
+        .env_clear()
+        .envs(crate::sandbox::environment::filtered(
+            None,
+            std::env::vars_os(),
+        ))
+        .current_dir(root)
+        .args([
+            "config",
+            "--get-regexp",
+            r"^(url\.|http\.|credential\.|core\.ssh)",
+        ])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .output()?;
+    ensure!(
+        matches!(out.status.code(), Some(0 | 1)),
+        "Cannot validate repository transport configuration"
+    );
+    ensure!(
+        out.stdout.is_empty(),
+        "Unsafe repository transport override; inspect repository configuration"
+    );
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn repo_transport_overrides_and_bad_config_fail_closed() {
+        let t = tempfile::tempdir().unwrap();
+        crate::git::git(t.path(), &["init"]).unwrap();
+        validate_transport(t.path()).unwrap();
+        crate::git::git(t.path(), &["config", "credential.helper", "unsafe-helper"]).unwrap();
+        assert!(validate_transport(t.path()).is_err());
+        crate::git::git(t.path(), &["config", "--unset", "credential.helper"]).unwrap();
+        std::fs::write(t.path().join(".git/config"), "broken[").unwrap();
+        assert!(validate_transport(t.path()).is_err());
     }
 }

@@ -178,7 +178,9 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
     if path == "/api/execution/resume" || path.ends_with("/pin") {
         return true;
     }
-    if path == "/api/engineering-os/repair" {
+    if path == "/api/engineering-os/repair"
+        || (path.starts_with("/api/engineering-os/items/") && path.ends_with("/recover"))
+    {
         return true;
     }
     if path.starts_with("/api/settings/") {
@@ -293,6 +295,14 @@ fn make_binding(
     } else {
         None
     };
+    if decoded.starts_with("/api/engineering-os/items/") && decoded.ends_with("/recover") {
+        let id = decoded
+            .trim_start_matches("/api/engineering-os/items/")
+            .trim_end_matches("/recover");
+        data["recovery"] =
+            crate::recovery::snapshot(&state.config.home, id).map_err(|_| denied())?;
+        data["execution"] = json!(state.runs.execution.status());
+    }
     if path == "/api/engineering-os/repair" {
         data["worker_version"] = json!(state.config.version);
         data["contract"] = json!(plantool_contract::Health::default());
