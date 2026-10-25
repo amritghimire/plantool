@@ -1,0 +1,1 @@
+CREATE TABLE attempt_waits(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id),next_at INTEGER NOT NULL,reason TEXT NOT NULL,cycles INTEGER NOT NULL DEFAULT 1);

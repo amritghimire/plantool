@@ -41,6 +41,15 @@ pub fn schedule(
         due(now, day, &time, &zone)?,
     ))
 }
+pub fn planning_open(
+    db: &Connection,
+    project: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<bool> {
+    Ok(schedule(db, project, now)?.1.is_some()
+        || database::get::<String>(db, &format!("manual_sprint_week:{project}"))?.as_deref()
+            == Some(crate::sprint_view::week(db, project, now)?.as_str()))
+}
 pub fn ensure_project(home: &Path, project: &str) -> anyhow::Result<String> {
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -230,7 +239,9 @@ pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result
             let p: Value = serde_json::from_str(&payload)?;
             let week = p["week"].as_str().context("Week missing")?;
             let (signature, current) = schedule(tx, &request.project, chrono::Utc::now())?;
-            if p["schedule"] != signature || current.as_deref() != Some(week) {
+            let manual = p["manual"] == true
+                && crate::sprint_view::week(tx, &request.project, chrono::Utc::now())? == week;
+            if p["schedule"] != signature || (!manual && current.as_deref() != Some(week)) {
                 s["step"] = json!("project_wait");
                 s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
                 workflow::save(tx, &item, &s)?;
@@ -267,7 +278,16 @@ pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result
             ensure!(
                 schedule(tx, &request.project, chrono::Utc::now())?
                     .1
-                    .is_some(),
+                    .is_some()
+                    || database::get::<String>(
+                        tx,
+                        &format!("manual_sprint_week:{}", request.project)
+                    )?
+                    .as_deref()
+                        == Some(
+                            crate::sprint_view::week(tx, &request.project, chrono::Utc::now())?
+                                .as_str()
+                        ),
                 "Sprint is not due under current settings"
             );
             tx.execute(

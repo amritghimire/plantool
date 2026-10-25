@@ -32,7 +32,7 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     db.pragma_update(None, "foreign_keys", true)?;
     let version: i64 = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    ensure!(version <= 8, "Database is newer than this PlanTool version");
+    ensure!(version <= 9, "Database is newer than this PlanTool version");
     if version == 0 {
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // A second connection may have waited for the same initial migration.
@@ -103,6 +103,15 @@ pub fn open(home: &Path) -> anyhow::Result<Connection> {
         if current < 8 {
             tx.execute_batch(include_str!("../migrations/008_loop.sql"))?;
             tx.pragma_update(None, "user_version", 8)?;
+        }
+        tx.commit()?;
+    }
+    if version < 9 {
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current < 9 {
+            tx.execute_batch(include_str!("../migrations/009_autonomous.sql"))?;
+            tx.pragma_update(None, "user_version", 9)?;
         }
         tx.commit()?;
     }

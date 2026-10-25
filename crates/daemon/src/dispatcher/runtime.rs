@@ -63,9 +63,35 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
     if state.runs.execution.status().stopped {
         return Ok(());
     }
+    let db = database::open(&state.config.home)?;
+    let catalog_due:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM attempt_waits w JOIN attempts a ON a.id=w.attempt_id WHERE a.state='queued' AND w.reason NOT LIKE 'Waiting for a prerequisite work item%')",[],|r|r.get(0))?;
+    let last = database::get::<i64>(&db, "automatic.catalog_checked_at")?.unwrap_or(0);
+    if catalog_due && database::unix_now() - last >= 300 {
+        database::set(&db, "automatic.catalog_checked_at", &database::unix_now())?;
+        let access = {
+            let mut q = db.prepare(
+                "SELECT route,error FROM route_health WHERE error LIKE 'Owner % required:%'",
+            )?;
+            let rows = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let _ = crate::models::gateway::verify(
+            &state.config.home,
+            &crate::models::gateway::HttpGateway,
+        )
+        .await;
+        for (route, error) in access {
+            db.execute(
+                "UPDATE route_health SET available=0,error=?2 WHERE route=?1",
+                params![route, error],
+            )?;
+        }
+    }
     let rows = {
         let db = database::open(&state.config.home)?;
-        let mut q=db.prepare("SELECT a.id,d.request_json,d.execution_generation FROM attempts a JOIN dispatches d ON d.attempt_id=a.id WHERE a.state='queued' ORDER BY a.started_at,a.id LIMIT 32")?;
+        let mut q=db.prepare("SELECT a.id,d.request_json,d.execution_generation FROM attempts a JOIN dispatches d ON d.attempt_id=a.id WHERE a.state='queued' AND NOT EXISTS(SELECT 1 FROM attempt_waits w WHERE w.attempt_id=a.id AND w.next_at>cast(strftime('%s','now') AS INTEGER)) ORDER BY a.started_at,a.id LIMIT 32")?;
         let rows = q
             .query_map([], |r| {
                 Ok((
@@ -96,6 +122,48 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(error) = run(&state, &id, &request, generation).await {
+                let text = error.to_string();
+                if request.capability == "read"
+                    && !crate::workflow::coding(&request.role)
+                    && text.contains("Stop All invalidated the dispatch")
+                    && !state.runs.execution.status().stopped
+                {
+                    if let Ok(db) = database::open(&state.config.home) {
+                        let _ = db.execute(
+                            "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
+                            [&id],
+                        );
+                    }
+                }
+                if request.capability == "read"
+                    && !crate::workflow::coding(&request.role)
+                    && (text.contains("429")
+                        || text.to_ascii_lowercase().contains("timeout")
+                        || text.to_ascii_lowercase().contains("temporarily"))
+                {
+                    if let Ok(db) = database::open(&state.config.home) {
+                        if let Ok(Some(raw)) = db.query_row(
+                            "SELECT route_json FROM dispatches WHERE attempt_id=?1",
+                            [&id],
+                            |r| r.get::<_, Option<String>>(0),
+                        ) {
+                            if let Ok(route) = serde_json::from_str(&raw) {
+                                let project =
+                                    item(&db, &request.item).map(|p| p.0).unwrap_or_default();
+                                let _ = crate::automation::read_failure(
+                                    &state.config.home,
+                                    &id,
+                                    &project,
+                                    &request.item,
+                                    &request.role,
+                                    &route,
+                                    &text,
+                                    502,
+                                );
+                            }
+                        }
+                    }
+                }
                 let result = RoleResult {
                     item: request.item.clone(),
                     role: request.role.clone(),
@@ -272,13 +340,33 @@ async fn run(
         state.runs.execution.status().generation == generation,
         "Stop All invalidated the dispatch"
     );
-    let selected = router::select(
+    if crate::automation::await_dependencies(
+        home,
+        id,
+        &request.item,
+        request.inputs["step"].as_str().unwrap_or(""),
+    )? {
+        return Ok(());
+    }
+    let selected = match router::select(
         home,
         &project,
         &request.item,
         &request.role,
         database::unix_now(),
-    )?;
+    ) {
+        Ok(route) => route,
+        Err(error) => {
+            if let Some(next) =
+                router::retry_at(home, &project, &request.role, database::unix_now())?
+            {
+                crate::automation::defer(home, id, next, &error.to_string())?;
+                return Ok(());
+            }
+            return Err(error);
+        }
+    };
+    db.execute("DELETE FROM attempt_waits WHERE attempt_id=?1", [id])?;
     let read_call = !crate::workflow::coding(&request.role)
         || request.inputs["step"] == "discussion"
         || request.inputs["step"] == "sprint_plan"
@@ -341,32 +429,47 @@ async fn run(
                     && !state.runs.execution.status().stopped
                     && state.runs.execution.status().generation == generation
                 {
-                    router::exhaust(
+                    let detail = error.downcast_ref::<crate::worker::CallError>().unwrap();
+                    crate::automation::read_failure(
                         home,
-                        &selected,
-                        Some(database::unix_now() + 3600),
-                        database::unix_now(),
-                    )?;
-                    if router::select(
-                        home,
+                        id,
                         &project,
                         &request.item,
                         &request.role,
-                        database::unix_now(),
-                    )
-                    .is_ok()
-                    {
-                        database::open(home)?.execute(
-                            "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
-                            [id],
-                        )?;
-                    }
+                        &selected,
+                        &detail.detail,
+                        detail.status,
+                    )?;
                 }
                 return Err(error);
             }
         };
         let result: RoleResult = serde_json::from_value(result)?;
-        report(home, &result)?;
+        if let Err(error) = report(home, &result) {
+            let text = error.to_string();
+            let control = [
+                "Stale",
+                "frozen",
+                "closed",
+                "scope/generation",
+                "execution changed",
+            ]
+            .iter()
+            .any(|word| text.contains(word));
+            if request.role != "docs" && !control {
+                crate::automation::read_failure(
+                    home,
+                    id,
+                    &project,
+                    &request.item,
+                    &request.role,
+                    &selected,
+                    r#"{"detail":{"kind":"invalid_role_result"}}"#,
+                    502,
+                )?;
+            }
+            return Err(error);
+        }
         return Ok(());
     }
     let _lease = lease::acquire(

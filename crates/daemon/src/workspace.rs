@@ -167,6 +167,30 @@ pub fn record(
         &format!("turn:{}", result.attempt_id),
     )?;
     let round = d["round"].as_u64().unwrap_or(0);
+    let normalized = body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    if round < 3 && d["previous_body"].as_str() == Some(normalized.as_str()) {
+        let summary = format!(
+            "Discussion ended because no new information was added. Latest comment: {body}"
+        );
+        tx.execute(
+            "UPDATE discussion_topics SET state='closed',summary=?2 WHERE id=?1",
+            params![d["id"].as_str(), summary],
+        )?;
+        s["discussion_summary"] = json!(summary);
+        s["step"] = d["after"].clone();
+        append(
+            tx,
+            d["thread"].as_str().context("Missing thread")?,
+            "daemon",
+            "This round repeated the previous update. Moving on to prepare a proposal.",
+            &format!("discussion-stalled:{}", result.attempt_id),
+        )?;
+        return Ok(());
+    }
     let mut participants = d["participants"].as_array().cloned().unwrap_or_default();
     if !participants.contains(&json!(result.role)) {
         participants.push(json!(result.role))
@@ -196,6 +220,7 @@ pub fn record(
         s["discussion"]["speaker"] = json!(speaker);
         s["discussion"]["round"] = json!(next_round);
         s["discussion"]["participants"] = json!(participants);
+        s["discussion"]["previous_body"] = json!(normalized);
         tx.execute("UPDATE discussion_topics SET speaker=?2,round=?3,participants_json=?4,sequence=sequence+1 WHERE id=?1",params![d["id"].as_str(),speaker,next_round,json!(participants).to_string()])?;
     }
     Ok(())

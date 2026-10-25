@@ -424,7 +424,11 @@ pub fn tick_backlog(home: &Path, now: chrono::DateTime<chrono::Utc>) -> anyhow::
         rows
     };
     for (item, project, urgent) in rows {
-        if urgent || crate::scheduler::schedule(&tx, &project, now)?.1.is_some() {
+        if urgent
+            || crate::scheduler::schedule(&tx, &project, now)?.1.is_some()
+            || database::get::<String>(&tx, &format!("manual_sprint_week:{project}"))?.as_deref()
+                == Some(crate::sprint_view::week(&tx, &project, now)?.as_str())
+        {
             wake(
                 &tx,
                 &item,

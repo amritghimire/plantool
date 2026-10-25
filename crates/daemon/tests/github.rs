@@ -705,7 +705,7 @@ fn prior_github_draft_database_upgrades_without_losing_allowlist() {
         upgraded
             .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
     upgraded
         .prepare("SELECT summary,discussion_thread_id FROM github_gate_context")

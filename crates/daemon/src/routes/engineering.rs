@@ -211,9 +211,46 @@ async fn retry(
         .map(Json)
         .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))
 }
+async fn sprints(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    Ok(Json(crate::sprint_view::view(&state.config.home, &id)?))
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanSprint {
+    idempotency_key: String,
+}
+async fn plan_sprint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
+    Json(body): Json<PlanSprint>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    approval.recheck(&state)?;
+    if state.runs.execution.status().stopped {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Resume execution before requesting sprint planning.".into(),
+        ));
+    }
+    crate::sprint_view::trigger(&state.config.home, &id, &body.idempotency_key)
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))
+}
 pub fn browser_routes() -> Router<AppState> {
     Router::new()
         .route("/engineering-os/status", get(status))
+        .route("/engineering-os/projects/{id}/sprints", get(sprints))
+        .route(
+            "/engineering-os/projects/{id}/sprints/plan",
+            post(plan_sprint),
+        )
         .route(
             "/engineering-os/items/{id}/recover",
             get(recovery).post(retry),

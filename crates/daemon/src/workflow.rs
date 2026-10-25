@@ -427,7 +427,7 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
             );
         }
         "supervisor" => ensure!(
-            matches!(&result.details,Some(RoleDetails::Strategy{action,..}) if ["retry","replan","escalate","clarify"].contains(&action.as_str())),
+            matches!(&result.details,Some(RoleDetails::Strategy{action,..}) if ["retry","replan","escalate","clarify","wait"].contains(&action.as_str())),
             "Supervisor strategy required"
         ),
         _ => {}
@@ -621,6 +621,40 @@ pub fn record(
         let rounds = s["supervisor_rounds"].as_u64().unwrap_or(0) + 1;
         s["supervisor_rounds"] = json!(rounds);
         match &result.details {
+            Some(RoleDetails::Strategy {
+                action,
+                task_key: Some(target),
+                reason,
+                ..
+            }) if action == "wait" => {
+                let (kind, value) = target
+                    .split_once(':')
+                    .context("Specify pr:<number> or file:<path>")?;
+                ensure!(
+                    (kind == "pr" && value.parse::<u64>().is_ok_and(|n| n > 0))
+                        || (kind == "file"
+                            && !value.is_empty()
+                            && value.len() <= 512
+                            && !Path::new(value).is_absolute()
+                            && !Path::new(value)
+                                .components()
+                                .any(|c| matches!(c, std::path::Component::ParentDir))
+                            && !value.contains(['*', '?', '[', ']', ':', '\0', '\n', '\r'])),
+                    "Invalid prerequisite"
+                );
+                s["step"] = json!("prerequisite_wait");
+                s["prerequisite"] = json!({"kind":kind,"value":value,"reason":reason});
+                let thread = crate::workspace::item_thread(tx, &result.item)?;
+                crate::workspace::append(
+                    tx,
+                    &thread,
+                    "daemon",
+                    &format!(
+                        "{reason} We will check this automatically and continue when it is ready."
+                    ),
+                    &format!("prerequisite:{}", result.attempt_id),
+                )?;
+            }
             Some(RoleDetails::Strategy { action, reason, .. }) if action == "clarify" => {
                 ensure!(
                     !reason.trim().is_empty() && reason.len() <= 4096,
@@ -992,6 +1026,10 @@ pub fn recover(home: &Path, attempt: &str, error: &str) -> anyhow::Result<()> {
         tx.query_row("SELECT item_id FROM attempts WHERE id=?1", [attempt], |r| {
             r.get(0)
         })?;
+    let stale:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts a JOIN item_generations g ON g.item_id=a.item_id WHERE a.id=?1 AND g.generation>a.generation)",[attempt],|r|r.get(0))?;
+    if stale {
+        return Ok(());
+    }
     if state(&tx, &item)?.is_some_and(|s| s["closed_on_github"] == true) {
         return Ok(());
     }

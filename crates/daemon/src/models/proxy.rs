@@ -319,12 +319,24 @@ pub async fn complete(
     let reply = match reply {
         Ok(reply) => reply,
         Err(error) => {
-            router::exhaust(home, &selected, None, database::unix_now())?;
+            router::exhaust(
+                home,
+                &selected,
+                Some(database::unix_now() + 60),
+                database::unix_now(),
+            )?;
             return Err(error);
         }
     };
     if router::quota(reply.status, &reply.body) || reply.status >= 500 {
-        router::exhaust(home, &selected, reply.reset, database::unix_now())?;
+        router::exhaust(
+            home,
+            &selected,
+            reply
+                .reset
+                .or_else(|| (reply.status >= 500).then(|| database::unix_now() + 60)),
+            database::unix_now(),
+        )?;
         if let Some(attempt) = &context.attempt_id {
             db.execute(
                 "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",

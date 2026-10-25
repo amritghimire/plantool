@@ -16,7 +16,9 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         directive = result.get("details") or {}
         rounds = state.get("supervisor_rounds", 0) + 1
         state["supervisor_rounds"] = rounds
-        if directive.get("action") == "clarify":
+        if directive.get("action") == "wait":
+            state.update(step="prerequisite_wait")
+        elif directive.get("action") == "clarify":
             state.update(step="owner_question", owner_question={"question":directive.get("reason")})
         elif rounds > 2 or directive.get("action") == "escalate":
             state.update(step="escalated", frozen=True)

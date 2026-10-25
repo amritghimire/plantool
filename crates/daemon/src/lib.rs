@@ -2,6 +2,7 @@ pub mod archive;
 pub mod artifacts;
 pub mod assets;
 pub mod auth;
+pub mod automation;
 pub mod changes;
 pub mod commits;
 pub mod config;
@@ -243,3 +244,5 @@ pub mod loop_engine;
 pub mod engineering_view;
 
 pub mod recovery;
+
+pub mod sprint_view;

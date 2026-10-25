@@ -16,6 +16,15 @@ fn activity_state(db: &Connection, id: &str, stored: &str) -> anyhow::Result<Str
     if held {
         return Ok("running".into());
     }
+    let retry: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM attempt_waits WHERE attempt_id=?1)",
+        [id],
+        |r| r.get(0),
+    )?;
+    if retry {
+        return Ok("retry_wait".into());
+    }
+
     let queued: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM model_queue WHERE attempt_id=?1)",
         [id],
@@ -47,6 +56,12 @@ fn item_rows(
 ) -> anyhow::Result<Vec<Value>> {
     let mut q=db.prepare("SELECT i.id,i.project_id,i.title,i.github_issue_number,i.state,i.priority,w.pr_number,w.last_error,json_extract(w.state_json,'$.frozen'),json_extract(w.state_json,'$.step'),(SELECT count(*) FROM gates g WHERE g.item_id=i.id AND g.state IN('open','pending')) FROM work_items i JOIN workflow_items w ON w.item_id=i.id WHERE i.kind='eos' AND i.deleted_at IS NULL AND (coalesce(json_extract(w.state_json,'$.project'),0)=0 OR ?2) AND (?1 IS NULL OR i.project_id=?1) ORDER BY i.created_at DESC,i.id")?;
     let rows=q.query_map(rusqlite::params![project,schedulers],|r|Ok(json!({"id":r.get::<_,String>(0)?,"project":r.get::<_,String>(1)?,"title":r.get::<_,String>(2)?,"issue":r.get::<_,Option<u64>>(3)?,"state":r.get::<_,String>(4)?,"priority":r.get::<_,Option<String>>(5)?,"pr":r.get::<_,Option<u64>>(6)?,"error":r.get::<_,Option<String>>(7)?,"frozen":r.get::<_,Option<bool>>(8)?.unwrap_or(false),"step":r.get::<_,Option<String>>(9)?.unwrap_or_default(),"waiting_gates":r.get::<_,u64>(10)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let mut rows = rows;
+    for row in &mut rows {
+        let state = crate::workflow::state(db, row["id"].as_str().unwrap())?.unwrap_or(Value::Null);
+        row["next_action"] =
+            crate::automation::next_action(db, row["id"].as_str().unwrap(), &state)?;
+    }
     Ok(rows)
 }
 fn items(db: &Connection, project: Option<&str>) -> anyhow::Result<Vec<Value>> {

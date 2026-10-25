@@ -469,6 +469,45 @@ pub async fn poll_at(
         }
         database::open(home)?.execute("INSERT INTO github_objects VALUES(?1,?2,?3) ON CONFLICT(resource,object_id) DO UPDATE SET body_json=excluded.body_json",params![format!("{}:pr_state",repo.repo_id),n.to_string(),state.to_string()])?;
     }
+    {
+        let db = database::open(home)?;
+        let waiting:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE i.project_id=?1 AND json_extract(w.state_json,'$.step')='prerequisite_wait')",[&repo.project],|r|r.get(0))?;
+        let check_key = format!("automatic.prerequisites_checked_at:{}", repo.project);
+        let last = database::get::<i64>(&db, &check_key)?.unwrap_or(0);
+        if waiting && database::unix_now() - last >= 60 {
+            database::set(&db, &check_key, &database::unix_now())?;
+            use super::git_ops::GitOps;
+            let root: String = db.query_row(
+                "SELECT local_checkout FROM projects WHERE id=?1",
+                [&repo.project],
+                |r| r.get(0),
+            )?;
+            let numbers = {
+                let mut q=db.prepare("SELECT json_extract(w.state_json,'$.prerequisite.value') FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE i.project_id=?1 AND json_extract(w.state_json,'$.step')='prerequisite_wait' AND json_extract(w.state_json,'$.prerequisite.kind')='pr' LIMIT 16")?;
+                let numbers = q
+                    .query_map([&repo.project], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                numbers
+            };
+            for number in numbers {
+                if let Ok(number) = number.parse::<u64>() {
+                    if let Ok(reply) = api
+                        .request("GET", &format!("{base}/pulls/{number}"), None, None)
+                        .await
+                    {
+                        if reply.status == 200 {
+                            db.execute("INSERT INTO github_objects VALUES(?1,?2,?3) ON CONFLICT(resource,object_id) DO UPDATE SET body_json=excluded.body_json",params![format!("{}:pr_state",repo.repo_id),number.to_string(),reply.body.to_string()])?;
+                        }
+                    }
+                }
+            }
+            let files_fresh = super::git_ops::AppGit
+                .fetch(api, Path::new(&root), &repo.full_name, &repo.default_branch)
+                .await
+                .is_ok();
+            crate::automation::wake_prerequisites(home, &repo.project, files_fresh)?;
+        }
+    }
     gates::publish(home, api, repo).await?;
     super::sprints::refresh(home, repo)?;
     super::sprints::publish(home, api, repo).await?;

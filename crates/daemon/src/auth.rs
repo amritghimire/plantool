@@ -178,7 +178,8 @@ pub fn requires_assertion(method: &str, path: &str, body: &Value, human: bool) -
     if path == "/api/execution/resume" || path.ends_with("/pin") {
         return true;
     }
-    if path == "/api/engineering-os/repair"
+    if (path.starts_with("/api/engineering-os/projects/") && path.ends_with("/sprints/plan"))
+        || path == "/api/engineering-os/repair"
         || (path.starts_with("/api/engineering-os/items/") && path.ends_with("/recover"))
     {
         return true;
@@ -906,6 +907,7 @@ mod tests {
     #[test]
     fn approvals_and_existing_security_changes_require_assertions() {
         for path in [
+            "/api/engineering-os/projects/project/sprints/plan",
             "/api/settings/difftool",
             "/api/settings/models/diagnose",
             "/api/settings/loop",

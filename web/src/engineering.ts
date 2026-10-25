@@ -24,6 +24,7 @@ export type EngineeringItem = {
   frozen: boolean;
   step: string;
   waiting_gates: number;
+  next_action?: {kind:string;message:string;retry_at?:number;href?:string;button?:string};
 };
 export type EngineeringAttempt = {
   id: string;
@@ -80,6 +81,8 @@ export type EngineeringDetail = {
 };
 export const stepLabel = (step: string) =>
   ({
+    prerequisite_wait: "Waiting for a prerequisite",
+    retry_wait: "Waiting to retry",
     closed: "Closed on GitHub",
     owner_question: "Waiting for your answer in the item thread",
     project_wait: "Waiting for project events",
