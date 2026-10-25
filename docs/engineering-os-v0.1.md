@@ -430,7 +430,7 @@ The model IDs are this spec's best knowledge as of October 2026. **Verify each s
 - **Move back up** at the next attempt once a higher route's `exhausted_until` has passed.
 - **Never switch models mid-run.** On a move-down during a run, the agent checkpoints: a work-in-progress commit in the worktree, then the attempt ends `needs_fix` with a handoff summary, and the next attempt starts on the next route.
 - **Diversity:** QA and Reviewer skip routes whose model family (`openai`, `minimax`, `zai`, `poolside`, `google`, `nvidia`, `mistral`, `qwen`) matches the family that produced the code under review. If no route is left, run anyway and set `review_guide.same_family_warning`.
-- Codex routes are valid only for CLI-run roles (Backend, Frontend, Reviewer), because the ChatGPT subscription works only through the Codex CLI.
+- Codex routes use the signed-in Codex CLI/app-server subscription adapter for every role. Non-coding steps use a read-only sandbox and typed results; allowing Codex in a role chain does not grant coding, approval or publishing capabilities. Never route a subscription-backed Codex model through an OpenAI API key.
 - Record the model of every attempt in `attempts.model_route` and in `runs_summary`.
 
 ### 10.4 LLM proxy (the enforcement point)

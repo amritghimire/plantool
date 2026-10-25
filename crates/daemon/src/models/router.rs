@@ -93,9 +93,22 @@ impl Chains {
                     .ok_or_else(|| anyhow::anyhow!("Unknown chain route"))?;
                 anyhow::ensure!(
                     route.adapter != "codex"
-                        || ["backend", "frontend", "reviewer"].contains(&role.as_str()),
-                    "Codex is only valid for CLI roles"
+                        || [
+                            "cto",
+                            "pm",
+                            "backend",
+                            "frontend",
+                            "devops",
+                            "qa",
+                            "reviewer",
+                            "docs",
+                            "supervisor"
+                        ]
+                        .contains(&role.as_str()),
+                    "Unknown Codex role chain"
                 );
+                // Every role can use the signed-in app-server adapter. The dispatcher
+                // still enforces read-only versus coding capabilities per step.
             }
         }
         for budget in self.budgets.values() {
@@ -168,6 +181,7 @@ pub fn select(
     let db = database::open(home)?;
     let allowed = allowed(&db, project)?;
     let mut candidates = Vec::new();
+    let mut excluded = Vec::new();
     for name in cfg
         .chains
         .get(role)
@@ -175,6 +189,10 @@ pub fn select(
     {
         let route = cfg.routes.get(name).unwrap();
         if !allowed.contains(&route.provider) {
+            excluded.push(format!(
+                "{name}: provider {} is disallowed by project policy",
+                route.provider
+            ));
             continue;
         }
         let health: Option<(bool, Option<String>)> = db
@@ -185,21 +203,31 @@ pub fn select(
             )
             .optional()?;
         let Some((true, resolved)) = health else {
+            excluded.push(format!(
+                "{name}: catalog availability is missing/failed; verify this route in Settings"
+            ));
             continue;
         };
         let mut route = route.clone();
         if route.model == "auto" {
-            route.model =
-                resolved.ok_or_else(|| anyhow::anyhow!("Auto route was not resolved at setup"))?;
+            let Some(model) = resolved else {
+                excluded.push(format!("{name}: auto model unresolved; verify routes"));
+                continue;
+            };
+            route.model = model;
         }
         let budget = cfg.budgets.get(&route.provider);
         let (kind, start, _) = window(budget, now);
-        let exhausted: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM budgets WHERE route IN(?1,?2) AND exhausted_until>?3)",
+        let exhausted: Option<i64> = db.query_row(
+            "SELECT max(CAST(exhausted_until AS INTEGER)) FROM budgets WHERE route IN(?1,?2) AND CAST(exhausted_until AS INTEGER)>?3",
             params![name, route.provider, now],
             |r| r.get(0),
         )?;
-        if exhausted {
+        if let Some(reset) = exhausted {
+            let when = chrono::DateTime::from_timestamp(reset, 0)
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_else(|| reset.to_string());
+            excluded.push(format!("{name}: cooling down until {when}"));
             continue;
         }
         let used:u64=db.query_row("SELECT coalesce(sum(used_requests),0) FROM budgets WHERE route=?1 AND window_kind=?2 AND window_start=?3",params![route.provider,kind,start],|r|r.get(0))?;
@@ -211,6 +239,7 @@ pub fn select(
                     max.saturating_mul(100 - budget.reserve_pct) / 100
                 };
                 if used >= limit {
+                    excluded.push(format!("{name}: {} requests used; role allowance {limit} for {kind} window (reserves apply)",used));
                     continue;
                 }
             }
@@ -239,7 +268,12 @@ pub fn select(
         .find(|s| !s.same_family_warning)
         .cloned()
         .or_else(|| candidates.into_iter().next())
-        .ok_or_else(|| anyhow::anyhow!("No available, allowed route within budget"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No available, allowed route within budget for {role}. {}",
+                excluded.join("; ")
+            )
+        })
 }
 /// Explicit diagnostic requests use only the unreserved provider allowance.
 pub fn diagnostic_capacity(home: &Path, selected: &Selected) -> anyhow::Result<()> {

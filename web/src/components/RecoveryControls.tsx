@@ -17,6 +17,7 @@ export function RecoveryControls({
     <section className="next-action">
       <strong>Owner recovery</strong>
       <p>{data?.message ?? "Checking recovery eligibility…"}</p>
+      {data?.routing_error && <p role="alert">No eligible model route now: {data.routing_error}. Update and verify routes in Settings → Models & providers; this panel refreshes current eligibility automatically.</p>}
       {data?.eligible && (
         <>
           <p>
@@ -26,7 +27,7 @@ export function RecoveryControls({
           </p>
           <button
             className="btn"
-            disabled={busy}
+            disabled={busy || !!data.routing_error}
             onClick={async () => {
               setBusy(true);
               setFailure("");

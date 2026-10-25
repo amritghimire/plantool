@@ -32,3 +32,9 @@ it("does not offer retry for unsafe coding recovery", async () => {
   await screen.findByText("Reconcile uncertain effects manually");
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
 });
+it("shows current route exclusions and avoids a retry when no route is eligible",async()=>{
+ vi.spyOn(api,"recovery").mockResolvedValue({eligible:true,attempt_id:"a1",step:"triage",message:"Read-only recovery",routing_error:"codex-sol: provider openai is disallowed by project policy"});
+ render(<RecoveryControls item="i" onRecovered={()=>{}}/>);
+ await screen.findByText(/No eligible model route now/);
+ expect(screen.getByRole("button",{name:"Retry failed step with passkey"})).toBeDisabled();
+});

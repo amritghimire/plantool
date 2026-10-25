@@ -162,3 +162,13 @@ it("shows persisted attempts, real graph history and GitHub gate links", async (
     screen.queryByRole("button", { name: /approve/i }),
   ).not.toBeInTheDocument();
 });
+
+it("shows scan source permission gaps and the pinned evidence snapshot without suggesting worker repair",async()=>{
+  vi.spyOn(api,"engineeringItem").mockResolvedValue({item:{...overview.items[0],title:"DevOps scan",issue:null,step:"scan_devops"},repository:"owner/alpha",base:"snapshot-sha",head:"snapshot-sha",attempts:[],gates:[],events:[],history_limit:200,scan_snapshot:"snapshot-sha",scan_sources:[{name:"dependency_advisories",available:false,http_status:403,reason:"GitHub access denied",next_step:"Owner: check Dependabot alerts read permission",truncated:false}]});
+  render(<MemoryRouter initialEntries={["/engineering/items/p%3Ascan"]}><Routes><Route path="/engineering/items/:id" element={<EngineeringItemPage/>}/></Routes></MemoryRouter>);
+  await screen.findByRole("region",{name:"Scan evidence coverage"});
+  expect(screen.getByText(/coverage unknown/)).toHaveTextContent("HTTP 403");
+  expect(screen.getByText(/Next: Owner: check Dependabot/)).toBeInTheDocument();
+  expect(screen.getByText("snapshot-sha",{selector:"code"})).toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:/repair/i})).not.toBeInTheDocument();
+});

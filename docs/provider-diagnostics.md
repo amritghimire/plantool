@@ -75,3 +75,30 @@ quota or network failures. If a post outcome is uncertain, observation continues
 without repeating the write; inspect the GitHub issue and logs if it persists.
 Pending informational status delivery does not prevent eligible owner recovery.
 Existing messages/decisions are not rewritten or fabricated on upgrade.
+
+## Scan source access is separate from provider health
+
+A GitHub dependency-advisory 403 is not an Ollama/OpenRouter model error. The scan
+records optional API access failures as explicit coverage gaps, with HTTP status and
+an owner next action. Scan detail exposes those sources; scan instructions require
+reviewing available sources and reporting partial coverage, never treating missing
+advisories as clean. A completed available-source scan advances to QA/PM; mandatory
+inventory failures and genuine model/tool failures still fail honestly. Failed model
+results are not rewritten into success, and existing frozen scans stay frozen until
+eligible owner recovery.
+
+Check GitHub App repository permission **Dependabot alerts: Read-only**, accept any
+installation permission update, and check repository Settings → Security → Code
+security/Dependabot alerts. 403 can also indicate GitHub rate/access restrictions;
+it is not proof that the permission is the only cause. No write/admin permission is
+requested automatically. Snapshot evidence is pinned to collection time; a later
+scan captures changed access. Missing optional coverage does not block unrelated work.
+
+When no model starts, the route error now lists each candidate's exclusion: project
+policy, missing catalog verification, cooldown expiry (UTC timestamp), or role budget
+allowance. Changing chain order does not clear these restrictions, and a frozen item
+still needs its own recovery after saving/verifying corrected configuration.
+
+Owner recovery also reevaluates current route availability without a live model call.
+It shows these exclusions and disables a retry while no route is eligible, even for
+old generic failure cards. The panel polls again as cooldowns expire or settings change.

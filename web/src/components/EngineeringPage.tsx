@@ -238,7 +238,7 @@ export function EngineeringPage() {
                     <span>
                       <strong>{a.role}</strong> · {a.title}
                       <small>
-                        {a.model ?? a.route}{" "}
+                        {a.model ?? (a.route==="pending"?"No model started":a.route)}{" "}
                         {a.provider ? `· ${a.provider}` : ""}
                       </small>
                     </span>
@@ -387,6 +387,7 @@ export function EngineeringItemPage() {
           {item.error}
         </p>
       )}
+      {!!data.scan_sources?.length && <section className="next-action" aria-label="Scan evidence coverage"><strong>Scan evidence coverage</strong>{data.scan_snapshot&&<p>Evidence snapshot: <code>{data.scan_snapshot}</code>. Upgrading does not refresh historical scan evidence.</p>}{data.scan_sources.map(source=><div key={source.name}><p>{source.name}: {source.available?"available":"unavailable — coverage unknown"}{source.http_status?` (HTTP ${source.http_status})`:""}{source.truncated?" · bounded snapshot, additional pages not inspected":""}</p>{!source.available&&<><p>{source.reason}</p><p>Next: {source.next_step}</p></>}</div>)}<p>Missing optional sources do not establish worker failure or a clean repository.</p></section>}
       <div className="next-action">
         <strong>Next action</strong>
         <p>
@@ -450,7 +451,7 @@ export function EngineeringItemPage() {
                   <span className="state-chip">{a.state}</span>
                 </div>
                 <p>
-                  {a.model ?? a.route}
+                  {a.model ?? (a.route==="pending"?"No model started":a.route)}
                   {a.provider ? ` · ${a.provider}` : ""}
                 </p>
                 <p>{a.summary ?? "No result summary recorded yet."}</p>

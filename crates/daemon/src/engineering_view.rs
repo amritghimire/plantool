@@ -120,9 +120,12 @@ pub fn item(home: &Path, id: &str) -> anyhow::Result<Value> {
     let gates=q.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"hash":r.get::<_,String>(3)?,"sha":r.get::<_,Option<String>>(4)?,"comment":r.get::<_,Option<u64>>(5)?,"at":r.get::<_,String>(6)?})))?.collect::<Result<Vec<_>,_>>()?;
     let mut q=db.prepare("SELECT id,at,action,json_extract(metadata_json,'$.step') FROM audit WHERE subject=?1 AND action IN('workflow.projected','workflow.started','workflow.recovery_needed','loop.result') ORDER BY id DESC LIMIT 200")?;
     let events=q.query_map([id],|r|Ok(json!({"id":r.get::<_,u64>(0)?,"at":r.get::<_,String>(1)?,"action":r.get::<_,String>(2)?,"step":r.get::<_,Option<String>>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
+    let facts = crate::workflow::state(&db, id)?.unwrap_or(Value::Null);
+    let scan_sources = crate::loop_engine::scan_sources(&facts["loop_context"]);
+    let scan_snapshot = facts["loop_context"]["default_sha"].clone();
     let pending:u64=db.query_row("SELECT count(*) FROM outbox WHERE aggregate_id=?1 AND kind='github.status' AND delivered_at IS NULL",[id],|r|r.get(0))?;
     Ok(
-        json!({"notification_delivery":{"pending":pending},"item":item,"repository":repo,"base":base,"head":head,"attempts":attempts,"gates":gates,"events":events,"history_limit":200}),
+        json!({"scan_snapshot":scan_snapshot,"scan_sources":scan_sources,"notification_delivery":{"pending":pending},"item":item,"repository":repo,"base":base,"head":head,"attempts":attempts,"gates":gates,"events":events,"history_limit":200}),
     )
 }
 #[cfg(test)]

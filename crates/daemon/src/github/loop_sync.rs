@@ -444,6 +444,28 @@ pub fn scan_files(home: &Path, root: &Path, base: &str) -> anyhow::Result<Value>
     crate::models::proxy::check_payload(root, &policy, &evidence)?;
     Ok(evidence)
 }
+/// Optional API sources must describe access gaps, never turn them into clean evidence.
+async fn scan_source(api: &dyn Api, path: &str, field: Option<&str>, name: &str) -> Value {
+    let reply = api
+        .request("GET", &format!("{path}&per_page=100&page=1"), None, None)
+        .await;
+    let (status, rows, truncated) = match reply {
+        Ok(reply) if reply.status == 200 => {
+            let rows = if let Some(field) = field {
+                reply.body[field].as_array().cloned()
+            } else {
+                reply.body.as_array().cloned()
+            };
+            (Some(200), rows, reply.next)
+        }
+        Ok(reply) => (Some(reply.status), None, false),
+        Err(_) => (None, None, false),
+    };
+    if let Some(rows) = rows {
+        return json!({"available":true,"http_status":200,"truncated":truncated,"captured_at":plantool_core::now(),if name=="ci" {"runs"}else{"alerts"}:rows});
+    }
+    json!({"available":false,"http_status":status,"captured_at":plantool_core::now(),"reason":match status {Some(401|403)=>"GitHub access denied or rate limited",Some(404)=>"GitHub source unavailable for this repository",_=>"GitHub source could not be collected"},"next_step":if name=="ci" {"Owner: check GitHub App Actions read permission and Actions availability. Continue other scan sources with partial coverage."}else{"Owner: check GitHub App Dependabot alerts read permission, approve updated installation permissions, and check repository Dependabot alerts settings. A 403 can also be rate limiting. Continue other scan sources with partial coverage."},"note":"Unavailable is unknown, not clean. This optional source alone must not fail the scan or require another model/worker repair."})
+}
 pub async fn scans(
     home: &Path,
     api: &dyn Api,
@@ -486,33 +508,23 @@ pub async fn scans(
         &repo.default_branch,
         percent_encoding::NON_ALPHANUMERIC,
     );
-    let ci = pages(
+    evidence["ci"] = scan_source(
         api,
         &format!(
             "{}/actions/runs?branch={branch}&status=completed",
             repo.path()?
         ),
         Some("workflow_runs"),
+        "ci",
     )
     .await;
-    evidence["ci"] = match ci {
-        Ok(runs) => json!({"available":true,"runs":runs.into_iter().take(100).collect::<Vec<_>>()}),
-        Err(e) => json!({"available":false,"error":e.to_string()}),
-    };
-    let advisories = pages(
+    evidence["dependency_advisories"] = scan_source(
         api,
         &format!("{}/dependabot/alerts?state=open", repo.path()?),
         None,
+        "dependency_advisories",
     )
     .await;
-    evidence["dependency_advisories"] = match advisories {
-        Ok(rows) => {
-            json!({"available":true,"alerts":rows.into_iter().take(100).collect::<Vec<_>>()})
-        }
-        Err(e) => {
-            json!({"available":false,"error":e.to_string(),"note":"Review GitHub App Dependabot-alert read permission and repository advisory availability."})
-        }
-    };
     crate::models::proxy::check_payload(
         root,
         &crate::sandbox::NeverSent::new(&crate::execution::Execution::load(home)?.rules(root))?,
@@ -688,4 +700,46 @@ pub async fn urgent_requests(home: &Path, api: &dyn Api, repo: &Repository) -> a
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod optional_scan_tests {
+    use super::super::api::Reply;
+    use super::*;
+    struct Forbidden;
+    impl Api for Forbidden {
+        fn request<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: Option<Value>,
+            _: Option<String>,
+        ) -> futures::future::BoxFuture<'a, anyhow::Result<Reply>> {
+            Box::pin(async {
+                Ok(Reply {
+                    status: 403,
+                    body: json!({"message":"PRIVATE_RAW_BODY"}),
+                    etag: None,
+                    next: false,
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn advisory_permission_failure_is_an_explicit_gap_not_clean_or_worker_error() {
+        let source = scan_source(
+            &Forbidden,
+            "/repos/o/r/dependabot/alerts?state=open",
+            None,
+            "dependency_advisories",
+        )
+        .await;
+        assert_eq!(source["available"], false);
+        assert_eq!(source["http_status"], 403);
+        assert!(source["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("Dependabot alerts read"));
+        assert!(!source.to_string().contains("PRIVATE_RAW_BODY"));
+    }
 }
