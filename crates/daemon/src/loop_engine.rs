@@ -17,6 +17,26 @@ pub fn scan_sources(context: &Value) -> Vec<Value> {
         Some(json!({"name":name,"available":source["available"]==true,"http_status":source["http_status"],"reason":source["reason"].as_str().unwrap_or("Source unavailable in this scan snapshot"),"next_step":source["next_step"].as_str().unwrap_or("Owner: check GitHub App source read permissions and repository feature settings; continue with partial coverage"),"truncated":source["truncated"]==true}))
     }).collect()
 }
+/// Evidence identity is supplied by the daemon. The model chooses only a route
+/// and its reason; it cannot rewrite or drop the captured review evidence.
+pub fn bind_finding_evidence(result: &mut RoleResult, state: &Value) {
+    if state["step"] != "route_finding" {
+        return;
+    }
+    let Some(RoleDetails::Routes { findings }) = &mut result.details else {
+        return;
+    };
+    if findings.len() != 1 {
+        return;
+    }
+    if let (Some(title), Some(body)) = (
+        state["loop_context"]["title"].as_str(),
+        state["loop_context"]["body"].as_str(),
+    ) {
+        findings[0].title = title.into();
+        findings[0].body = body.into();
+    }
+}
 pub fn validate(result: &RoleResult, s: &Value) -> anyhow::Result<()> {
     ensure!(
         result.tasks_done.is_empty() && result.artifacts.is_empty() && result.checks.is_empty(),
@@ -489,4 +509,26 @@ pub fn request_urgent(tx: &Transaction<'_>, item: &str, key: &str) -> anyhow::Re
         &json!({"promotion":false}),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod evidence_binding_tests {
+    use super::*;
+    #[test]
+    fn binding_keeps_original_evidence_but_never_accepts_execution_claims_or_missing_routes() {
+        let mut result:RoleResult=serde_json::from_value(json!({"item":"i","role":"pm","attempt_id":"a","generation":1,"outcome":"done","summary":"Route finding","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":null,"review_guide":null,"details":{"kind":"routes","findings":[{"title":"Reworded","body":"Reworded evidence","route":"backlog","reason":"Outside current scope"}]}})).unwrap();
+        let state = json!({"step":"route_finding","loop_context":{"title":"Original","body":"Exact captured evidence"}});
+        bind_finding_evidence(&mut result, &state);
+        validate(&result, &state).unwrap();
+        let Some(RoleDetails::Routes { findings }) = &result.details else {
+            panic!()
+        };
+        assert_eq!(findings[0].body, "Exact captured evidence");
+        result.tasks_done.push("T1".into());
+        assert!(validate(&result, &state).is_err());
+        result.tasks_done.clear();
+        result.details = Some(RoleDetails::Routes { findings: vec![] });
+        bind_finding_evidence(&mut result, &state);
+        assert!(validate(&result, &state).is_err());
+    }
 }

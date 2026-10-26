@@ -498,7 +498,10 @@ async fn run(
                 return Err(error);
             }
         };
-        let result: RoleResult = serde_json::from_value(result)?;
+        let mut result: RoleResult = serde_json::from_value(result)?;
+        if let Some(facts) = crate::workflow::state(&db, &request.item)? {
+            crate::loop_engine::bind_finding_evidence(&mut result, &facts);
+        }
         if let Err(error) = report(home, &result) {
             let text = error.to_string();
             let control = [
@@ -678,7 +681,7 @@ async fn run(
                     if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
                         let parsed=read_turn_result(status,turn_error.as_deref(),role_reply.as_deref(),request,id);
                         match parsed {
-                            Ok(result)=>if let Err(e)=report(home,&result) {error=Some(format!("Codex result rejected: {e}"));break;},
+                            Ok(mut result)=>{if let Some(facts)=crate::workflow::state(&db,&request.item)? {crate::loop_engine::bind_finding_evidence(&mut result,&facts);}if let Err(e)=report(home,&result) {error=Some(format!("Codex result rejected: {e}"));break;}},
                             Err(e)=>{error=Some(e.to_string());break;}
                         }
                     }
@@ -757,10 +760,10 @@ async fn run(
                 )?;
             }
         }
+        quota |= error.as_ref().is_some_and(|e| router::quota(200, e));
         if !read_call && error.is_some() && !quota {
             router::provider_failed(home, &selected, database::unix_now())?;
         }
-        quota |= error.as_ref().is_some_and(|e| router::quota(200, e));
         if quota {
             let recorded: bool = database::open(home)?.query_row(
                 "SELECT EXISTS(SELECT 1 FROM budgets WHERE route=?1 AND exhausted_until>?2)",

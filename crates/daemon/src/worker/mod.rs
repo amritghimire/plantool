@@ -378,6 +378,15 @@ impl WorkerManager {
         self.unavailable("execution stopped");
         Ok(())
     }
+
+    /// Shut down only the child process owned by this manager. A daemon
+    /// restart must not send cancellation events for durable workflow work.
+    pub async fn shutdown_child(&self) {
+        #[cfg(unix)]
+        if let Some(mut worker) = self.running.lock().await.take() {
+            let _ = worker.process.child.kill().await;
+        }
+    }
 }
 impl crate::execution::StopHook for WorkerManager {
     fn stop(&self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {

@@ -111,3 +111,9 @@ unapproved implementer. Actionable revisions use needs_fix and return to plannin
 For a legacy stale projection, automatic repair requires the exact latest completed
 read-only plan-review receipt, no later attempt, no approved revision, no active gate
 and no unresolved write. It returns to a new plan gate, never to implementation.
+
+
+Routine agent execution and discussion now appear in `#ai-activity`. Use `#general`
+for concise decisions and review requests, or an item's thread for its exact question
+and your answer. Model fallback and scheduled retries continue without an owner
+reply; messages in any channel never substitute for the authoritative approval gate.

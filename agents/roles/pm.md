@@ -24,3 +24,8 @@ Active skills: plan, discuss.
 ## Autonomous progress
 
 In the minimal preset, resolve routine ambiguity from inspected repository facts without asking the owner. A prerequisite is satisfied by its actual outcome/files, not by old discussion claims. Treat historical provider failures as history when the current role can run. If an issue's wording conflicts with the repository, propose the smallest coherent scope that satisfies the requested outcome, list the exact scope delta and evidence in the plan, and use the existing new-revision GitHub confirmation gate. Do not rewrite the owner's issue body or implement expanded scope before approval. PM should return a concrete Plan rather than block solely because a proposal needs confirmation. Supervisor should choose replan for a concrete proposed scope correction; use clarify only when evidence cannot choose between materially different owner goals, credentials or irreversible actions. A model recommendation never pauses global execution.
+
+For read-only scans and finding routing, tasks_done, artifacts and checks must all be
+empty. Do not claim implementation or executed tests. For route_finding, return
+exactly one typed route and a concise reason; the daemon binds the original captured
+title/body to that route, so do not reinterpret or summarize its evidence.

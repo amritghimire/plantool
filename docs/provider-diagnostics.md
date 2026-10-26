@@ -187,3 +187,29 @@ Provider reset timestamps may be epoch seconds or milliseconds. PlanTool normali
 both and honors Retry-After seconds or HTTP dates. Existing millisecond cooldowns
 are migrated with an audit record, retaining the actual reset instead of clearing
 quota state. A real upstream 429 remains a provider limit after this correction.
+
+
+### Nested macOS sandboxes
+
+Codex app-server can authenticate and run a model while every shell command fails
+with `sandbox-exec: sandbox_apply: Operation not permitted`. This happens when Codex
+tries to apply a second Seatbelt profile inside PlanTool's existing sandbox. Turns
+launched under a real PlanTool role sandbox use app-server's `externalSandbox`
+policy; the outer profile continues to constrain all descendants. Unsandboxed
+Personal launches retain their original policy. No escape or permission request
+is automatically approved. The native diagnostic retains sanitized permission
+request details when an unexpected request still occurs.
+
+### Quieter workspace
+
+`#ai-activity` contains automatic retries, model fallback, recovered steps and AI
+discussion rounds. `#general` and item threads receive short review/approval notices,
+material decisions and unresolved recovery blockers. Identical human notices are
+deduplicated across repeated attempts. Existing messages remain immutable history;
+this changes new delivery, not past records. Exact clarification answers remain in
+their item threads and do not become approval commands.
+
+GitHub approval comments allow trailing ASCII spaces or tabs after the exact command.
+Leading text, additional commands, extra arguments, invalid/stale hashes and unauthorized
+actors remain rejected. A command rejected before this fix is not silently reprocessed:
+submit a new comment for the currently published proposal if approval is intended.

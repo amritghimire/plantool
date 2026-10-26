@@ -243,6 +243,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     github_sync.abort();
     scheduler_job.abort();
     idle_sweep.abort();
+    state.runs.worker.shutdown_child().await;
     dispatch_job.abort();
     retention_job.abort();
     let _ = store::remove_daemon_info(&config.home);

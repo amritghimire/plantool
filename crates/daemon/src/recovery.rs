@@ -158,7 +158,7 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
 pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
     use plantool_contract::{Dispatch, Outcome, RoleDetails, RoleResult};
     let db = database::open(home)?;
-    let mut q=db.prepare("SELECT a.id,a.item_id,a.generation,a.worktree,d.request_json,w.state_json,w.head_sha FROM attempts a JOIN dispatches d ON d.attempt_id=a.id JOIN workflow_items w ON w.item_id=a.item_id WHERE a.state='recovery_needed' AND a.role IN('backend','frontend','devops','qa') AND a.outcome_json IS NULL AND NOT EXISTS(SELECT 1 FROM attempts later WHERE later.item_id=a.item_id AND later.generation>a.generation)")?;
+    let mut q=db.prepare("SELECT a.id,a.item_id,a.generation,a.worktree,d.request_json,w.state_json,w.head_sha FROM attempts a JOIN dispatches d ON d.attempt_id=a.id JOIN workflow_items w ON w.item_id=a.item_id WHERE a.state='recovery_needed' AND a.role IN('backend','frontend','devops','qa') AND (a.outcome_json IS NULL OR (json_extract(a.outcome_json,'$.outcome')='failed' AND json_extract(a.outcome_json,'$.summary')='Recovery needed: the daemon/worker stopped without a verified outcome')) AND NOT EXISTS(SELECT 1 FROM attempts later WHERE later.item_id=a.item_id AND later.generation>a.generation)")?;
     let rows = q
         .query_map([], |r| {
             Ok((
@@ -200,7 +200,7 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
         {
             continue;
         }
-        let blocked:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM supervised_processes WHERE id=?1) OR EXISTS(SELECT 1 FROM proxy_calls WHERE attempt_id=?1 AND state IN('pending','recovery_needed')) OR EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND state IN('queued','starting','running','waiting','idle')) OR EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?2 AND state='running') OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?2 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status') OR EXISTS(SELECT 1 FROM gates WHERE item_id=?2 AND state IN('pending','open'))",params![id,item],|r|r.get(0))?;
+        let blocked:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM supervised_processes WHERE id=?1) OR EXISTS(SELECT 1 FROM proxy_calls WHERE attempt_id=?1 AND state='pending') OR EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND state IN('queued','starting','running','waiting','idle')) OR EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?2 AND state='running') OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?2 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status') OR EXISTS(SELECT 1 FROM gates WHERE item_id=?2 AND state IN('pending','open'))",params![id,item],|r|r.get(0))?;
         let approved:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE i.id=?1 AND r.content_sha256=?2)",params![item,request.plan_sha],|r|r.get(0))?;
         if blocked || !approved {
             continue;
@@ -212,23 +212,15 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
         {
             continue;
         }
-        if !crate::git::git(
-            &path,
-            &["status", "--porcelain=v1", "--untracked-files=all"],
-        )?
-        .is_empty()
-        {
-            continue;
-        }
-        let head = crate::git::git(&path, &["rev-parse", "HEAD"])?;
         let (_, root) = dispatcher::item(&db, &item)?;
         let reference = crate::instructions::default_ref(&root)?;
         let default = crate::git::git(&root, &["rev-parse", &reference])?;
-        if head != checkpoint
-            && !(head == default
-                && crate::git::git(&root, &["merge-base", "--is-ancestor", &checkpoint, &head])
-                    .is_ok())
-        {
+        let rules = crate::execution::Execution::load(home)?.rules(&crate::git::main_root(&root));
+        let policy = crate::sandbox::NeverSent::new(&rules)?;
+        let Some(head) = observed_checkpoint(&path, &checkpoint, &default, &s, &policy)? else {
+            continue;
+        };
+        if request.role == "qa" && head != checkpoint && head != default {
             continue;
         }
         let mut write = database::open(home)?;
@@ -236,11 +228,11 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
         if workflow::state(&tx, &item)? != Some(s.clone()) {
             continue;
         }
-        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND state='recovery_needed' AND outcome_json IS NULL) AND NOT EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND state IN('queued','starting','running','waiting','idle')) AND NOT EXISTS(SELECT 1 FROM supervised_processes WHERE id=?1)",params![id,item],|r|r.get(0))?;
+        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND state='recovery_needed' AND (outcome_json IS NULL OR (json_extract(outcome_json,'$.outcome')='failed' AND json_extract(outcome_json,'$.summary')='Recovery needed: the daemon/worker stopped without a verified outcome'))) AND NOT EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND state IN('queued','starting','running','waiting','idle')) AND NOT EXISTS(SELECT 1 FROM supervised_processes WHERE id=?1)",params![id,item],|r|r.get(0))?;
         if !valid {
             continue;
         }
-        let still_safe:bool=tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM proxy_calls WHERE attempt_id=?1 AND state IN('pending','recovery_needed')) AND NOT EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?2 AND state='running') AND NOT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?2 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status') AND NOT EXISTS(SELECT 1 FROM gates WHERE item_id=?2 AND state IN('pending','open')) AND EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE i.id=?2 AND r.content_sha256=?3)",params![id,item,request.plan_sha],|r|r.get(0))?;
+        let still_safe:bool=tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM proxy_calls WHERE attempt_id=?1 AND state='pending') AND NOT EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?2 AND state='running') AND NOT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?2 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status') AND NOT EXISTS(SELECT 1 FROM gates WHERE item_id=?2 AND state IN('pending','open')) AND EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE i.id=?2 AND r.content_sha256=?3)",params![id,item,request.plan_sha],|r|r.get(0))?;
         if !still_safe {
             continue;
         }
@@ -250,7 +242,13 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
         next["generation"] = json!(generation);
         next["head_sha"] = json!(head);
         next["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
-        let result=RoleResult{item:item.clone(),role:request.role.clone(),attempt_id:id.clone(),generation,outcome:Outcome::Failed,summary:"Interrupted attempt reconciled at a clean trusted checkpoint. No implementation or task completion was accepted.".into(),tasks_done:vec![],artifacts:vec![],checks:vec![],findings:vec![],next:None,review_guide:None,details:None};
+        let result=RoleResult{item:item.clone(),role:request.role.clone(),attempt_id:id.clone(),generation,outcome:Outcome::Failed,summary:"Interrupted attempt reconciled at an observed approved-scope checkpoint. No task or check completion was accepted.".into(),tasks_done:vec![],artifacts:vec![],checks:vec![],findings:vec![],next:None,review_guide:None,details:None};
+        // These are pure inference replies, never GitHub writes or tool actions.
+        // Preserve their receipts as failed and refuse reuse of their idempotency keys.
+        tx.execute(
+            "UPDATE proxy_calls SET state='failed' WHERE attempt_id=?1 AND state='recovery_needed'",
+            [&id],
+        )?;
         tx.execute(
             "UPDATE attempts SET state='failed',ended_at=?2,outcome_json=?3 WHERE id=?1",
             params![id, plantool_core::now(), serde_json::to_string(&result)?],
@@ -275,12 +273,74 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
             "daemon",
             "attempt.clean_reconciled",
             &id,
-            &json!({"old_checkpoint":checkpoint,"checkpoint":head,"clean_worktree":path,"approved_plan":request.plan_sha,"supervisor_attempt":recommendation.attempt_id,"previous_state":s}),
+            &json!({"old_checkpoint":checkpoint,"checkpoint":head,"preserved_worktree":path,"approved_plan":request.plan_sha,"supervisor_attempt":recommendation.attempt_id,"previous_state":s}),
         )?;
-        crate::workspace::operational(&tx,&item,"Recovery queued",&format!("clean-reconcile:{id}"),"The interrupted attempt left a clean, verified checkpoint. Continuing the already-approved plan; no task completion was assumed.")?;
+        crate::workspace::operational(&tx,&item,"Recovery queued",&format!("clean-reconcile:{id}"),"The interrupted attempt left a verified checkpoint. Its worktree and evidence are preserved. Continuing verification under the existing approval; no task completion was assumed.")?;
         tx.commit()?;
     }
     Ok(())
+}
+
+/// Adopt only observed committed state, never uncommitted source edits. Generated
+/// evidence remains untouched in the old worktree; it is not accepted as a passed check.
+fn observed_checkpoint(
+    path: &Path,
+    checkpoint: &str,
+    default: &str,
+    state: &Value,
+    policy: &crate::sandbox::NeverSent,
+) -> anyhow::Result<Option<String>> {
+    if !crate::git::git(path, &["diff", "--no-ext-diff", "--name-only", "HEAD"])?.is_empty() {
+        return Ok(None);
+    }
+    let untracked = crate::git::git(path, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    if untracked.split('\0').filter(|p| !p.is_empty()).any(|file| {
+        let p = Path::new(file);
+        p.components().count() != 1
+            || !(file.ends_with(".log") || file == "result.json")
+            || std::fs::symlink_metadata(path.join(p)).map_or(true, |m| {
+                !m.is_file() || m.file_type().is_symlink() || m.len() > 16 * 1024 * 1024
+            })
+    }) {
+        return Ok(None);
+    }
+    let head = crate::git::git(path, &["rev-parse", "HEAD"])?;
+    if head == checkpoint {
+        return Ok(Some(head));
+    }
+    if crate::git::git(path, &["merge-base", "--is-ancestor", checkpoint, &head]).is_err() {
+        return Ok(None);
+    }
+    if head == default {
+        return Ok(Some(head));
+    }
+    let files = crate::git::git(
+        path,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-only",
+            checkpoint,
+            &head,
+        ],
+    )?;
+    if files.is_empty() {
+        return Ok(None);
+    }
+    for file in files.lines() {
+        let allowed = state["affected_files"].as_array().is_some_and(|patterns| {
+            patterns.iter().filter_map(Value::as_str).any(|p| {
+                file == p
+                    || p.strip_suffix("/**")
+                        .is_some_and(|prefix| file.starts_with(&format!("{prefix}/")))
+            })
+        });
+        if !allowed || policy.check(path, &path.join(file)).is_err() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(head))
 }
 
 fn transient_read_failure(result: &plantool_contract::RoleResult) -> bool {
@@ -409,6 +469,50 @@ mod tests {
         db.execute("INSERT INTO attempts VALUES('a','i','pm',1,'route','failed','/checkout','now','now','{}','attempt','{}',0)",[]).unwrap();
         db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('a','{\"inputs\":{\"step\":\"triage\"},\"capability\":\"read\"}','d','i','old',0)",[]).unwrap();
         temp
+    }
+    #[test]
+    fn observed_scoped_checkpoint_preserves_logs_and_rejects_uncommitted_or_out_of_scope_work() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "user.email", "test@example.com"],
+        ] {
+            crate::git::git(root, &args).unwrap();
+        }
+        std::fs::write(root.join("code.py"), "base").unwrap();
+        crate::git::git(root, &["add", "."]).unwrap();
+        crate::git::git(root, &["commit", "-qm", "base"]).unwrap();
+        let base = crate::git::git(root, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(root.join("code.py"), "approved change").unwrap();
+        crate::git::git(root, &["add", "."]).unwrap();
+        crate::git::git(root, &["commit", "-qm", "implementation"]).unwrap();
+        let head = crate::git::git(root, &["rev-parse", "HEAD"]).unwrap();
+        let state = json!({"affected_files":["code.py"]});
+        let policy = crate::sandbox::NeverSent::new(&[]).unwrap();
+        std::fs::write(root.join("AC1.log"), "evidence retained, not accepted").unwrap();
+        assert_eq!(
+            observed_checkpoint(root, &base, &base, &state, &policy).unwrap(),
+            Some(head)
+        );
+        assert!(observed_checkpoint(
+            root,
+            &base,
+            &base,
+            &json!({"affected_files":["other.py"]}),
+            &policy
+        )
+        .unwrap()
+        .is_none());
+        assert_eq!(
+            std::fs::read_to_string(root.join("AC1.log")).unwrap(),
+            "evidence retained, not accepted"
+        );
+        std::fs::write(root.join("code.py"), "uncommitted").unwrap();
+        assert!(observed_checkpoint(root, &base, &base, &state, &policy)
+            .unwrap()
+            .is_none());
     }
     #[test]
     fn clean_coding_reconciliation_preserves_approval_and_refuses_dirty_work() {

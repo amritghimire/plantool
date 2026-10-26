@@ -335,7 +335,7 @@ pub fn retry_at(home: &Path, project: &str, role: &str, now: i64) -> anyhow::Res
 /// Explicit diagnostic requests use only the unreserved provider allowance.
 pub fn diagnostic_capacity(home: &Path, selected: &Selected) -> anyhow::Result<()> {
     let now = crate::database::unix_now();
-    let until:Option<i64>=database::open(home)?.query_row("SELECT max(CAST(exhausted_until AS INTEGER)) FROM budgets WHERE route IN(?1,?2) AND CAST(exhausted_until AS INTEGER)>?3",params![selected.name,selected.route.provider,now],|r|r.get(0))?;
+    let until:Option<i64>=database::open(home)?.query_row("SELECT max(CAST(exhausted_until AS INTEGER)) FROM budgets WHERE route IN(?1,?2) AND window_kind<>'error' AND CAST(exhausted_until AS INTEGER)>?3",params![selected.name,selected.route.provider,now],|r|r.get(0))?;
     if let Some(until) = until {
         anyhow::bail!(
             "Provider cooling down until {}; respect Retry-After before retesting",
@@ -439,7 +439,9 @@ pub fn provider_failed(home: &Path, selected: &Selected, now: i64) -> anyhow::Re
         |r| r.get(0),
     )?;
     if count >= 2 {
-        exhaust(home, selected, None, now)?;
+        // Internal execution failures are not provider quota exhaustion. Keep a
+        // bounded circuit backoff which explicit diagnostics can inspect/retest.
+        db.execute("INSERT INTO budgets(route,window_kind,window_start,exhausted_until) VALUES(?1,'error','0',?2) ON CONFLICT(route,window_kind,window_start) DO UPDATE SET exhausted_until=excluded.exhausted_until",params![selected.name,now+300])?;
         Ok(true)
     } else {
         Ok(false)
@@ -449,6 +451,73 @@ pub fn provider_failed(home: &Path, selected: &Selected, now: i64) -> anyhow::Re
 #[cfg(test)]
 mod fallback_tests {
     use super::*;
+    #[test]
+    fn legacy_native_backoff_repair_preserves_real_quota() {
+        let t = tempfile::tempdir().unwrap();
+        let db = database::open(t.path()).unwrap();
+        let now = database::unix_now();
+        let mut cfg = config(t.path()).unwrap();
+        let route = cfg
+            .routes
+            .values()
+            .find(|r| r.adapter == "codex")
+            .unwrap()
+            .clone();
+        cfg.routes.insert("internal-test".into(), route.clone());
+        cfg.routes.insert("quota-test".into(), route);
+        database::set(&db, "model_chains", &cfg).unwrap();
+        db.execute(
+            "INSERT INTO projects VALUES('p','o/r',NULL,'/checkout','eos','public','now')",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO work_items(id,project_id,kind,title,state,created_at,repo_slug,slug,session_json) VALUES('i','p','eos','Issue','supervisor','now','p','i','{}')",[]).unwrap();
+        for (n, name, summary) in [
+            (
+                1,
+                "internal-test",
+                "Provider turn completed without a submitted typed result; checkpoint required",
+            ),
+            (2, "quota-test", "429 Provider quota exhausted"),
+        ] {
+            db.execute(
+                "INSERT INTO route_failures VALUES(?1,2,?2)",
+                params![name, now],
+            )
+            .unwrap();
+            db.execute("INSERT INTO budgets(route,window_kind,window_start,exhausted_until) VALUES(?1,'provider','0',?2)",params![name,now+3600]).unwrap();
+            db.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,ended_at,outcome_json,idempotency_key,run_json) VALUES(?1,'i','backend',?2,?1,'completed','/checkout',?3,?3,?4,?1,'{}')",params![name,n,plantool_core::now(),serde_json::json!({"summary":summary}).to_string()]).unwrap();
+        }
+        normalize_legacy_resets(t.path()).unwrap();
+        normalize_legacy_resets(t.path()).unwrap();
+        assert_eq!(db.query_row("SELECT window_kind,CAST(exhausted_until AS INTEGER) FROM budgets WHERE route='internal-test'",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).unwrap(),("error".into(),now+300));
+        assert_eq!(db.query_row("SELECT window_kind,CAST(exhausted_until AS INTEGER) FROM budgets WHERE route='quota-test'",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).unwrap(),("provider".into(),now+3600));
+    }
+    #[test]
+    fn internal_failure_backoff_does_not_masquerade_as_provider_quota() {
+        let t = tempfile::tempdir().unwrap();
+        let selected = Selected {
+            name: "r".into(),
+            route: Route {
+                adapter: "codex".into(),
+                provider: "openai".into(),
+                model: "test".into(),
+                budget: None,
+            },
+            same_family_warning: false,
+        };
+        provider_failed(t.path(), &selected, crate::database::unix_now()).unwrap();
+        provider_failed(t.path(), &selected, crate::database::unix_now()).unwrap();
+        diagnostic_capacity(t.path(), &selected).unwrap();
+        exhaust(
+            t.path(),
+            &selected,
+            Some(crate::database::unix_now() + 3600),
+            crate::database::unix_now(),
+        )
+        .unwrap();
+        assert!(diagnostic_capacity(t.path(), &selected).is_err());
+    }
     #[test]
     fn cooldown_moves_down_pm_chain_and_recovers_without_bypassing_policy() {
         let t = tempfile::tempdir().unwrap();
@@ -497,6 +566,19 @@ pub fn normalize_legacy_resets(home: &Path) -> anyhow::Result<()> {
             "providers",
             &serde_json::json!({"budget_rows":count,"wait_rows":waits,"unit":"epoch milliseconds to seconds"}),
         )?;
+    }
+    let cfg = config(home)?;
+    for (name, _) in cfg.routes.iter().filter(|(_, r)| r.adapter == "codex") {
+        let changed=tx.execute("UPDATE budgets SET window_kind='error',exhausted_until=CAST(exhausted_until AS INTEGER)-3300 WHERE route=?1 AND window_kind='provider' AND used_requests=0 AND used_tokens=0 AND CAST(exhausted_until AS INTEGER)=(SELECT last_failure+3600 FROM route_failures WHERE route=?1) AND NOT EXISTS(SELECT 1 FROM budgets other WHERE other.route=?1 AND other.window_kind='error' AND other.window_start=budgets.window_start) AND EXISTS(SELECT 1 FROM attempts WHERE model_route=?1 AND abs(CAST(strftime('%s',ended_at) AS INTEGER)-(SELECT last_failure FROM route_failures WHERE route=?1))<=5 AND json_extract(outcome_json,'$.summary') IN('Provider turn completed without a submitted typed result; checkpoint required','Provider exited without a typed result; review its transcript before retrying','workspace routing discovery failed'))",[name])?;
+        if changed > 0 {
+            database::audit(
+                &tx,
+                "daemon",
+                "route.internal_backoff_corrected",
+                name,
+                &serde_json::json!({"reason":"Known native execution failure was recorded as provider quota","backoff_seconds":300}),
+            )?;
+        }
     }
     tx.commit()?;
     Ok(())

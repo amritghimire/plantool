@@ -8,6 +8,24 @@ pub(crate) fn read(
 ) -> anyhow::Result<Vec<u8>> {
     use anyhow::Context;
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
+    use std::sync::{Mutex, OnceLock};
+
+    // SecKeychainSetUserInteractionAllowed is process global. Serialize every
+    // Keychain query so a background read cannot suppress an explicitly
+    // authorized interactive read (or vice versa).
+    static KEYCHAIN_QUERY: OnceLock<Mutex<()>> = OnceLock::new();
+    let _query_guard = KEYCHAIN_QUERY
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _interaction_guard = if interactive {
+        None
+    } else {
+        Some(
+            security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+                .context("Could not disable Keychain prompts for background work")?,
+        )
+    };
     let mut query = ItemSearchOptions::new();
     query
         .class(ItemClass::generic_password())
@@ -17,7 +35,9 @@ pub(crate) fn read(
     if let Some(account) = account {
         query.account(account);
     }
-    let rows=query.search().with_context(|| format!("Keychain credential unavailable for {service}. Unlock Keychain and authorize the current PlanTool binary; background work will retry without prompting."))?;
+    let rows = query.search().with_context(|| {
+        format!("Keychain credential unavailable for {service}. Unlock Keychain and authorize the current PlanTool binary; background work will retry without prompting.")
+    })?;
     rows.into_iter()
         .find_map(|r| match r {
             SearchResult::Data(data) => Some(data),
