@@ -11,7 +11,7 @@ pub enum Command {
 }
 pub fn parse(body: &str) -> Option<Command> {
     let mut lines = body.lines().filter(|line| !line.is_empty());
-    let body = lines.next()?;
+    let body = lines.next()?.trim_end_matches([' ', '\t']);
     if lines.next().is_some() || body.trim() != body {
         return None;
     }
@@ -58,6 +58,15 @@ mod tests {
             Some(Command::ApprovePlan("abcdef012345".into()))
         );
         assert_eq!(parse("\n/plantool urgent\r\n"), Some(Command::Urgent));
+        assert_eq!(
+            parse("/plantool approve-plan sha256:997d4e53e827 "),
+            Some(Command::ApprovePlan("997d4e53e827".into()))
+        );
+        assert_eq!(
+            parse("/plantool approve-plan sha256:997d4e53e827\t"),
+            Some(Command::ApprovePlan("997d4e53e827".into()))
+        );
+        assert!(parse("/plantool approve-plan sha256:997d4e53e827 extra").is_none());
         for s in [
             "LGTM",
             "approved",
