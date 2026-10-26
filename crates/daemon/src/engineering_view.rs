@@ -59,6 +59,13 @@ fn item_rows(
     let mut rows = rows;
     for row in &mut rows {
         let state = crate::workflow::state(db, row["id"].as_str().unwrap())?.unwrap_or(Value::Null);
+        row["board_column"] = database::get::<Option<String>>(
+            db,
+            &format!("board.column:{}", row["id"].as_str().unwrap()),
+        )?
+        .flatten()
+        .map(Value::String)
+        .unwrap_or(Value::Null);
         row["next_action"] =
             crate::automation::next_action(db, row["id"].as_str().unwrap(), &state)?;
     }
@@ -147,6 +154,55 @@ pub fn item(home: &Path, id: &str) -> anyhow::Result<Value> {
 mod tests {
     use super::*;
     #[test]
+    fn manual_done_column_preserves_workflow_approvals_and_checkpoints() {
+        let t = tempfile::tempdir().unwrap();
+        let db = database::open(t.path()).unwrap();
+        db.execute(
+            "INSERT INTO projects VALUES('p','o/r',NULL,'/checkout','eos','public','now')",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO work_items(id,project_id,kind,title,state,created_at,repo_slug,slug,session_json) VALUES('i','p','eos','Issue','plan_gate','now','p','i','{}')", []).unwrap();
+        db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES('i','{\"step\":\"plan_gate\",\"plan_sha\":\"hash\"}','base','checkpoint')", []).unwrap();
+        db.execute("INSERT INTO gates(id,item_id,kind,target_digest,state,created_at) VALUES('gate','i','plan','hash','open','now')", []).unwrap();
+        let before: (String, String) = db
+            .query_row(
+                "SELECT state_json,head_sha FROM workflow_items WHERE item_id='i'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        organize(t.path(), "i", Some("done")).unwrap();
+        assert_eq!(item(t.path(), "i").unwrap()["item"]["board_column"], "done");
+        assert_eq!(
+            db.query_row("SELECT state FROM gates WHERE id='gate'", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "open"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT state_json,head_sha FROM workflow_items WHERE item_id='i'",
+                [],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            )
+            .unwrap(),
+            before
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM outbox", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        organize(t.path(), "i", None).unwrap();
+        assert_eq!(
+            item(t.path(), "i").unwrap()["item"]["board_column"],
+            Value::Null
+        );
+        assert!(organize(t.path(), "i", Some("approved")).is_err());
+        assert!(organize(t.path(), "missing", Some("done")).is_err());
+    }
+    #[test]
     fn projects_and_item_history_are_scoped_and_do_not_expose_credentials() {
         let tmp = tempfile::tempdir().unwrap();
         let db = database::open(tmp.path()).unwrap();
@@ -194,4 +250,38 @@ mod tests {
             .iter()
             .any(|i| i["id"] == "one"));
     }
+}
+
+/// Presentation preference only. This never changes execution, gates or sprint membership.
+pub fn organize(home: &Path, item: &str, column: Option<&str>) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        column.is_none_or(|c| [
+            "backlog",
+            "planned",
+            "in_progress",
+            "review",
+            "waiting",
+            "done"
+        ]
+        .contains(&c)),
+        "Unknown board column"
+    );
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1 AND kind='eos' AND deleted_at IS NULL)",
+        [item],
+        |r| r.get(0),
+    )?;
+    anyhow::ensure!(exists, "Unknown work item");
+    database::set(&tx, &format!("board.column:{item}"), &column)?;
+    database::audit(
+        &tx,
+        "human",
+        "board.organized",
+        item,
+        &json!({"column":column}),
+    )?;
+    tx.commit()?;
+    Ok(json!({"column":column}))
 }

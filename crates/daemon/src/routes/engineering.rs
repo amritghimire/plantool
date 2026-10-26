@@ -244,9 +244,26 @@ async fn plan_sprint(
     crate::graph_recovery::reconcile_project(&state, &id).await?;
     Ok(Json(result))
 }
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoardColumn {
+    column: Option<String>,
+}
+async fn organize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<BoardColumn>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    crate::engineering_view::organize(&state.config.home, &id, body.column.as_deref())
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))
+}
 pub fn browser_routes() -> Router<AppState> {
     Router::new()
         .route("/engineering-os/status", get(status))
+        .route("/engineering-os/items/{id}/board", post(organize))
         .route("/engineering-os/projects/{id}/sprints", get(sprints))
         .route(
             "/engineering-os/projects/{id}/sprints/plan",

@@ -1,3 +1,4 @@
+import {IssueBoard} from "./IssueBoard";
 import {SprintBoard} from "./SprintBoard";
 import {NextAction} from "./NextAction";
 import { useCallback, useState } from "react";
@@ -29,7 +30,7 @@ export function EngineeringPage() {
   const active = data?.active.filter((a) => a.project === project?.id) ?? [];
   const worker = status.data?.worker;
   const attention = items.filter(
-    (i) => i.frozen || i.error || i.waiting_gates > 0 || i.step === "owner_question",
+    (i) => i.frozen || i.waiting_gates > 0 || i.step === "owner_question",
   );
   return (
     <main className="engineering-page">
@@ -183,8 +184,7 @@ export function EngineeringPage() {
                   attention
                 </h3>
                 <p>
-                  Inspect waiting gates or frozen items below. GitHub remains
-                  the approval surface.
+                  Review questions, approval gates or unresolved recovery below. Scheduled retries continue automatically.
                 </p>
                 <Link
                   to={`/workspace?project=${encodeURIComponent(project.id)}`}
@@ -250,8 +250,7 @@ export function EngineeringPage() {
                 ))
               ) : (
                 <p className="muted">
-                  No active attempts in this project. Check work items for
-                  backlog, approvals or completed activity.
+                  No model is executing for this project right now. The board below shows scheduled retries, preparation, approvals and completed work.
                 </p>
               )}
             </section>
@@ -269,40 +268,7 @@ export function EngineeringPage() {
                 </label>
               </div>
               {items.length ? (
-                <div className="item-grid">
-                  {items.map((i) => (
-                    <Link
-                      className="item-card"
-                      key={i.id}
-                      to={`/engineering/items/${encodeURIComponent(i.id)}`}
-                    >
-                      <div className="section-heading">
-                        <span className="small muted">
-                          {i.issue ? `ISSUE #${i.issue}` : "PROJECT ACTIVITY"}
-                        </span>
-                        {i.priority === "urgent" && (
-                          <span className="state-chip attention">Urgent</span>
-                        )}
-                      </div>
-                      <h4>{i.title}</h4>
-                      <span
-                        className={`state-chip ${i.frozen ? "attention" : ""}`}
-                      >
-                        {i.frozen
-                          ? "Owner attention required"
-                          : stepLabel(i.step)}
-                      </span>
-                      {i.waiting_gates > 0 && (
-                        <p>
-                          {i.waiting_gates} pending or open{" "}
-                          {i.waiting_gates === 1 ? "gate" : "gates"}
-                        </p>
-                      )}
-                      {i.next_action && <p>{i.next_action.message}</p>}
-                      {i.error && <p className="error">{i.error}</p>}
-                    </Link>
-                  ))}
-                </div>
+                <IssueBoard items={items} repository={project.name} refresh={refresh}/>
               ) : (
                 <div className="empty-state">
                   <h4>

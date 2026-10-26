@@ -173,3 +173,11 @@ it("shows scan source permission gaps and the pinned evidence snapshot without s
   expect(screen.getByText("snapshot-sha",{selector:"code"})).toBeInTheDocument();
   expect(screen.queryByRole("button",{name:/repair/i})).not.toBeInTheDocument();
 });
+
+it("does not count a historical infrastructure error as owner attention", async () => {
+  vi.mocked(api.engineering).mockResolvedValue({...overview,active:[],items:[{...overview.items[0],error:"Worker stopped during an earlier attempt",next_action:{kind:"retry",message:"Retrying automatically",retry_at:Math.floor(Date.now()/1000)+240}}]});
+  render(<MemoryRouter initialEntries={["/engineering?project=p"]}><EngineeringPage/></MemoryRouter>);
+  await screen.findByText(/0 items need attention/);
+  expect(screen.getByText(/No model is executing for this project/)).toBeInTheDocument();
+  expect(screen.getByText(/Retrying in 4 minutes/)).toBeInTheDocument();
+});
