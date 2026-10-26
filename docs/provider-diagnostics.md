@@ -4,7 +4,7 @@ Open Settings → Models & providers. Save intended routes while execution is st
 resume execution, then Verify routes with passkey. This checks catalogs/authentication;
 it does not prove inference, tools, structured output, or a complete engineering run.
 
-Wait until the global model slot is free and select Test <route> with passkey. This
+Select Test <route> with passkey; it queues if the global model slot is busy. This
 is an explicit, fresh-authorized live call using synthetic data only. HTTP checks
 make up to three normally counted requests: basic OK response, synthetic add-tool
 arguments, then structured JSON. They do not execute provider-authored code. Codex
@@ -143,3 +143,47 @@ questions: explain what happened, what happens next and who needs to act, usuall
 in one to three sentences. Routine notices omit internal IDs and raw errors;
 attempt history and diagnostics retain the technical details. Required approval
 commands and version identifiers remain exact.
+
+### Serial live checks and native Codex failures
+
+**Test all configured routes serially with passkey** authorizes one synthetic test
+per configured route. The batch queues through the same global slot as every other
+run. Results appear beside each route and survive page reloads. Stop All cancels the
+remaining batch; a daemon restart does not silently replay quota-consuming tests.
+The old provider-smoke.py helper now directs you here instead of sending unmanaged
+requests outside the lease.
+
+Edit role chains in the existing YAML editor to place Codex first while retaining
+fallback order and diversity constraints. Stop All and Save with passkey still apply.
+A diversity constraint can still prefer a different model family.
+
+Sandboxed Codex explicitly uses its isolated OAuth auth.json with file credential
+storage and ChatGPT sign-in, with API-key environment variables removed. Native
+routing-discovery failures are shown as account/route failures, not worker-installation
+failures. A completed catalog query is not evidence of successful inference. Native
+failed/interrupted turns now release the slot promptly; malformed read results use
+the same bounded fallback as other read providers. Read-only failures never create
+a code checkpoint. Coding failures retain checkpoint/reconciliation requirements.
+
+
+### macOS account routing and background credentials
+
+The native Codex sandbox denies access to the owner's Keychain. Codex's native TLS
+root discovery can therefore fail even when its copied ChatGPT credentials are valid.
+On macOS PlanTool supplies the public system CA bundle `/etc/ssl/cert.pem` through
+`CODEX_CA_CERTIFICATE` unless a custom `CODEX_CA_CERTIFICATE` or `SSL_CERT_FILE` is
+already configured. TLS certificate verification and Keychain sandbox denials remain
+in force. Do not replace this with disabled TLS verification or an API key. The
+ignored native account-routing regression checks `account/read` in the actual
+sandbox without starting a model turn; a full route diagnostic is still required
+to prove inference.
+
+Background GitHub/provider credential reads must not open an invisible authentication
+prompt and stop scheduling. Noninteractive Keychain reads report inaccessible
+credentials promptly. Reauthorize through the existing protected settings flow if
+macOS requires access; never paste secrets into item threads or diagnostic reports.
+
+Provider reset timestamps may be epoch seconds or milliseconds. PlanTool normalizes
+both and honors Retry-After seconds or HTTP dates. Existing millisecond cooldowns
+are migrated with an audit record, retaining the actual reset instead of clearing
+quota state. A real upstream 429 remains a provider limit after this correction.

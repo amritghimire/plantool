@@ -85,3 +85,29 @@ Older frozen Supervisor decisions can be reviewed with **Review paused step** an
 a fresh passkey, provided there is no active attempt, open gate or uncertain
 external action. This starts another read-only review with current evidence; it
 does not approve a revised plan or replay a coding operation.
+
+## Organizing the board
+
+The in-app issue board includes Backlog, Planning, In progress, Review, Waiting and
+Done. Drag a card or use its Column selector to organize it manually. Automatic
+placement follows the real workflow; choose Automatic to restore it. A manually
+placed card keeps its true execution/approval status visible. Moving it does not
+start, pause, approve or complete work, or change its sprint membership. Create a
+new backlog issue using the GitHub link; normal authenticated intake still applies.
+
+An empty current week with eligible backlog work starts preparation before its
+usual planning day. Its durable event is coalesced across polls and restarts; an
+empty selection does not cause an expensive model loop. Closed/deleted/frozen
+candidates are excluded, while approved and in-progress work remain intact.
+
+Resume now restores an existing worker installation as well as execution authority,
+and reports eligible workflows separately from paused or uncertain items. A zombie
+worker process cannot execute and no longer keeps its group fenced; any living
+descendant still does. Existing worker installations get another startup check each
+minute after a temporary failure. Fresh installation still requires explicit setup.
+
+Successful planning reviews can contain observations without dispatching an
+unapproved implementer. Actionable revisions use needs_fix and return to planning.
+For a legacy stale projection, automatic repair requires the exact latest completed
+read-only plan-review receipt, no later attempt, no approved revision, no active gate
+and no unresolved write. It returns to a new plan gate, never to implementation.
