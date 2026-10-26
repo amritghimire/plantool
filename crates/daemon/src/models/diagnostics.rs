@@ -276,7 +276,7 @@ async fn codex_check(state: &AppState, selected: &router::Selected) -> Vec<Value
             event=events.recv()=>match event {
                 Some(ProviderEvent::Message{role,content,..}) if role=="assistant"=>final_text=content,
                 Some(ProviderEvent::TurnCompleted{status,error,..})=>{if let Some(error)=error {anyhow::bail!("{error}");}let value:Value=serde_json::from_str(&final_text)?;anyhow::ensure!(status=="completed"&&value==json!({"ok":true,"value":expected}),"Codex response check failed");let _=input.try_send(RunInput::Stop);break;},
-                Some(ProviderEvent::Permission{..})=>anyhow::bail!("Diagnostic requires permission; no automatic approval was granted"),
+                Some(ProviderEvent::Permission{kind,title,detail,..})=>anyhow::bail!("Diagnostic requires permission ({kind}): {title}. {} No automatic approval was granted",detail.unwrap_or_default()),
                 Some(ProviderEvent::InputRequest{..})=>anyhow::bail!("Diagnostic requested interactive input; no answer was fabricated"),
                 Some(_)=>{},None=>anyhow::bail!("Codex event stream ended"),
             }

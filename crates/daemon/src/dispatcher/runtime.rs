@@ -522,7 +522,11 @@ async fn run(
                     502,
                 )?;
             }
-            return Err(error);
+            return Err(if control {
+                error
+            } else {
+                anyhow::anyhow!("invalid_role_result: {error}")
+            });
         }
         return Ok(());
     }
@@ -669,8 +673,8 @@ async fn run(
               result=&mut provider=>{joined=true;match result{Ok(Err(e))=>error=Some(e.to_string()),Err(e)=>error=Some(e.to_string()),_=>{}}break;}
               _=tokio::time::sleep(std::time::Duration::from_millis(100))=>{let pending:bool=database::open(home)?.query_row("SELECT quota_pending FROM dispatches WHERE attempt_id=?1",[id],|r|r.get(0))?;if pending{quota=true;error=Some("Quota reached; checkpoint required before changing routes".into());break}let completed:bool=database::open(home)?.query_row("SELECT state NOT IN('starting','running') FROM attempts WHERE id=?1",[id],|r|r.get(0))?;if completed{break}}
         event=ev.recv()=>if let Some(event)=event{
+                if let ProviderEvent::Message{role,content,..}=&event {if role=="assistant" { role_reply=Some(content.clone()); }}
                 if read_call {
-                    if let ProviderEvent::Message{role,content,..}=&event {if role=="assistant" { role_reply=Some(content.clone()); }}
                     if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
                         let parsed=read_turn_result(status,turn_error.as_deref(),role_reply.as_deref(),request,id);
                         match parsed {
@@ -687,6 +691,12 @@ async fn run(
                 if quota {error=Some("Provider quota exhausted; checkpoint before the next attempt".into());break;}
                 let completed:bool=database::open(home)?.query_row("SELECT state NOT IN('starting','running') FROM attempts WHERE id=?1",[id],|r|r.get(0))?;if completed{break}
                 if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
+                    if !read_call && status=="completed" && turn_error.is_none() {
+                        if let Some(result)=role_reply.as_deref().and_then(|text|coding_failure_result(text,request,id)) {
+                            if let Err(e)=report(home,&result) {error=Some(format!("Provider result rejected: {e}"));}
+                            break;
+                        }
+                    }
                     error=Some(turn_error.clone().unwrap_or_else(||format!("Provider turn {status} without a submitted typed result; checkpoint required")));
                     break;
                 }
@@ -813,6 +823,18 @@ async fn finish_closed_provider(
     }
 }
 
+/// A coding role whose CLI cannot run may still explain its failure as typed JSON.
+/// This path cannot claim a successful task, artifact or check; completion requires
+/// the ordinary daemon-validated CLI report and evidence.
+fn coding_failure_result(text: &str, request: &Dispatch, id: &str) -> Option<RoleResult> {
+    read_result(text, request, id).ok().filter(|result| {
+        result.outcome != Outcome::Done
+            && result.tasks_done.is_empty()
+            && result.artifacts.is_empty()
+            && result.checks.is_empty()
+    })
+}
+
 fn read_turn_result(
     status: &str,
     error: Option<&str>,
@@ -858,6 +880,33 @@ mod read_result_tests {
             finish_closed_provider(&mut provider).await.as_deref(),
             Some("OpenCode upstream transport timed out")
         );
+    }
+    #[test]
+    fn coding_final_failure_keeps_its_explanation_without_accepting_progress() {
+        let request = Dispatch {
+            item: "i".into(),
+            role: "backend".into(),
+            generation: 1,
+            inputs: json!({"step":"backend"}),
+            plan_sha: "plan".into(),
+            policy_version: 1,
+            capability: "write".into(),
+            thread_id: "i".into(),
+            interrupt_id: "x".into(),
+            idempotency_key: "d".into(),
+        };
+        let mut value = json!({"item":"i","role":"backend","attempt_id":"a","generation":1,"outcome":"blocked","summary":"Sandbox initialization failed","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"next":null,"review_guide":null,"details":null});
+        assert_eq!(
+            coding_failure_result(&value.to_string(), &request, "a")
+                .unwrap()
+                .summary,
+            "Sandbox initialization failed"
+        );
+        value["outcome"] = json!("done");
+        assert!(coding_failure_result(&value.to_string(), &request, "a").is_none());
+        value["outcome"] = json!("blocked");
+        value["tasks_done"] = json!(["T1"]);
+        assert!(coding_failure_result(&value.to_string(), &request, "a").is_none());
     }
     #[test]
     fn codex_read_claims_are_scoped_and_invalid_output_is_not_exposed() {

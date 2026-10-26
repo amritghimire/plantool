@@ -127,7 +127,17 @@ fn codex_sandbox(mode: PermissionMode) -> &'static str {
     }
 }
 
-fn codex_sandbox_policy(mode: PermissionMode, writable_roots: &[std::path::PathBuf]) -> Value {
+fn codex_sandbox_policy(
+    mode: PermissionMode,
+    writable_roots: &[std::path::PathBuf],
+    external: bool,
+) -> Value {
+    // macOS rejects nesting sandbox-exec inside Seatbelt. This policy is used only
+    // when Launch already wraps the entire app-server process and its descendants
+    // in PlanTool's required role sandbox. It never grants an escape from that sandbox.
+    if external {
+        return json!({"type":"externalSandbox","networkAccess":"enabled"});
+    }
     match mode {
         PermissionMode::AllowAll => json!({ "type": "dangerFullAccess" }),
         _ => {
@@ -262,7 +272,7 @@ pub async fn run(
         if phase == 2 && active_turn.is_none() && turn_rx.is_none() && !queued.is_empty() {
             let text = queued.remove(0);
             let tid = thread_id.clone().unwrap_or_default();
-            let rx = rpc.request("turn/start", json!({ "threadId": tid, "input": super::attachments::codex_input(&text, &opts.writable_roots)?, "approvalPolicy": codex_approval(mode), "sandboxPolicy": codex_sandbox_policy(mode, &opts.writable_roots) })).await?;
+            let rx = rpc.request("turn/start", json!({ "threadId": tid, "input": super::attachments::codex_input(&text, &opts.writable_roots)?, "approvalPolicy": codex_approval(mode), "sandboxPolicy": codex_sandbox_policy(mode, &opts.writable_roots, opts.launch.as_ref().is_some_and(|launch| launch.sandbox.is_some())) })).await?;
             turn_rx = Some(rx);
         }
         if let Some(rx) = turn_rx.as_mut() {
@@ -536,4 +546,24 @@ pub async fn run(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod external_policy_tests {
+    use super::*;
+    #[test]
+    fn only_an_existing_outer_sandbox_uses_external_policy() {
+        assert_eq!(
+            codex_sandbox_policy(PermissionMode::Ask, &[], true),
+            json!({"type":"externalSandbox","networkAccess":"enabled"})
+        );
+        assert_eq!(
+            codex_sandbox_policy(PermissionMode::Ask, &[], false)["type"],
+            "workspaceWrite"
+        );
+        assert_ne!(
+            codex_sandbox_policy(PermissionMode::Auto, &[], true)["type"],
+            "dangerFullAccess"
+        );
+    }
 }
