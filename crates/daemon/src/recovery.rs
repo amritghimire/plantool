@@ -289,6 +289,9 @@ fn transient_read_failure(result: &plantool_contract::RoleResult) -> bool {
             "invalid_role_result",
             "Final answer is not",
             "Plan needs keyed tasks",
+            "Loop roles are read-only",
+            "Checks require artifact evidence",
+            "Review finding must be routed exactly once",
             "JSONDecodeError",
             "429",
             "timed out",
@@ -623,7 +626,17 @@ mod tests {
     fn old_status_wording_does_not_block_dispatch_recovery() {
         let t = fixture();
         let db = database::open(t.path()).unwrap();
-        crate::workspace::operational(&db, "i", "Work remains frozen", "frozen:1", "Old wording")
+        crate::workspace::ensure_channels(&db, "p").unwrap();
+        let thread = crate::workspace::item_thread(&db, "i").unwrap();
+        crate::workspace::append(
+            &db,
+            "p:channel:general:thread",
+            "daemon",
+            "Old wording",
+            "ops:i:frozen:1",
+        )
+        .unwrap();
+        crate::workspace::append(&db, &thread, "daemon", "Old wording", "item-ops:i:frozen:1")
             .unwrap();
         // Reproduce an upgrade replaying the same event with revised copy/title.
         db.execute(
@@ -768,7 +781,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            2 // One per destination, even after repeated announcement.
+            1 // Full technical gate details belong only in #ai-activity.
         );
         assert_eq!(
             db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, i64>(0))

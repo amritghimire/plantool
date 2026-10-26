@@ -193,6 +193,8 @@ export function WorkspacePage() {
             Refresh messages
           </button>
         </header>
+        {thread?.channel === "ai-activity" && <p className="muted">Detailed AI discussions, attempts and automatic retries. Questions, approvals and material blockers appear in #general and item threads.</p>}
+        {thread?.channel === "general" && <p className="muted">Decisions and updates that matter to you. Routine model activity is in #ai-activity.</p>}
         {error && (
           <p className="error" role="alert">
             {error}

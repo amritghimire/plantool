@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(
             db.query_row("SELECT count(*) FROM messages", [], |r| r.get::<_, u64>(0))
                 .unwrap(),
-            2
+            3
         );
         assert_eq!(
             db.query_row(

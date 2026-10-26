@@ -27,7 +27,7 @@ pub fn mentions(body: &str) -> Vec<String> {
     roles
 }
 pub fn ensure_channels(tx: &Connection, project: &str) -> anyhow::Result<()> {
-    for name in ["sprint", "general"] {
+    for name in ["sprint", "general", "ai-activity"] {
         let id = format!("{project}:channel:{name}");
         tx.execute(
             "INSERT OR IGNORE INTO channels VALUES(?1,?2,?3)",
@@ -88,13 +88,9 @@ pub fn begin(
     after: &str,
     body: &str,
 ) -> anyhow::Result<()> {
-    let thread = if s["project"] == true {
-        let project = dispatcher::item(tx, item)?.0;
-        ensure_channels(tx, &project)?;
-        format!("{project}:channel:sprint:thread")
-    } else {
-        item_thread(tx, item)?
-    };
+    let project = dispatcher::item(tx, item)?.0;
+    ensure_channels(tx, &project)?;
+    let thread = format!("{project}:channel:ai-activity:thread");
     let id = format!("{item}:topic:{}", s["sequence"].as_u64().unwrap_or(0));
     let found = mentions(body);
     let speaker = found.first().map(String::as_str).unwrap_or("pm");
@@ -336,6 +332,59 @@ mod tests {
         )
     }
     #[test]
+    fn routine_ai_events_stay_out_of_human_threads_and_material_notices_dedupe() {
+        let (_, mut db, mut state) = setup();
+        operational(
+            &db,
+            "p:1",
+            "Model fallback",
+            "fallback:a",
+            "Trying another model",
+        )
+        .unwrap();
+        operational(
+            &db,
+            "p:1",
+            "Issue decision / status",
+            "result:a",
+            "A routine retry",
+        )
+        .unwrap();
+        let human_count = || {
+            db.query_row("SELECT count(*) FROM messages m JOIN threads t ON t.id=m.thread_id WHERE t.id<>'p:channel:ai-activity:thread'",[],|r|r.get::<_,u64>(0)).unwrap()
+        };
+        assert_eq!(human_count(), 0);
+        operational(
+            &db,
+            "p:1",
+            "Blocked",
+            "attempt:a",
+            "Failure needs reconciliation",
+        )
+        .unwrap();
+        operational(
+            &db,
+            "p:1",
+            "Blocked",
+            "attempt:b",
+            "Failure needs reconciliation",
+        )
+        .unwrap();
+        assert_eq!(human_count(), 2); // One #general notice and one item notice, not two each.
+        let tx = db.transaction().unwrap();
+        begin(&tx, "p:1", &mut state, "plan", "@CTO inspect the evidence").unwrap();
+        assert_eq!(
+            state["discussion"]["thread"],
+            "p:channel:ai-activity:thread"
+        );
+        tx.commit().unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
     fn explicit_answer_wakes_only_matching_question_and_never_approves() {
         let (home, db, _) = setup();
         let question = json!({"item":"p:1","step":"owner_question","frozen":false,"sequence":2,"generation":0,"approved":false,"owner_question":{"id":"q1","question":"Document existing scripts only?"}});
@@ -487,7 +536,7 @@ mod tests {
         assert_eq!(
             db.query_row("SELECT count(*) FROM channels", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            2
+            3
         );
     }
 }
@@ -525,23 +574,46 @@ pub fn operational(
         _ => event,
     };
     let body = format!("{label}: {title}\n{detail}\nOpen {url}");
-    let thread = item_thread(db, item)?;
-    for (thread, key) in [
-        (
-            format!("{project}:channel:general:thread"),
-            format!("ops:{item}:{key}"),
-        ),
-        (thread, format!("item-ops:{item}:{key}")),
-    ] {
-        // Status events are immutable snapshots. Wording and item titles may change
-        // across upgrades; replay must retain the original event in each thread.
-        let exists: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM messages WHERE dedupe_key=?1)",
-            [&key],
-            |r| r.get(0),
+    let activity_key = format!("ops:{item}:{key}");
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE dedupe_key=?1)",
+        [&activity_key],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        append(
+            db,
+            &format!("{project}:channel:ai-activity:thread"),
+            "daemon",
+            &body,
+            &activity_key,
         )?;
-        if !exists {
-            append(db, &thread, "daemon", &body, &key)?;
+    }
+    // Existing notices stay immutable. Do not republish old history as new alerts.
+    let legacy: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE dedupe_key=?1)",
+        [format!("item-ops:{item}:{key}")],
+        |r| r.get(0),
+    )?;
+    if !legacy {
+        if let Some(message) = human_notice(event, detail) {
+            let human_body = format!("{title}\n{message}\nOpen {url}");
+            // Repeated identical failures/recommendations add no new owner information.
+            let identity = plantool_core::sha256_hex(&message);
+            for thread in [
+                format!("{project}:channel:general:thread"),
+                item_thread(db, item)?,
+            ] {
+                let key = format!("notice:{thread}:{item}:{identity}");
+                let seen: bool = db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM messages WHERE dedupe_key=?1)",
+                    [&key],
+                    |r| r.get(0),
+                )?;
+                if !seen {
+                    append(db, &thread, "daemon", &human_body, &key)?;
+                }
+            }
         }
     }
     let issue: Option<u64> = db.query_row(
@@ -563,6 +635,24 @@ pub fn operational(
         )?;
     }
     Ok(())
+}
+
+/// Routine AI events belong in #ai-activity; human channels carry decisions and
+/// actions. Details remain available from the linked item and the activity ledger.
+fn human_notice(event: &str, detail: &str) -> Option<String> {
+    if let Some(kind) = event.strip_suffix(" gate open") {
+        return Some(format!("Your {kind} proposal is ready to review. Open Approval gates for the current proposal and approval link."));
+    }
+    if let Some(kind) = event.strip_suffix(" gate approved") {
+        return Some(format!(
+            "Your {kind} approval was recorded. Follow this item for progress."
+        ));
+    }
+    match event {
+        "Recovery needed" | "Work remains frozen" | "Blocked" => Some("Work is paused because its last attempt could not be safely continued. Open the item to review the recovery action and preserved changes.".into()),
+        "Final issue decision" => Some(detail.lines().filter(|line|!line.trim().is_empty()).take(2).collect::<Vec<_>>().join("\n").chars().take(600).collect()),
+        _ => None,
+    }
 }
 
 /// Short public explanation; raw errors remain in attempt diagnostics and the audit log.
