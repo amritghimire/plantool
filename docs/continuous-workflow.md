@@ -67,3 +67,21 @@ For an installed macOS run, use the playground's `docs/system-test.md` first, th
 Record the issue/PR links, plan version, head commit and selected model. Keep live
 native/provider results separate from the passing simulated regression checks.
 Do not erase state or weaken repository checks to force a scenario through.
+
+## Planning requested, but nothing starts
+
+The sprint panel now distinguishes a queued request from active work and a stalled
+scheduler. **Resume planning** checks saved worker progress immediately. Local
+scheduling runs separately from GitHub synchronization, so a slow GitHub request
+does not hold up a local planning request.
+
+After a restart, a cancelled idle/read-only graph can be restored using the daemon's
+current state. Planning events are retried only if the daemon never acknowledged
+them. An existing approved-gate response can reconnect to its exact saved worker
+interrupt, preserving the gate and its approval. This requires execution enabled
+and refuses frozen, closed or uncertain work.
+
+Older frozen Supervisor decisions can be reviewed with **Review paused step** and
+a fresh passkey, provided there is no active attempt, open gate or uncertain
+external action. This starts another read-only review with current evidence; it
+does not approve a revised plan or replay a coding operation.

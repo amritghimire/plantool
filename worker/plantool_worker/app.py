@@ -208,6 +208,23 @@ def create_app(home: Path, token: str, transport=None):
             receipt = await asyncio.to_thread(store.receipt,request.idempotency_key,request.model_dump(mode="json"))
             if receipt is not None: return receipt
             current = store.thread(request.thread_id)
+            if current and current["state"] == "cancelled":
+                # Cancellation only changed bridge metadata; the durable graph interrupt
+                # still exists. Reattach only the exact original interrupt, under current
+                # daemon authority. This preserves existing gate IDs and owner decisions.
+                snapshot = await app.state.graph.aget_state(store.config(request.thread_id))
+                exact = bool(snapshot.next) and any(
+                    isinstance(signal.value, dict) and signal.value.get("interrupt_id") == request.interrupt_id
+                    for task in snapshot.tasks for signal in task.interrupts
+                )
+                if exact and snapshot.values.get("workflow"):
+                    response = await app.state.daemon.post("/internal/v1/workflow_context",json={"item":request.thread_id})
+                    response.raise_for_status(); facts = response.json(); workflow = facts["state"]
+                    if facts.get("execution_enabled") is True and not workflow.get("frozen") and not workflow.get("checkpoint_uncertain") and not workflow.get("closed_on_github") and workflow.get("step") not in ("closed","merged","escalated","declined_closed","loop_complete"):
+                        def reattach():
+                            with store.db() as db: db.execute("UPDATE bridge_threads SET state='interrupted',interrupt_id=? WHERE id=? AND state='cancelled'",(request.interrupt_id,request.thread_id))
+                        await asyncio.to_thread(reattach)
+                        current = store.thread(request.thread_id)
             if not current or current["state"] != "interrupted" or current["interrupt_id"] != request.interrupt_id:
                 raise HTTPException(409,"Stale interrupt or cancelled graph")
             snapshot = await app.state.graph.aget_state(store.config(request.thread_id))

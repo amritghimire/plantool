@@ -271,6 +271,8 @@ impl WorkerManager {
                 };
                 let request = if path == "role" {
                     request.timeout(Duration::from_secs(660))
+                } else if path.starts_with("status/") {
+                    request.timeout(Duration::from_secs(3))
                 } else {
                     request
                 };

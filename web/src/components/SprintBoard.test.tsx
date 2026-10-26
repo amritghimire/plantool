@@ -16,3 +16,9 @@ it("offers planning when the week has no sprint",async()=>{
 it("separates waiting, running and completed issues",()=>{
  const item=board.sprints[0].items[0];expect(sprintColumn(item)).toBe("Planned");expect(sprintColumn({...item,frozen:true})).toBe("Waiting");expect(sprintColumn({...item,step:"backend",membership:"started"})).toBe("In progress");expect(sprintColumn({...item,step:"merged"})).toBe("Done");
 });
+
+it("does not disable a stalled planning request or call it running",async()=>{
+ vi.spyOn(api,"sprints").mockResolvedValue({...board,planning_queued:false,planning:{state:"stalled",message:"Planning has not started.",scheduler:"p:project"}});
+ render(<MemoryRouter><SprintBoard project="p"/></MemoryRouter>);
+ await screen.findByText("Planning has not started.");expect(screen.getByRole("button",{name:"Resume planning with passkey"})).toBeEnabled();expect(screen.queryByText("Planning queued or running")).not.toBeInTheDocument();
+});

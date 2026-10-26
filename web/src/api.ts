@@ -1,5 +1,5 @@
 export type SprintIssue={id:string;issue:number|null;title:string;step:string;membership:string;estimate:string;plan_hash:string;pr:number|null;frozen:boolean};
-export type SprintBoardData={project:string;repository:string;current_week:string;planning_queued:boolean;backlog_count:number;sprints:{id:string;week:string;state:string;issue:number|null;items:SprintIssue[]}[]};
+export type SprintBoardData={project:string;repository:string;current_week:string;planning_queued:boolean;planning?:{state:string;message:string;scheduler:string};backlog_count:number;sprints:{id:string;week:string;state:string;issue:number|null;items:SprintIssue[]}[]};
 export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;http_status?:number|null;retry_at?:number|null}[]};
 import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
@@ -51,7 +51,7 @@ export const api = {
   setupProgress: () => request<{step:string;project:string|null}>("GET","/api/engineering-os/setup"),
   saveSetupProgress: (body:{step:string;project:string|null}) => request<{step:string;project:string|null}>("POST","/api/engineering-os/setup",body),
   engineering: () => request<import("./engineering").EngineeringOverview>("GET","/api/engineering-os/projects"),
-  recovery: (item:string) => request<{eligible:boolean;attempt_id:string;step:string;message:string;routing_error?:string|null}>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`),
+  recovery: (item:string) => request<{eligible:boolean;review?:boolean;attempt_id:string;step:string;message:string;routing_error?:string|null}>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`),
   retryEngineering: (item:string,attempt_id:string) => request<{queued:boolean}>("POST",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`,{attempt_id}),
   engineeringItem: (item:string) => request<import("./engineering").EngineeringDetail>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}`),
   loop: () => request<{projects:{id:string;name:string|null;version:number;scan_day:number;scan_time:string;nix_enabled:boolean}[];declines:{item:string;title:string;reason:string;reset_at:string;active:boolean}[];notifications:{id:string;body:string;created_at:string}[]}>("GET","/api/settings/loop"),
