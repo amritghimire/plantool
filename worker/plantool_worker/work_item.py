@@ -5,13 +5,20 @@ from typing import Any
 CODING = {"backend", "frontend", "devops", "qa", "reviewer"}
 STEPS = {"triage":"pm","scan_devops":"devops","scan_qa":"qa","scan_pm":"pm","route_finding":"pm","research":"cto", "plan":"pm", "plan_review":"cto", "backend":"backend", "frontend":"frontend", "devops":"devops", "qa":"qa", "reviewer":"reviewer", "docs":"docs", "supervisor":"supervisor"}
 
+def retry_step(owner: str, state: dict[str, Any]) -> str | None:
+    owner=owner.strip().lower()
+    if owner in {"cto","research"}: return "research"
+    if owner in {"pm","plan"}: return "plan"
+    if owner in {"backend","frontend","devops","qa","docs"}: return owner if state.get("approved") else "plan"
+    return None
+
 def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     state = dict(state)
     step = state["step"]
     if state.get("route_retry") and result.get("outcome")!="done": return state
     if step in {"triage","scan_devops","scan_qa","scan_pm","route_finding"} and result.get("outcome")!="done":return {**state,"step":"escalated","frozen":True}
     findings = result.get("findings", [])
-    defects = [f for f in findings if f.get("scope") == "in"]
+    defects = [f for f in findings if f.get("scope") == "in"] if step in CODING else []
     if step == "supervisor":
         directive = result.get("details") or {}
         rounds = state.get("supervisor_rounds", 0) + 1
@@ -20,12 +27,12 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
             state.update(step="prerequisite_wait")
         elif directive.get("action") == "clarify":
             state.update(step="owner_question", owner_question={"question":directive.get("reason")})
-        elif rounds > 2 or directive.get("action") == "escalate":
-            state.update(step="escalated", frozen=True)
+        elif directive.get("action")=="retry" and retry_step(directive.get("owner") or "",state):
+            state["step"]=retry_step(directive.get("owner") or "",state)
         elif directive.get("action") == "replan":
             state.update(step="plan", approved=False)
-        elif directive.get("action") == "retry" and directive.get("owner") in {"backend","frontend","devops","qa","docs"}:
-            state["step"] = directive["owner"]
+        elif rounds > 2 or directive.get("action") == "escalate":
+            state.update(step="escalated", frozen=True)
         else:
             state.update(step="escalated", frozen=True)
         return state
@@ -35,7 +42,11 @@ def route(state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
         retries[key] = retries.get(key, 0) + 1
         state["retries"] = retries
         owner = state.get("owners", {}).get(key)
-        if retries[key] > 3 or any(f.get("severity") == "high" for f in findings) or owner not in {"backend","frontend","devops","qa","docs"}:
+        if retries[key] > 3 or any(f.get("severity") == "high" for f in findings):
+            state["step"] = "supervisor"
+        elif not state.get("approved"):
+            state["step"] = "plan"
+        elif owner not in {"backend","frontend","devops","qa","docs"}:
             state["step"] = "supervisor"
         else:
             state["step"] = owner
@@ -99,7 +110,7 @@ async def build_step(daemon, store, state):
             if updated["step"]!=facts["state"]["step"] or (updated["step"]=="discussion" and updated["discussion"]!=facts["state"]["discussion"]):raise RuntimeError("Discussion projection mismatch")
             updated.update(generation=facts["state"]["generation"],sequence=facts["state"]["sequence"],policy_version=facts["policy_version"])
             return {"workflow":updated,"result":updated}
-        for key in ["urgent","phase_restart","head_sha","preset","phases","research_sha","research_approved","discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","docs_changed","docs_rounds"]:
+        for key in ["urgent","phase_restart","head_sha","preset","phases","research_sha","research_approved","discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","retry_not_before","supervisor_retries","docs_changed","docs_rounds"]:
             if key in facts["state"]: workflow[key]=facts["state"][key]
         updated=route(workflow,result)
         if step in {"backend","frontend"} and updated["step"]=="qa" and workflow.get("infra_changed"): updated["step"]="devops"

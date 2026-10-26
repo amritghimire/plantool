@@ -22,3 +22,13 @@ it("shows the failed capability and redacted diagnostic instead of requiring wor
  expect(screen.getByRole("button",{name:"Copy redacted diagnostics"})).toBeInTheDocument();
  expect(api.diagnoseModel).toHaveBeenCalledWith("free");
 });
+
+it("shows saved diagnostic failure beside the route and opens its details",async()=>{
+ const diagnostic={route:"codex-sol",provider:"openai",model:"gpt-6.1-sol",checked_at:1,ok:false,redacted:true,stages:[{stage:"Codex CLI",ok:false,message:"Codex workspace routing discovery failed",next_step:"Check account routing"}]};
+ vi.mocked(api.modelSettings).mockResolvedValue({yaml:"routes: {}",projects:[],routes:[{route:"codex-sol",available:true,model:"gpt-6.1-sol",error:null,diagnostic}]});
+ render(<ModelSettings/>);fireEvent.click(screen.getByText("Model routes and providers"));
+ expect(await screen.findByText(/Last check: failed/)).toHaveTextContent("Codex workspace routing discovery failed");
+ fireEvent.click(screen.getByRole("button",{name:"Show last result for codex-sol"}));
+ expect(await screen.findByText("Codex CLI: failed")).toBeInTheDocument();
+ expect(screen.getByText("Next: Check account routing")).toBeInTheDocument();
+});

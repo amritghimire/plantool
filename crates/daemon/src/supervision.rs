@@ -55,16 +55,13 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     let groups = {
         let result = std::process::Command::new("/bin/ps")
-            .args(["-axo", "pgid="])
+            .args(["-axo", "pgid=,stat="])
             .output()?;
         anyhow::ensure!(
             result.status.success(),
             "Cannot inspect process groups; recovery remains unavailable"
         );
-        String::from_utf8(result.stdout)?
-            .split_whitespace()
-            .filter_map(|s| s.parse::<u32>().ok())
-            .collect::<std::collections::HashSet<_>>()
+        live_groups(&String::from_utf8(result.stdout)?)
     };
     for (id, pid) in rows {
         #[cfg(unix)]
@@ -87,4 +84,29 @@ pub fn reconcile(home: &Path) -> anyhow::Result<()> {
     crate::database::set(&db, "model_recovery_fence", &fenced)?;
     crate::database::set(&db, "worker_recovery_fence", &worker_fenced)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn live_groups(output: &str) -> std::collections::HashSet<u32> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let group = fields.next()?.parse().ok()?;
+            let state = fields.next()?;
+            // A zombie cannot execute. Live descendants still keep their group fenced.
+            (!state.starts_with('Z')).then_some(group)
+        })
+        .collect()
+}
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn zombie_leaders_do_not_fence_execution_but_live_descendants_do() {
+        let groups = live_groups("101 Z\n202 Z+\n202 S\n303 R+\n");
+        assert!(!groups.contains(&101));
+        assert!(groups.contains(&202));
+        assert!(groups.contains(&303));
+    }
 }

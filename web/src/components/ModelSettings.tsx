@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useEffect,useState} from "react";
 import {api, type ProviderDiagnostic} from "../api";
 const PROVIDERS=["openai","openrouter","ollama-cloud","opencode-zen","ollama"];
 export function ModelSettings({expanded=false}:{expanded?:boolean}={}){
@@ -6,6 +6,7 @@ export function ModelSettings({expanded=false}:{expanded?:boolean}={}){
  const [diagnostic,setDiagnostic]=useState<ProviderDiagnostic|null>(null);
  const [testing,setTesting]=useState("");
  const test=async(route:string)=>{setBusy(true);setTesting(route);setMessage("Testing synthetic provider execution; this may take several minutes.");try{const result=await api.diagnoseModel(route);setDiagnostic(result);setMessage(result.ok?"All live capability checks passed. Real role execution still requires valid task evidence.":"Live check failed. See the failing stage and suggested next step below.");await load()}catch(error){setMessage((error as Error).message)}finally{setBusy(false);setTesting("")}};
+ useEffect(()=>{if(!busy&&settings?.diagnostic_batch?.finished!==false)return;const timer=setInterval(()=>{void api.modelSettings().then(setSettings).catch(()=>{});},2000);return()=>clearInterval(timer);},[busy,settings?.diagnostic_batch?.finished]);
  const load=async()=>{try{const value=await api.modelSettings();setSettings(value);setYaml(value.yaml)}catch(e){setMessage((e as Error).message)}};
  const action=async(verify:boolean)=>{setBusy(true);setMessage("");try{if(verify){await api.verifyModels();await load();setMessage("Live model catalogs checked; unavailable slugs were not substituted.")}else{await api.saveModels({yaml,project:project||null,allowed_providers:project?allowed:null});setMessage("Saved. Resume execution, then verify the routes before starting a new attempt.")}}catch(e){setMessage((e as Error).message)}finally{setBusy(false)}};
  return <details open={expanded?true:undefined} className="disclosure settings-group form-stack" onToggle={e=>{if(e.currentTarget.open&&!settings)void load()}}><summary>Model routes and providers</summary>
@@ -18,14 +19,18 @@ export function ModelSettings({expanded=false}:{expanded?:boolean}={}){
  <button className="btn" disabled={busy||!settings} onClick={()=>void action(true)}>Verify routes with passkey</button>
  <section aria-label="Provider diagnostics">
  <h3>Live provider checks</h3>
- <p>Catalog verification proves only that an ID exists. HTTP tests use up to three requests; a Codex diagnostic turn may use several model/tool calls. Every explicit live test consumes account quota. It uses synthetic data, never your project files. Resume execution first and wait for the global model lease to be free. Codex uses its signed-in CLI, not an OpenAI API key.</p>
- {settings?.routes.map(r=><div key={r.route}><p>{r.route}: {r.available?r.model:`unavailable — ${r.error??"not verified"}`}</p>
- <button className="btn" disabled={busy} onClick={()=>void test(r.route)}>{testing===r.route?"Testing…":`Test ${r.route} with passkey`}</button>
- {r.diagnostic&&<button className="btn" onClick={()=>setDiagnostic(r.diagnostic!)}>Show last result for {r.route}</button>}</div>)}
+ {busy&&<p role="status">{testing?`Testing ${testing}: ${settings?.diagnostic_activity?.some(a=>a.state==="running")?"model is running":settings?.diagnostic_activity?.some(a=>a.state==="queued")?"queued for the global model slot":"waiting for passkey confirmation or starting the check"}. The result will appear below.`:"Applying settings…"}</p>}
+ <button className="btn" disabled={busy||!settings||settings.diagnostic_batch?.finished===false} onClick={async()=>{setBusy(true);setMessage("Waiting for your passkey to authorize one serial test of each configured route.");try{await api.diagnoseAllModels();await load();setMessage("Serial provider checks queued. Results are shown beside each route and survive page reloads.")}catch(e){setMessage((e as Error).message)}finally{setBusy(false)}}}>Test all configured routes serially with passkey</button>
+ {settings?.diagnostic_batch&&<p role="status">Provider checks: {settings.diagnostic_batch.completed.length} of {settings.diagnostic_batch.routes.length} finished. {settings.diagnostic_batch.finished?"Batch finished.":"Remaining tests are queued."} {(settings.diagnostic_batch.warnings??[]).join(" ")}</p>}
+ <p>Catalog verification proves only that an ID exists. HTTP tests use up to three requests; a Codex diagnostic turn may use several model/tool calls. Every explicit live test consumes account quota. It uses synthetic data, never your project files. Resume execution first. Live checks queue for the global model slot. Codex uses its signed-in CLI, not an OpenAI API key.</p>
  {diagnostic&&<div role="status"><h4>{diagnostic.route}: {diagnostic.ok?"Passed":"Failed"}</h4><p>{diagnostic.provider} · {diagnostic.model} · {new Date(diagnostic.checked_at*1000).toLocaleString()}</p>
- {diagnostic.stages.map((s,i)=><div key={i}><strong>{s.stage}: {s.ok?"passed":"failed"}</strong><p>{s.message}{s.http_status?` (HTTP ${s.http_status})`:""}</p>{s.next_step&&<p>Next: {s.next_step}</p>}{s.retry_at&&<p>Retry after {new Date(s.retry_at*1000).toLocaleString()}</p>}</div>)}
+ {diagnostic.stages.map((s,i)=><div key={i}><strong>{s.stage}: {s.ok?"passed":"failed"}</strong><p>{s.message}{s.http_status?` (HTTP ${s.http_status})`:""}</p>{s.next_step&&<p>Next: {s.next_step}</p>}{s.technical_detail&&<details><summary>Technical details</summary><pre>{s.technical_detail}</pre></details>}{s.retry_at&&<p>Retry after {new Date((s.retry_at>100_000_000_000?s.retry_at/1000:s.retry_at)*1000).toLocaleString()}</p>}</div>)}
  <button className="btn" onClick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(diagnostic,null,2));setMessage("Copied redacted diagnostics. No credentials, provider bodies or project prompts included.")}catch{setMessage("Clipboard unavailable. Select and copy the redacted JSON below.")}}}>Copy redacted diagnostics</button>
  <details><summary>Redacted diagnostic JSON</summary><pre>{JSON.stringify(diagnostic,null,2)}</pre></details></div>}
+ {settings?.routes.map(r=><div key={r.route}><p>{r.route}: {r.available?r.model:`unavailable — ${r.error??"not verified"}`}</p>
+ <button className="btn" disabled={busy} onClick={()=>void test(r.route)}>{testing===r.route?"Testing…":`Test ${r.route} with passkey`}</button>
+ {r.diagnostic&&<p role="status">Last check: {r.diagnostic.ok?"passed":"failed"} · {new Date(r.diagnostic.checked_at*1000).toLocaleString()}. {r.diagnostic.stages.find(s=>!s.ok)?.message}</p>}
+ {r.diagnostic&&<button className="btn" onClick={()=>{setDiagnostic(r.diagnostic!);setMessage(`Showing saved result for ${r.route}.`);}}>Show last result for {r.route}</button>}</div>)}
  <details><summary>Provider troubleshooting guide</summary>
  <p>Codex: run <code>codex login status</code> on the daemon host. Install/sign in to the same Codex CLI used for Personal. A catalog result does not prove subscription execution. No OpenAI API key is required.</p>
  <p>Local Ollama: run <code>ollama list</code>, pull the exact configured model, then use <code>ollama run MODEL 'Reply with OK only'</code> and <code>ollama ps</code>. Confirm the daemon can reach localhost:11434. Large models may load slowly.</p>

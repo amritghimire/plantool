@@ -46,9 +46,12 @@ pub fn planning_open(
     project: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<bool> {
+    let week = crate::sprint_view::week(db, project, now)?;
     Ok(schedule(db, project, now)?.1.is_some()
         || database::get::<String>(db, &format!("manual_sprint_week:{project}"))?.as_deref()
-            == Some(crate::sprint_view::week(db, project, now)?.as_str()))
+            == Some(week.as_str())
+        || database::get::<String>(db, &format!("automatic_sprint_week:{project}"))?.as_deref()
+            == Some(week.as_str()))
 }
 pub fn ensure_project(home: &Path, project: &str) -> anyhow::Result<String> {
     let mut db = database::open(home)?;
@@ -210,7 +213,7 @@ pub fn expire(tx: &Transaction<'_>, project: &str, except: &str) -> anyhow::Resu
     Ok(())
 }
 pub fn candidates(home: &Path, db: &Connection, project: &str) -> anyhow::Result<Value> {
-    let mut q=db.prepare("SELECT i.id,i.github_issue_number,i.title,r.number,r.content_sha256 FROM work_items i JOIN revisions r ON r.item_id=i.id AND r.doc_kind='plan' AND r.number=(SELECT max(number) FROM revisions WHERE item_id=i.id AND doc_kind='plan') WHERE i.project_id=?1 AND i.closed_at IS NULL AND coalesce(i.priority,'')<>'urgent' AND (i.approved_plan_revision_id IS NULL OR coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=1) AND EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='plan' AND g.state='open' AND g.target_digest=r.content_sha256) ORDER BY i.created_at,i.id")?;
+    let mut q=db.prepare("SELECT i.id,i.github_issue_number,i.title,r.number,r.content_sha256 FROM work_items i JOIN revisions r ON r.item_id=i.id AND r.doc_kind='plan' AND r.number=(SELECT max(number) FROM revisions WHERE item_id=i.id AND doc_kind='plan') WHERE i.project_id=?1 AND i.closed_at IS NULL AND i.deleted_at IS NULL AND EXISTS(SELECT 1 FROM workflow_items w WHERE w.item_id=i.id AND coalesce(json_extract(w.state_json,'$.frozen'),0)=0 AND coalesce(json_extract(w.state_json,'$.closed_on_github'),0)=0) AND coalesce(i.priority,'')<>'urgent' AND (i.approved_plan_revision_id IS NULL OR coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=1) AND EXISTS(SELECT 1 FROM gates g WHERE g.item_id=i.id AND g.kind='plan' AND g.state='open' AND g.target_digest=r.content_sha256) ORDER BY i.created_at,i.id")?;
     let rows=q.query_map([project],|r|Ok(json!({"item":r.get::<_,String>(0)?,"issue":r.get::<_,u64>(1)?,"title":r.get::<_,String>(2)?,"version":r.get::<_,u64>(3)?,"hash":r.get::<_,String>(4)?})))?.collect::<Result<Vec<_>,_>>()?;
     let mut rows = rows;
     for row in &mut rows {
@@ -222,6 +225,14 @@ pub fn candidates(home: &Path, db: &Connection, project: &str) -> anyhow::Result
     Ok(json!(rows))
 }
 pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result<Value> {
+    ack_at(home, request, chrono::Utc::now())
+}
+/// Explicit clock for deterministic scheduling verification. HTTP callers use `ack`.
+pub fn ack_at(
+    home: &Path,
+    request: &plantool_contract::EventAck,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Value> {
     database::inbox_once(home, "project.ack", &request.event_id, |tx| {
         let item = format!("{}:project", request.project);
         let mut s = workflow::state(tx, &item)?.context("Project graph missing")?;
@@ -238,9 +249,9 @@ pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result
             );
             let p: Value = serde_json::from_str(&payload)?;
             let week = p["week"].as_str().context("Week missing")?;
-            let (signature, current) = schedule(tx, &request.project, chrono::Utc::now())?;
-            let manual = p["manual"] == true
-                && crate::sprint_view::week(tx, &request.project, chrono::Utc::now())? == week;
+            let (signature, current) = schedule(tx, &request.project, now)?;
+            let manual = (p["manual"] == true || p["automatic"] == true)
+                && crate::sprint_view::week(tx, &request.project, now)? == week;
             if p["schedule"] != signature || (!manual && current.as_deref() != Some(week)) {
                 s["step"] = json!("project_wait");
                 s["sequence"] = json!(s["sequence"].as_u64().unwrap_or(0) + 1);
@@ -276,18 +287,7 @@ pub fn ack(home: &Path, request: &plantool_contract::EventAck) -> anyhow::Result
         } else if kind == "plan_ready" && next == "sprint_plan" {
             ensure!(s["sprint_id"].is_string(), "No active scheduled sprint");
             ensure!(
-                schedule(tx, &request.project, chrono::Utc::now())?
-                    .1
-                    .is_some()
-                    || database::get::<String>(
-                        tx,
-                        &format!("manual_sprint_week:{}", request.project)
-                    )?
-                    .as_deref()
-                        == Some(
-                            crate::sprint_view::week(tx, &request.project, chrono::Utc::now())?
-                                .as_str()
-                        ),
+                planning_open(tx, &request.project, now)?,
                 "Sprint is not due under current settings"
             );
             tx.execute(
@@ -503,7 +503,40 @@ pub fn start_items(home: &Path, request: &plantool_contract::WorkflowPr) -> anyh
         },
     )
 }
+/// Bootstrap an empty current week once, even before the scheduled planning day.
+/// A durable event identity prevents polling, restart or an empty result from spinning.
+fn bootstrap_empty_week(
+    tx: &Transaction<'_>,
+    project: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    let item = format!("{project}:project");
+    let Some(state) = workflow::state(tx, &item)? else {
+        return Ok(());
+    };
+    if state["frozen"] == true || state["step"] != "project_wait" {
+        return Ok(());
+    }
+    let week = crate::sprint_view::week(tx, project, now)?;
+    let populated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sprint_items si JOIN sprints s ON s.id=si.sprint_id JOIN work_items i ON i.id=si.item_id WHERE s.project_id=?1 AND s.week=?2 AND i.closed_at IS NULL AND i.deleted_at IS NULL AND i.state NOT IN('done','merged','closed','declined_closed') AND si.state IN('pending','approved','started'))", params![project,week], |r| r.get(0))?;
+    let eligible: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM work_items i JOIN workflow_items w ON w.item_id=i.id WHERE i.project_id=?1 AND i.github_issue_number IS NOT NULL AND i.closed_at IS NULL AND i.deleted_at IS NULL AND i.state IN('backlog','plan_gate') AND coalesce(json_extract(w.state_json,'$.frozen'),0)=0 AND coalesce(json_extract(w.state_json,'$.closed_on_github'),0)=0)", [project], |r| r.get(0))?;
+    if !populated && eligible {
+        let (signature, _) = schedule(tx, project, now)?;
+        event(
+            tx,
+            project,
+            "sprint_planning_due",
+            &json!({"week":week,"schedule":signature,"automatic":true}),
+            &format!("automatic-sprint:{week}:{signature}"),
+        )?;
+        database::set(tx, &format!("automatic_sprint_week:{project}"), &week)?;
+    }
+    Ok(())
+}
 pub fn tick(home: &Path, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+    if crate::execution::Execution::load(home)?.status().stopped {
+        return Ok(());
+    }
     crate::loop_engine::tick_backlog(home, now)?;
     let projects = {
         let db = database::open(home)?;
@@ -524,7 +557,11 @@ pub fn tick(home: &Path, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<(
         let item = ensure_project(home, &project)?;
         let mut db = database::open(home)?;
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if let Some(week) = due(now, day, &time, &zone)? {
+        let scheduled = due(now, day, &time, &zone)?;
+        if scheduled.is_none() {
+            bootstrap_empty_week(&tx, &project, now)?;
+        }
+        if let Some(week) = scheduled {
             let (signature, _) = schedule(&tx, &project, now)?;
             event(
                 &tx,
@@ -549,6 +586,54 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(s)
             .unwrap()
             .with_timezone(&chrono::Utc)
+    }
+    #[test]
+    fn empty_week_bootstraps_once_before_schedule_without_approving_work() {
+        let t = tempfile::tempdir().unwrap();
+        let mut db = database::open(t.path()).unwrap();
+        db.execute(
+            "INSERT INTO projects VALUES('p','o/r',NULL,'/checkout','eos','public','now')",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO project_settings(project_id,version,effective_at,set_by,sprint_day,sprint_time,timezone) VALUES('p',1,'now','owner',4,'09:00','UTC')", []).unwrap();
+        for (id, step, project) in [("p:project", "project_wait", true), ("i", "backlog", false)] {
+            db.execute("INSERT INTO work_items(id,project_id,kind,title,state,created_at,repo_slug,slug,session_json,github_issue_number) VALUES(?1,'p','eos','Issue',?2,'now','p',?1,'{}',?3)",params![id,step,if project {None}else{Some(1)}]).unwrap();
+            db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES(?1,?2,'base','head')", params![id,json!({"step":step,"project":project,"frozen":false}).to_string()]).unwrap();
+        }
+        let now = instant("2026-10-19T00:00:00Z");
+        let tx = db.transaction().unwrap();
+        bootstrap_empty_week(&tx, "p", now).unwrap();
+        bootstrap_empty_week(&tx, "p", now).unwrap();
+        assert!(planning_open(&tx, "p", now).unwrap());
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM project_events", [], |r| r
+                .get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        let payload: String = tx
+            .query_row("SELECT payload_json FROM project_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&payload).unwrap()["automatic"],
+            true
+        );
+        tx.execute("DELETE FROM project_events", []).unwrap();
+        tx.execute("UPDATE workflow_items SET state_json=json_set(state_json,'$.frozen',1) WHERE item_id='i'", []).unwrap();
+        bootstrap_empty_week(&tx, "p", now).unwrap();
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM project_events", [], |r| r
+                .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        tx.rollback().unwrap();
     }
     #[test]
     fn schedule_uses_local_iso_week_and_dst_without_duplicate_wall_clock_runs() {

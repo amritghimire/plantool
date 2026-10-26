@@ -66,8 +66,19 @@ async fn settings(
         )?
         .unwrap_or(Value::Null);
     }
+    let mut diagnostic_batch =
+        database::get::<Value>(&db, "provider.diagnostic_batch")?.unwrap_or(Value::Null);
+    if diagnostic_batch["finished"] == false && diagnostic_batch["pid"] != std::process::id() {
+        diagnostic_batch["finished"] = json!(true);
+        diagnostic_batch["warnings"]=json!(["Daemon restarted; remaining live checks were not replayed. Start a new batch when ready."]);
+    }
+    let diagnostic_activity = {
+        let mut q = db.prepare("SELECT holder_kind,'running',model_route FROM leases WHERE holder_kind LIKE 'diagnostic:%' UNION ALL SELECT id,'queued',json_object('route',route,'model',model) FROM model_queue WHERE id LIKE 'diagnostic:%'").map_err(anyhow::Error::from)?;
+        let rows = q.query_map([], |r| Ok(json!({"owner":r.get::<_,String>(0)?,"state":r.get::<_,String>(1)?,"model":r.get::<_,String>(2)?}))).map_err(anyhow::Error::from)?.collect::<Result<Vec<_>,_>>().map_err(anyhow::Error::from)?;
+        rows
+    };
     Ok(Json(
-        json!({"yaml":serde_yaml::to_string(&router::config(&state.config.home)?).map_err(anyhow::Error::from)?,"projects":projects,"routes":routes}),
+        json!({"diagnostic_batch":diagnostic_batch,"diagnostic_activity":diagnostic_activity,"yaml":serde_yaml::to_string(&router::config(&state.config.home)?).map_err(anyhow::Error::from)?,"projects":projects,"routes":routes}),
     ))
 }
 #[derive(serde::Deserialize)]
@@ -164,6 +175,79 @@ async fn diagnose(
         .map(Json)
         .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))
 }
+async fn diagnose_all(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Extension(approval): Extension<crate::auth::ApprovedAction>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    approval.recheck(&state)?;
+    if state.runs.execution.status().stopped {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Resume execution before live checks".into(),
+        ));
+    }
+    let routes: Vec<String> = router::config(&state.config.home)?
+        .routes
+        .into_keys()
+        .collect();
+    let generation = state.runs.execution.status().generation;
+    let started = crate::database::unix_now();
+    {
+        let mut db = database::open(&state.config.home)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(anyhow::Error::from)?;
+        let previous = database::get::<Value>(&tx, "provider.diagnostic_batch")?;
+        if previous.is_some_and(|p| p["pid"] == std::process::id() && p["finished"] == false) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "A diagnostic batch is already queued or running".into(),
+            ));
+        }
+        database::set(
+            &tx,
+            "provider.diagnostic_batch",
+            &json!({"pid":std::process::id(),"started_at":started,"routes":routes,"completed":[],"finished":false}),
+        )?;
+        tx.commit().map_err(anyhow::Error::from)?;
+    }
+    let scheduled = routes.clone();
+    tokio::spawn(async move {
+        let mut completed = vec![];
+        let mut warnings = vec![];
+        for route in &scheduled {
+            let current = state.runs.execution.status();
+            if current.stopped || current.generation != generation {
+                warnings.push("Execution changed; remaining tests were cancelled".to_string());
+                break;
+            }
+            if let Err(error) = crate::models::diagnostics::run(&state, route).await {
+                warnings.push(format!(
+                    "{route}: {}",
+                    crate::models::diagnostics::sanitized_error(&error.to_string())
+                ));
+            }
+            completed.push(route.clone());
+            if let Ok(db) = database::open(&state.config.home) {
+                let _ = database::set(
+                    &db,
+                    "provider.diagnostic_batch",
+                    &json!({"pid":std::process::id(),"started_at":started,"routes":scheduled,"completed":completed,"finished":false,"warnings":warnings}),
+                );
+            }
+        }
+        if let Ok(db) = database::open(&state.config.home) {
+            let _ = database::set(
+                &db,
+                "provider.diagnostic_batch",
+                &json!({"pid":std::process::id(),"started_at":started,"routes":scheduled,"completed":completed,"finished":true,"warnings":warnings}),
+            );
+        }
+    });
+    Ok(Json(json!({"queued":true,"routes":routes})))
+}
 async fn completions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -234,6 +318,7 @@ pub fn browser_routes() -> Router<AppState> {
         .route("/settings/models", get(settings).post(save))
         .route("/settings/models/verify", post(verify))
         .route("/settings/models/diagnose", post(diagnose))
+        .route("/settings/models/diagnose-all", post(diagnose_all))
 }
 pub fn proxy_routes() -> Router<AppState> {
     Router::new().route("/v1/chat/completions", post(completions))

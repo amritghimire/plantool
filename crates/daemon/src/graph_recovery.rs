@@ -1,6 +1,6 @@
 //! Restore dormant read-only graphs from daemon facts, never from worker database edits.
 use crate::{database, dispatcher, workflow, AppState};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::Path;
 pub fn safe_step(step: &str) -> bool {
@@ -14,6 +14,7 @@ pub fn safe_step(step: &str) -> bool {
             | "research"
             | "plan"
             | "plan_review"
+            | "plan_gate"
             | "supervisor"
             | "discussion"
             | "sprint_plan"
@@ -38,7 +39,41 @@ pub fn restore(home: &Path, item: &str, observed: &str) -> anyhow::Result<bool> 
     let Some(mut state) = workflow::state(&tx, item)? else {
         return Ok(false);
     };
-    let step = state["step"].as_str().unwrap_or("").to_owned();
+    let mut step = state["step"].as_str().unwrap_or("").to_owned();
+    // Old projections could route positive plan-review observations to a task
+    // owner before a gate. Repair only with the exact completed read receipt,
+    // no later attempts, and no approval or uncertain/write effect to replay.
+    if state["approved"] != true
+        && matches!(
+            step.as_str(),
+            "backend" | "frontend" | "devops" | "qa" | "docs"
+        )
+    {
+        let receipt:Option<(u64,String,String)> = tx.query_row(
+            "SELECT a.generation,d.request_json,a.outcome_json FROM attempts a JOIN dispatches d ON d.attempt_id=a.id WHERE a.item_id=?1 AND a.state='completed' AND NOT EXISTS(SELECT 1 FROM attempts later WHERE later.item_id=a.item_id AND later.generation>a.generation) ORDER BY a.generation DESC LIMIT 1",
+            [item], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        if let Some((generation, request, result)) = receipt {
+            let request: Value = serde_json::from_str(&request)?;
+            let result: Value = serde_json::from_str(&result)?;
+            let unapproved: bool = tx.query_row(
+                "SELECT approved_plan_revision_id IS NULL FROM work_items WHERE id=?1",
+                [item],
+                |r| r.get(0),
+            )?;
+            if unapproved
+                && generation == state["generation"].as_u64().unwrap_or(0)
+                && request["capability"] == "read"
+                && request["inputs"]["step"] == "plan_review"
+                && result["outcome"] == "done"
+                && !result["findings"]
+                    .as_array()
+                    .is_some_and(|fs| fs.iter().any(|f| f["severity"] == "high"))
+            {
+                step = "plan_gate".into();
+                state["step"] = json!(step);
+            }
+        }
+    }
     if !safe_step(&step)
         || state["frozen"] == true
         || state["checkpoint_uncertain"] == true
@@ -88,12 +123,19 @@ pub fn restore(home: &Path, item: &str, observed: &str) -> anyhow::Result<bool> 
         "daemon",
         "workflow.restored",
         item,
-        &json!({"step":step,"worker_state":observed}),
+        &json!({"step":step,"worker_state":observed,"preapproval_projection_repaired":step=="plan_gate"}),
     )?;
     let thread = crate::workspace::item_thread(&tx, item)?;
     crate::workspace::append(&tx,&thread,"daemon","This planning step stopped during a restart. We are restoring it and keeping its history. Approvals are unchanged.",&format!("restored:{item}:{}",state["sequence"]))?;
     tx.commit()?;
     Ok(true)
+}
+fn has_current_handoff(
+    db: &rusqlite::Connection,
+    item: &str,
+    interrupt: &str,
+) -> anyhow::Result<bool> {
+    Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND (kind IN('worker.start','worker.recover','worker.cancel') OR (kind='worker.resume' AND json_extract(payload_json,'$.interrupt_id')=?2))) OR EXISTS(SELECT 1 FROM graph_waiters WHERE item_id=?1 AND interrupt_id=?2) OR EXISTS(SELECT 1 FROM loop_waiters WHERE item_id=?1 AND interrupt_id=?2)",params![item,interrupt],|r|r.get(0))?)
 }
 pub async fn reconcile(state: &AppState) -> anyhow::Result<()> {
     probe(state, None, false).await
@@ -128,7 +170,11 @@ async fn probe(state: &AppState, project: Option<&str>, force: bool) -> anyhow::
             break;
         }
         let facts: Value = serde_json::from_str(&raw)?;
-        if !safe_step(facts["step"].as_str().unwrap_or("")) {
+        let step = facts["step"].as_str().unwrap_or("");
+        if !safe_step(step)
+            && !(facts["approved"] != true
+                && matches!(step, "backend" | "frontend" | "devops" | "qa" | "docs"))
+        {
             continue;
         }
         database::set(
@@ -162,7 +208,8 @@ async fn probe(state: &AppState, project: Option<&str>, force: bool) -> anyhow::
         let kind = observed["state"].as_str().unwrap_or("");
         if kind == "interrupted" {
             let db = database::open(&state.config.home)?;
-            let live:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND kind LIKE 'worker.%' AND delivered_at IS NULL) OR EXISTS(SELECT 1 FROM graph_waiters WHERE item_id=?1 AND interrupt_id=?2) OR EXISTS(SELECT 1 FROM loop_waiters WHERE item_id=?1 AND interrupt_id=?2)",params![item,observed["interrupt_id"].as_str()],|r|r.get(0))?;
+            let live =
+                has_current_handoff(&db, &item, observed["interrupt_id"].as_str().unwrap_or(""))?;
             if !live {
                 restore(&state.config.home, &item, "orphaned_interrupt")?;
             }
@@ -187,6 +234,60 @@ mod tests {
         db.execute("INSERT INTO work_items(id,project_id,kind,title,state,created_at,repo_slug,slug,session_json) VALUES('p:project','p','eos','Scheduler','project_wait','now','p','project','{}')",[]).unwrap();
         db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES('p:project','{\"item\":\"p:project\",\"project\":true,\"step\":\"project_wait\",\"sequence\":0,\"generation\":0,\"frozen\":false}','b','b')",[]).unwrap();
         (t, db)
+    }
+    #[test]
+    fn a_stale_pending_result_does_not_hide_an_orphaned_interrupt() {
+        let (t, db) = setup();
+        dispatcher::enqueue(
+            &db,
+            "p:project",
+            "worker.resume",
+            &json!({"thread_id":"p:project","interrupt_id":"old","idempotency_key":"old-result"}),
+        )
+        .unwrap();
+        assert!(has_current_handoff(&db, "p:project", "old").unwrap());
+        assert!(!has_current_handoff(&db, "p:project", "current").unwrap());
+        dispatcher::enqueue(
+            &db,
+            "p:project",
+            "worker.recover",
+            &json!({"thread_id":"p:project","idempotency_key":"restore"}),
+        )
+        .unwrap();
+        assert!(has_current_handoff(&db, "p:project", "current").unwrap());
+        drop(t);
+    }
+    #[test]
+    fn stale_preapproval_coding_projection_requires_completed_read_receipt() {
+        let (t, db) = setup();
+        db.execute("UPDATE workflow_items SET state_json='{\"step\":\"backend\",\"approved\":false,\"generation\":1,\"sequence\":1,\"frozen\":false}'",[]).unwrap();
+        assert!(!restore(t.path(), "p:project", "orphaned_interrupt").unwrap());
+        db.execute("INSERT INTO attempts VALUES('review','p:project','cto',1,'route','completed','/checkout','now','now','{\"outcome\":\"done\",\"findings\":[{\"severity\":\"medium\"}]}','review','{}',0)",[]).unwrap();
+        db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('review','{\"capability\":\"read\",\"inputs\":{\"step\":\"plan_review\"}}','digest','p:project','old',0)",[]).unwrap();
+        assert!(restore(t.path(), "p:project", "orphaned_interrupt").unwrap());
+        let s = workflow::state(&db, "p:project").unwrap().unwrap();
+        assert_eq!(s["step"], "plan_gate");
+        assert_eq!(s["approved"], false);
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM gates", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert!(!restore(t.path(), "p:project", "orphaned_interrupt").unwrap());
     }
     #[test]
     fn cancelled_idle_graph_restores_only_unacknowledged_events_once() {
@@ -326,4 +427,38 @@ mod tests {
             0
         );
     }
+}
+
+/// Read-only summary after Resume; frozen/uncertain work retains its review fence.
+pub fn resume_report(home: &Path) -> anyhow::Result<Value> {
+    let db = database::open(home)?;
+    let mut q = db.prepare("SELECT w.item_id,i.title,w.state_json FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE i.deleted_at IS NULL AND i.closed_at IS NULL")?;
+    let rows = q
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut attention = vec![];
+    let mut eligible = 0;
+    for (id, title, raw) in rows {
+        let s: Value = serde_json::from_str(&raw)?;
+        if s["closed_on_github"] == true {
+            continue;
+        }
+        let uncertain: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state='recovery_needed')",
+            [&id],
+            |r| r.get(0),
+        )?;
+        if s["frozen"] == true || s["checkpoint_uncertain"] == true || uncertain {
+            attention.push(json!({"item":id,"title":title,"reason":if uncertain || s["checkpoint_uncertain"]==true {"Uncertain work needs reconciliation"}else{"Paused decision needs review"}}));
+        } else if safe_step(s["step"].as_str().unwrap_or("")) {
+            eligible += 1;
+        }
+    }
+    Ok(json!({"eligible":eligible,"attention":attention}))
 }

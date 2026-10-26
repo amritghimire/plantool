@@ -334,6 +334,16 @@ pub fn retry_at(home: &Path, project: &str, role: &str, now: i64) -> anyhow::Res
 }
 /// Explicit diagnostic requests use only the unreserved provider allowance.
 pub fn diagnostic_capacity(home: &Path, selected: &Selected) -> anyhow::Result<()> {
+    let now = crate::database::unix_now();
+    let until:Option<i64>=database::open(home)?.query_row("SELECT max(CAST(exhausted_until AS INTEGER)) FROM budgets WHERE route IN(?1,?2) AND CAST(exhausted_until AS INTEGER)>?3",params![selected.name,selected.route.provider,now],|r|r.get(0))?;
+    if let Some(until) = until {
+        anyhow::bail!(
+            "Provider cooling down until {}; respect Retry-After before retesting",
+            chrono::DateTime::from_timestamp(until, 0)
+                .map(|d| d.to_rfc3339())
+                .unwrap_or_else(|| until.to_string())
+        );
+    }
     let cfg = config(home)?;
     if let Some(budget) = cfg.budgets.get(&selected.route.provider) {
         if let Some(max) = budget.requests {
@@ -368,7 +378,10 @@ pub fn exhaust(
 ) -> anyhow::Result<()> {
     let cfg = config(home)?;
     let (kind, start, end) = window(cfg.budgets.get(&selected.route.provider), now);
-    let until = reset.filter(|r| *r > now).unwrap_or(end);
+    let until = reset
+        .map(super::gateway::unix_seconds)
+        .filter(|r| *r > now)
+        .unwrap_or(end);
     let mut db = database::open(home)?;
     let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("INSERT INTO budgets(route,window_kind,window_start,exhausted_until) VALUES(?1,?2,?3,?4) ON CONFLICT(route,window_kind,window_start) DO UPDATE SET exhausted_until=max(coalesce(budgets.exhausted_until,0),excluded.exhausted_until)",params![selected.name,kind,start,until])?;
@@ -465,4 +478,26 @@ mod fallback_tests {
             .unwrap();
         assert!(select(home, "p", "i", "pm", 3701).is_err());
     }
+}
+
+/// Repair only the known epoch-millisecond unit error; retain the provider's reset.
+pub fn normalize_legacy_resets(home: &Path) -> anyhow::Result<()> {
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let count=tx.execute("UPDATE budgets SET exhausted_until=CAST(exhausted_until AS INTEGER)/1000 WHERE CAST(exhausted_until AS INTEGER)>100000000000",[])?;
+    let waits = tx.execute(
+        "UPDATE attempt_waits SET next_at=next_at/1000 WHERE next_at>100000000000",
+        [],
+    )?;
+    if count > 0 || waits > 0 {
+        database::audit(
+            &tx,
+            "daemon",
+            "budgets.reset_units_corrected",
+            "providers",
+            &serde_json::json!({"budget_rows":count,"wait_rows":waits,"unit":"epoch milliseconds to seconds"}),
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }

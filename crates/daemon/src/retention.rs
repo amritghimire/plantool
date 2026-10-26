@@ -71,6 +71,9 @@ fn size(home: &Path) -> anyhow::Result<u64> {
         if meta.is_file() {
             return Ok(meta.len());
         }
+        if !meta.is_dir() {
+            return Ok(0);
+        } // Unix sockets/FIFOs have no retained payload.
         let mut total = 0;
         for child in std::fs::read_dir(path)? {
             total += walk(&child?.path())?
@@ -359,6 +362,15 @@ mod tests {
                 ..State::default()
             })
             .unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn size_ignores_live_daemon_sockets() {
+        let t = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::write(t.path().join("payload"), b"data").unwrap();
+        let _listener =
+            std::os::unix::net::UnixListener::bind(t.path().join("daemon.sock")).unwrap();
+        assert_eq!(size(t.path()).unwrap(), 4);
     }
     #[test]
     fn transcript_age_and_pins_never_remove_permanent_revisions_or_summaries() {

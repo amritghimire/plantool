@@ -155,6 +155,21 @@ impl Client {
             }
         }
         ensure_owner_process()?;
+        let waiting = Instant::now();
+        loop {
+            if self.health().is_some_and(|h| {
+                h["protocol"].as_u64() == Some(plantool_core::PROTOCOL_VERSION as u64)
+            }) {
+                return Ok(());
+            }
+            if plantool_daemon::home_available(&home())? {
+                break;
+            }
+            if waiting.elapsed() >= Duration::from_secs(30) {
+                bail!("The previous daemon still owns this home while shutting down. Complete any macOS Keychain prompt, then retry daemon restart. No state was reset.");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
         spawn_daemon(self.port)?;
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(15) {

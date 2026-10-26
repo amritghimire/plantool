@@ -89,6 +89,10 @@ pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 pub async fn tick(state: &AppState) -> anyhow::Result<()> {
+    if !state.runs.execution.status().stopped {
+        crate::recovery::reconcile_clean_coding(&state.config.home)?;
+    }
+    crate::recovery::resume_automatic(&state.config.home)?;
     crate::recovery::announce_existing(&state.config.home)?;
     crate::recovery::announce_worker(
         &state.config.home,
@@ -386,6 +390,18 @@ async fn run(
     )? {
         return Ok(());
     }
+    if let Some(next) = crate::workflow::state(&db, &request.item)?
+        .and_then(|s| s["retry_not_before"].as_i64())
+        .filter(|next| *next > database::unix_now())
+    {
+        crate::automation::defer(
+            home,
+            id,
+            next,
+            "Waiting before retrying the same step; the team will continue automatically",
+        )?;
+        return Ok(());
+    }
     let selected = match router::select(
         home,
         &project,
@@ -656,9 +672,10 @@ async fn run(
                 if read_call {
                     if let ProviderEvent::Message{role,content,..}=&event {if role=="assistant" { role_reply=Some(content.clone()); }}
                     if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
-                        if turn_error.is_none() && status=="completed" {
-                            let parsed=role_reply.as_deref().ok_or_else(||anyhow::anyhow!("Codex produced no final JSON")).and_then(|text|read_result(text,request,id));
-                            match parsed.and_then(|result|report(home,&result).map(|_|())) {Ok(())=>{},Err(e)=>{error=Some(format!("Invalid Codex role result: {e}"));break;}}
+                        let parsed=read_turn_result(status,turn_error.as_deref(),role_reply.as_deref(),request,id);
+                        match parsed {
+                            Ok(result)=>if let Err(e)=report(home,&result) {error=Some(format!("Codex result rejected: {e}"));break;},
+                            Err(e)=>{error=Some(e.to_string());break;}
                         }
                     }
                 }
@@ -669,7 +686,16 @@ async fn run(
                 tx.execute("INSERT INTO artifact_refs VALUES('transcript',?1,?2,?3,?4)",params![id,seq.to_string(),sha,database::unix_now()])?;tx.commit()?;
                 if quota {error=Some("Provider quota exhausted; checkpoint before the next attempt".into());break;}
                 let completed:bool=database::open(home)?.query_row("SELECT state NOT IN('starting','running') FROM attempts WHERE id=?1",[id],|r|r.get(0))?;if completed{break}
-              }else{break;}
+                if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
+                    error=Some(turn_error.clone().unwrap_or_else(||format!("Provider turn {status} without a submitted typed result; checkpoint required")));
+                    break;
+                }
+              }else{
+                let result = finish_closed_provider(&mut provider).await;
+                joined = provider.is_finished();
+                error = result;
+                break;
+              }
              }
     }
     let _ = input.send(RunInput::Stop).await;
@@ -695,28 +721,33 @@ async fn run(
             && !state.runs.execution.status().stopped
             && state.runs.execution.status().generation == generation
         {
-            router::exhaust(
-                home,
-                &selected,
-                Some(database::unix_now() + 3600),
-                database::unix_now(),
-            )?;
-            if router::select(
-                home,
-                &project,
-                &request.item,
-                &request.role,
-                database::unix_now(),
-            )
-            .is_ok()
-            {
-                database::open(home)?.execute(
-                    "UPDATE dispatches SET quota_pending=1 WHERE attempt_id=?1",
-                    [id],
+            let text = error
+                .as_deref()
+                .unwrap_or("Native provider ended without a typed result");
+            let control = [
+                "Stale",
+                "frozen",
+                "closed",
+                "scope/generation",
+                "execution changed",
+            ]
+            .iter()
+            .any(|word| text.contains(word));
+            if !control {
+                let status = if router::quota(200, text) { 429 } else { 502 };
+                crate::automation::read_failure(
+                    home,
+                    id,
+                    &project,
+                    &request.item,
+                    &request.role,
+                    &selected,
+                    text,
+                    status,
                 )?;
             }
         }
-        if error.is_some() && !quota {
+        if !read_call && error.is_some() && !quota {
             router::provider_failed(home, &selected, database::unix_now())?;
         }
         quota |= error.as_ref().is_some_and(|e| router::quota(200, e));
@@ -748,15 +779,17 @@ async fn run(
             review_guide: None,
             details: None,
         };
-        match checkpoint(&dir, &policy) {
-            Ok(Some(commit)) => result.artifacts.push(plantool_contract::Artifact {
-                kind: "commit".into(),
-                reference: commit,
-            }),
-            Ok(None) => {}
-            Err(error) => {
-                result.outcome = Outcome::Failed;
-                result.summary = format!("{}; checkpoint failed: {error}", result.summary);
+        if !read_call {
+            match checkpoint(&dir, &policy) {
+                Ok(Some(commit)) => result.artifacts.push(plantool_contract::Artifact {
+                    kind: "commit".into(),
+                    reference: commit,
+                }),
+                Ok(None) => {}
+                Err(error) => {
+                    result.outcome = Outcome::Failed;
+                    result.summary = format!("{}; checkpoint failed: {error}", result.summary);
+                }
             }
         }
         if let Err(error) = report(home, &result) {
@@ -767,6 +800,36 @@ async fn run(
     Ok(())
 }
 
+/// EOF and task completion are independently ready in select!. Harvest the task's
+/// actual error before aborting it, so upstream failures are not lost to an EOF race.
+async fn finish_closed_provider(
+    provider: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
+) -> Option<String> {
+    match tokio::time::timeout(std::time::Duration::from_secs(2), provider).await {
+        Ok(Ok(Err(error))) => Some(error.to_string()),
+        Ok(Err(error)) => Some(error.to_string()),
+        Ok(Ok(Ok(()))) => None,
+        Err(_) => Some("Provider event stream closed before its outcome was available".into()),
+    }
+}
+
+fn read_turn_result(
+    status: &str,
+    error: Option<&str>,
+    text: Option<&str>,
+    request: &Dispatch,
+    id: &str,
+) -> anyhow::Result<RoleResult> {
+    if let Some(error) = error {
+        anyhow::bail!("{error}")
+    }
+    anyhow::ensure!(status == "completed", "Codex turn {status}");
+    text.ok_or_else(|| anyhow::anyhow!("invalid_role_result: Codex produced no final JSON"))
+        .and_then(|text| {
+            read_result(text, request, id)
+                .map_err(|error| anyhow::anyhow!("invalid_role_result: {error}"))
+        })
+}
 fn read_result(text: &str, request: &Dispatch, id: &str) -> anyhow::Result<RoleResult> {
     let mut value: serde_json::Value = serde_json::from_str(text.trim())
         .map_err(|_| anyhow::anyhow!("Final answer is not JSON"))?;
@@ -782,6 +845,20 @@ fn read_result(text: &str, request: &Dispatch, id: &str) -> anyhow::Result<RoleR
 #[cfg(test)]
 mod read_result_tests {
     use super::*;
+    #[tokio::test]
+    async fn event_eof_preserves_a_provider_error_before_task_completion() {
+        let (tx, mut rx) = mpsc::channel::<ProviderEvent>(1);
+        let mut provider = tokio::spawn(async move {
+            drop(tx);
+            tokio::task::yield_now().await;
+            anyhow::bail!("OpenCode upstream transport timed out")
+        });
+        assert!(rx.recv().await.is_none());
+        assert_eq!(
+            finish_closed_provider(&mut provider).await.as_deref(),
+            Some("OpenCode upstream transport timed out")
+        );
+    }
     #[test]
     fn codex_read_claims_are_scoped_and_invalid_output_is_not_exposed() {
         let request = Dispatch {
@@ -801,6 +878,22 @@ mod read_result_tests {
         assert_eq!(result.item, "i");
         assert_eq!(result.role, "pm");
         assert_eq!(result.generation, 2);
+        let failure = read_turn_result(
+            "failed",
+            Some("workspace routing discovery failed"),
+            Some(text),
+            &request,
+            "a",
+        )
+        .unwrap_err();
+        assert_eq!(failure.to_string(), "workspace routing discovery failed");
+        assert!(read_turn_result("interrupted", None, Some(text), &request, "a").is_err());
+        assert!(
+            read_turn_result("completed", None, Some("plain prose"), &request, "a")
+                .unwrap_err()
+                .to_string()
+                .contains("invalid_role_result")
+        );
         let error = read_result("SECRET invalid JSON", &request, "a").unwrap_err();
         assert!(!error.to_string().contains("SECRET"));
     }

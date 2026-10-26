@@ -6,7 +6,28 @@ use std::{
 pub struct DaemonLock {
     _file: File,
 }
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        // A concurrent fork may briefly inherit the open file description before
+        // exec closes it. Explicitly release our ownership on graceful shutdown;
+        // closing just this descriptor can leave the inherited flock held.
+        let _ = fs2::FileExt::unlock(&self._file);
+    }
+}
 impl DaemonLock {
+    pub fn available(home: &Path) -> anyhow::Result<bool> {
+        match Self::acquire(home) {
+            Ok(_lock) => Ok(true),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
     pub fn acquire(home: &Path) -> anyhow::Result<Self> {
         let parent = home
             .parent()
@@ -29,8 +50,9 @@ impl DaemonLock {
             options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
         let file = options.open(path)?;
-        fs2::FileExt::try_lock_exclusive(&file)
-            .map_err(|_| anyhow::anyhow!("Another daemon already owns this PlanTool home"))?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+            anyhow::Error::new(error).context("Another daemon already owns this PlanTool home")
+        })?;
         Ok(Self { _file: file })
     }
 }
@@ -44,9 +66,12 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         let first = DaemonLock::acquire(&home).unwrap();
         assert!(DaemonLock::acquire(&home).is_err());
+        assert!(!DaemonLock::available(&home).unwrap());
         std::fs::rename(&home, t.path().join("backup")).unwrap();
         assert!(DaemonLock::acquire(&home).is_err());
+        assert!(!DaemonLock::available(&home).unwrap());
         drop(first);
+        assert!(DaemonLock::available(&home).unwrap());
         assert!(DaemonLock::acquire(&home).is_ok());
     }
 }

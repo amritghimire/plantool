@@ -9,7 +9,7 @@ def test_roles_gates_skips_and_defect_owner():
     state=route(state,{"outcome":"needs_fix","findings":[{"scope":"in","task_key":"T1","severity":"medium"}]});assert state["step"]=="frontend"
 
 def test_retries_supervisor_and_freeze():
-    state={"step":"qa","owners":{"T1":"backend"}}
+    state={"step":"qa","approved":True,"owners":{"T1":"backend"}}
     defect={"outcome":"needs_fix","findings":[{"scope":"in","task_key":"T1","severity":"low"}]}
     for _ in range(3): state=route(state,defect);assert state["step"]=="backend"
     state=route(state,defect);assert state["step"]=="supervisor"
@@ -57,3 +57,30 @@ def test_identical_discussion_moves_to_proposal_without_claiming_agreement():
     assert updated["step"]=="plan"
     assert "no new information" in updated["discussion_summary"]
     assert not updated.get("approved",False)
+
+
+def test_plan_review_observations_wait_for_approval_and_rework_cannot_start_coding():
+    state={"step":"plan_review","approved":False,"owners":{"T1":"backend"}}
+    observation={"outcome":"done","findings":[{"scope":"in","task_key":"T1","severity":"medium","title":"Regression risk is acknowledged and mitigated"}]}
+    assert route(state,observation)["step"]=="plan_gate"
+    assert route(state,{**observation,"outcome":"needs_fix"})["step"]=="plan"
+    supervisor={**state,"step":"supervisor"}
+    assert route(supervisor,{"outcome":"done","details":{"action":"retry","owner":"backend"}})["step"]=="plan"
+
+
+def test_completed_retry_recommendations_normalize_role_names_without_owner_review():
+    for owner,expected in [("Docs","plan"),("CTO","research"),("cto","research"),("PM","plan")]:
+        state={"step":"supervisor","approved":False,"supervisor_rounds":10}
+        result={"outcome":"done","details":{"action":"retry","owner":owner}}
+        assert route(state,result)["step"]==expected
+        assert not route(state,result).get("frozen")
+    assert route({"step":"supervisor","approved":True,"supervisor_rounds":10},{"outcome":"done","details":{"action":"retry","owner":"Docs"}})["step"]=="docs"
+
+
+def test_scope_replan_still_prepares_a_new_plan_after_old_supervisor_rounds():
+    state={"step":"supervisor","approved":True,"supervisor_rounds":10}
+    result={"outcome":"done","details":{"action":"replan","reason":"Propose a smaller scope"}}
+    next_state=route(state,result)
+    assert next_state["step"]=="plan"
+    assert next_state["approved"] is False
+    assert not next_state.get("frozen")

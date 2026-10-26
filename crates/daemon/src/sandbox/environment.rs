@@ -49,6 +49,7 @@ fn allowed(provider: Option<Provider>, key: &OsStr) -> bool {
             | "HTTPS_PROXY"
             | "ALL_PROXY"
             | "NO_PROXY"
+            | "CODEX_CA_CERTIFICATE"
             | "SSL_CERT_FILE"
             | "SSL_CERT_DIR"
             | "CURL_CA_BUNDLE"

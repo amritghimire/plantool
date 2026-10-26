@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import httpx
 import pytest
 from plantool_worker.app import VERSIONS
@@ -28,14 +29,19 @@ uvicorn.run(create_app(home,token,httpx.MockTransport(daemon)),uds=sys.argv[2],l
 @pytest.mark.asyncio
 async def test_killed_worker_resumes_checkpoint_once_and_never_repeats_dispatch_effect(tmp_path):
     token="fake-worker-token-"*4
-    socket=tmp_path/"worker.sock"
+    # macOS sockaddr_un paths are limited to 104 bytes. pytest's native temp
+    # directory may already exceed that before adding the socket filename.
+    socket_dir=tempfile.TemporaryDirectory(prefix="pt-worker-",dir="/tmp" if sys.platform=="darwin" else None)
+    socket=Path(socket_dir.name)/"worker.sock"
+    log=tmp_path/"fake-worker.log"
     headers={"x-plantool-worker-token":token,"x-plantool-contract-version":"5"}
     processes=[]
     def launch():
         if socket.exists():socket.unlink()
         env={"PATH":str(Path(sys.executable).parent),"PYTHONPATH":str(Path(__file__).parents[1]),"HOME":str(tmp_path),"PLANTOOL_WORKER_TOKEN_FD":"0"}
         assert all(token not in value for value in env.values())
-        process=subprocess.Popen([sys.executable,"-c",SCRIPT,str(tmp_path),str(socket)],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
+        with log.open("ab") as stderr:
+            process=subprocess.Popen([sys.executable,"-c",SCRIPT,str(tmp_path),str(socket)],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=stderr,env=env)
         processes.append(process)
         process.stdin.write((token+"\n").encode());process.stdin.close()
         return process
@@ -46,7 +52,7 @@ async def test_killed_worker_resumes_checkpoint_once_and_never_repeats_dispatch_
                     if (await client.get("/internal/v1/health")).status_code==200:return
             except httpx.TransportError:pass
             await asyncio.sleep(.03)
-        pytest.fail("Fake worker did not start")
+        pytest.fail("Fake worker did not start: "+log.read_text(errors="replace")[-2000:])
     try:
         process=launch();await ready()
         async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds=str(socket)),base_url="http://localhost",headers=headers) as client:
@@ -66,3 +72,5 @@ async def test_killed_worker_resumes_checkpoint_once_and_never_repeats_dispatch_
         for process in processes:
             if process.poll() is None:process.kill()
             process.wait(timeout=5)
+
+        socket_dir.cleanup()

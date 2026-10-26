@@ -84,6 +84,7 @@ async fn sandbox_denies_secret_files_never_sent_files_and_outside_writes() {
         "artifacts/fixture",
         "daemon.log",
         "security/lifecycle-token",
+        "backups/current/plantool.db",
     ] {
         denied.push(f.write(f.paths.daemon_home.join(name)));
     }
@@ -387,4 +388,64 @@ async fn qa_writes_tests_and_git_objects_but_not_production_or_git_configuration
         .await
         .status
         .success());
+}
+
+/// Startup-only live check: uses the signed-in cache, never starts a model turn.
+#[tokio::test]
+#[ignore = "manual macOS check requiring a signed-in Codex account and network"]
+async fn native_codex_account_routing_in_seatbelt() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let owner = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let sandbox = Sandbox::required(
+        Paths {
+            owner_home: owner.clone(),
+            daemon_home: owner.join(".plantool"),
+            worktree: root.path().into(),
+            docs: root.path().join("docs"),
+        },
+        Role::EosReviewer,
+        NeverSent::new(&[]).unwrap(),
+    )
+    .unwrap();
+    let exe = plantool_daemon::providers::executable_for(plantool_core::Provider::Codex)
+        .unwrap_or_else(|| "/opt/homebrew/bin/codex".into());
+    let mut cmd = sandbox.command(&exe).unwrap();
+    plantool_daemon::sandbox::environment::apply(&mut cmd, Some(plantool_core::Provider::Codex));
+    sandbox.apply_environment(&mut cmd);
+    cmd.args([
+        "app-server",
+        "--stdio",
+        "-c",
+        "cli_auth_credentials_store=\"file\"",
+        "-c",
+        "forced_login_method=\"chatgpt\"",
+    ])
+    .current_dir(root.path())
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null())
+    .kill_on_drop(true);
+    let mut child = cmd.spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    input.write_all(b"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"plantool\",\"version\":\"0.1\"},\"capabilities\":{\"experimentalApi\":true}}}\n").await.unwrap();
+    let outcome=tokio::time::timeout(std::time::Duration::from_secs(60),async {
+        while let Some(line)=lines.next_line().await.unwrap() {
+            let value:serde_json::Value=serde_json::from_str(&line).unwrap();
+            if value["id"]==1 {input.write_all(b"{\"method\":\"initialized\"}\n{\"id\":2,\"method\":\"account/read\",\"params\":{\"refreshToken\":false}}\n").await.unwrap();}
+            if value["id"]==2 {
+                assert!(value["error"].is_null(),"Account RPC failed: {}",value["error"]["message"]);
+                assert_eq!(value["result"]["account"]["type"],"chatgpt");
+                assert!(!value["result"]["workspaceRouting"].is_null(),"Account exists but native routing metadata is missing");
+                return;
+            }
+        }
+        panic!("Codex account stream closed without a response");
+    }).await;
+    let _ = child.kill().await;
+    assert!(
+        outcome.is_ok(),
+        "Sandboxed account routing timed out; no model turn was started"
+    );
 }

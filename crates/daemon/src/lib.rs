@@ -59,6 +59,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let _home_lock = daemon_lock::DaemonLock::acquire(&config.home)?;
     let config = Arc::new(config);
     database::initialize(&config.home)?;
+    models::router::normalize_legacy_resets(&config.home)?;
     supervision::reconcile(&config.home)?;
     database::reconcile_personal(&config.home)?;
     dispatcher::reconcile(&config.home)?;
@@ -202,12 +203,18 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     // installations/upgrades still use the owner-authorized Repair action.
     let restore_state = state.clone();
     let worker_restore = tokio::spawn(async move {
-        if sandbox::supported()
-            && !restore_state.runs.execution.status().stopped
-            && worker::has_installed_worker(&restore_state.config.home)
-        {
-            if let Err(error) = restore_state.runs.worker.repair(&restore_state).await {
-                tracing::warn!("Installed worker restore failed: {error}");
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(60));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            timer.tick().await;
+            if sandbox::supported()
+                && !restore_state.runs.execution.status().stopped
+                && worker::has_installed_worker(&restore_state.config.home)
+                && !restore_state.runs.worker.availability().available
+            {
+                if let Err(error) = restore_state.runs.worker.repair(&restore_state).await {
+                    tracing::warn!("Installed worker restore deferred; will check again in 60 seconds: {error}");
+                }
             }
         }
     });
@@ -257,3 +264,11 @@ pub mod recovery;
 pub mod sprint_view;
 
 pub mod graph_recovery;
+
+mod keychain;
+
+/// The CLI waits for shutdown ownership before launching a replacement daemon.
+#[doc(hidden)]
+pub fn home_available(home: &std::path::Path) -> anyhow::Result<bool> {
+    daemon_lock::DaemonLock::available(home)
+}

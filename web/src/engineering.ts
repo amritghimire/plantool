@@ -13,6 +13,7 @@ export type EngineeringProject = {
   roles?: { role: string; ready: boolean }[];
 };
 export type EngineeringItem = {
+  board_column?: string | null;
   id: string;
   project: string;
   title: string;
@@ -24,7 +25,7 @@ export type EngineeringItem = {
   frozen: boolean;
   step: string;
   waiting_gates: number;
-  next_action?: {kind:string;message:string;retry_at?:number;href?:string;button?:string};
+  next_action?: {kind:string;message:string;retry_at?:number;detail?:string;href?:string;button?:string};
 };
 export type EngineeringAttempt = {
   id: string;

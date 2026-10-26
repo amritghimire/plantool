@@ -35,6 +35,17 @@ pub fn capability(role: &str) -> &str {
         _ => "read",
     }
 }
+/// Role names are model-supplied labels, not approval authority.
+pub fn retry_step(owner: &str, s: &Value) -> Option<String> {
+    match owner.trim().to_ascii_lowercase().as_str() {
+        "cto" | "research" => Some("research".into()),
+        "pm" | "plan" => Some("plan".into()),
+        role @ ("backend" | "frontend" | "devops" | "qa" | "docs") => {
+            Some(if s["approved"] == true { role } else { "plan" }.into())
+        }
+        _ => None,
+    }
+}
 pub fn context(home: &Path, item: &str) -> anyhow::Result<Value> {
     let db = database::open(home)?;
     let mut state = state(&db, item)?.context("Item graph is not initialized")?;
@@ -428,10 +439,20 @@ pub fn validate_result(home: &Path, result: &RoleResult, worktree: &Path) -> any
                 "Only the daemon may add closing references"
             );
         }
-        "supervisor" => ensure!(
-            matches!(&result.details,Some(RoleDetails::Strategy{action,..}) if ["retry","replan","escalate","clarify","wait"].contains(&action.as_str())),
-            "Supervisor strategy required"
-        ),
+        "supervisor" => {
+            ensure!(
+                matches!(&result.details,Some(RoleDetails::Strategy{action,..}) if ["retry","replan","escalate","clarify","wait"].contains(&action.as_str())),
+                "Supervisor strategy required"
+            );
+            if let Some(RoleDetails::Strategy { action, owner, .. }) = &result.details {
+                if action == "retry" {
+                    ensure!(
+                        owner.as_deref().and_then(|o| retry_step(o, &s)).is_some(),
+                        "Retry needs a supported role owner"
+                    );
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -667,16 +688,23 @@ pub fn record(
                 let thread = crate::workspace::item_thread(tx, &result.item)?;
                 crate::workspace::append(tx, &thread, "daemon", &format!("A question before we continue\n\n{reason}\n\nReply in this thread. Your answer helps planning; any changes still need approval."), &format!("question:{}",result.attempt_id))?;
             }
-            Some(RoleDetails::Strategy { action, owner, .. })
-                if rounds <= 2
-                    && action == "retry"
-                    && owner.as_deref().is_some_and(|o| {
-                        ["backend", "frontend", "devops", "qa", "docs"].contains(&o)
-                    }) =>
-            {
-                s["step"] = json!(owner)
+            Some(RoleDetails::Strategy {
+                action,
+                owner: Some(owner),
+                ..
+            }) if action == "retry" && retry_step(owner, &s).is_some() => {
+                let next = retry_step(owner, &s).unwrap();
+                let repeats = s["supervisor_retries"][&next].as_u64().unwrap_or(0) + 1;
+                if !s["supervisor_retries"].is_object() {
+                    s["supervisor_retries"] = json!({});
+                }
+                s["supervisor_retries"][&next] = json!(repeats);
+                if repeats > 2 {
+                    s["retry_not_before"] = json!(database::unix_now() + 300);
+                }
+                s["step"] = json!(next);
             }
-            Some(RoleDetails::Strategy { action, .. }) if rounds <= 2 && action == "replan" => {
+            Some(RoleDetails::Strategy { action, .. }) if action == "replan" => {
                 s["step"] = json!("plan");
                 s["approved"] = json!(false);
             }
@@ -687,7 +715,7 @@ pub fn record(
         }
     } else if result.outcome != Outcome::Done
         || result.findings.iter().any(|f| {
-            f.scope == plantool_contract::FindingScope::In
+            (coding(&result.role) && f.scope == plantool_contract::FindingScope::In)
                 || f.severity == plantool_contract::Severity::High
         })
     {
@@ -706,6 +734,8 @@ pub fn record(
                 .any(|f| f.severity == plantool_contract::Severity::High)
         {
             "supervisor"
+        } else if s["approved"] != true {
+            "plan"
         } else {
             owner
                 .as_deref()

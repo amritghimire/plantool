@@ -75,6 +75,15 @@ impl Fixture {
             .unwrap()
     }
     fn run(&self, step: &str, details: Option<RoleDetails>, keys: Vec<String>) -> RoleResult {
+        self.run_findings(step, details, keys, vec![])
+    }
+    fn run_findings(
+        &self,
+        step: &str,
+        details: Option<RoleDetails>,
+        keys: Vec<String>,
+        findings: Vec<Finding>,
+    ) -> RoleResult {
         let state = self.state();
         assert_eq!(state["step"], step);
         let role = workflow::role(step);
@@ -167,6 +176,7 @@ impl Fixture {
                 evidence: format!("artifact://{evidence}"),
             });
         }
+        result.findings = findings;
         dispatcher::report(&self.home, &result).unwrap();
         result
     }
@@ -476,6 +486,47 @@ fn planning_is_authorized_before_gate_but_implementation_is_not() {
     assert!(dispatcher::admit(&f.home, &request, 0).is_err());
     f.approve_plan();
     assert_eq!(f.state()["step"], "backend");
+}
+#[test]
+fn positive_plan_review_findings_never_route_to_unapproved_coding() {
+    let f = Fixture::new();
+    f.planning();
+    let mut db = database::open(&f.home).unwrap();
+    let mut state = f.state();
+    state["step"] = json!("plan_review");
+    let tx = db.transaction().unwrap();
+    workflow::save(&tx, &f.item, &state).unwrap();
+    tx.commit().unwrap();
+    f.run_findings(
+        "plan_review",
+        None,
+        vec![],
+        vec![Finding {
+            severity: Severity::Medium,
+            scope: FindingScope::In,
+            title: "Risk acknowledged and mitigated".into(),
+            detail: "The proposal includes regression coverage".into(),
+            task_key: Some("T1".into()),
+            file: None,
+            line: None,
+        }],
+    );
+    assert_eq!(f.state()["step"], "plan_gate");
+    assert_eq!(f.state()["approved"], false);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM attempts WHERE role='backend'",
+            [],
+            |r| r.get::<_, u64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+            .unwrap(),
+        0
+    );
 }
 #[tokio::test]
 async fn fake_item_reaches_merge_with_exact_head_and_no_replayed_push_or_pr() {
@@ -1155,7 +1206,7 @@ fn phase4_seed_sprint(f: &Fixture) -> String {
             |r| r.get(0),
         )
         .unwrap();
-    plantool_daemon::scheduler::ack(
+    plantool_daemon::scheduler::ack_at(
         &f.home,
         &EventAck {
             project: "p".into(),
@@ -1163,6 +1214,7 @@ fn phase4_seed_sprint(f: &Fixture) -> String {
             next_step: Some("sprint_plan".into()),
             idempotency_key: "due-ack".into(),
         },
+        now,
     )
     .unwrap();
     let dispatch = Dispatch {

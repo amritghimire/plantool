@@ -32,19 +32,8 @@ fn key(provider: &str) -> anyhow::Result<Option<String>> {
     if matches!(provider, "ollama" | "ollama-cloud") {
         return Ok(None);
     }
-    let out = std::process::Command::new("/usr/bin/security")
-        .args([
-            "find-generic-password",
-            "-s",
-            &format!("plantool/{provider}"),
-            "-w",
-        ])
-        .output()?;
-    anyhow::ensure!(
-        out.status.success(),
-        "Provider credential missing from Keychain"
-    );
-    Ok(Some(String::from_utf8(out.stdout)?.trim().to_string()))
+    let bytes = crate::keychain::read(&format!("plantool/{provider}"), None, false)?;
+    Ok(Some(String::from_utf8(bytes)?.trim().to_string()))
 }
 #[cfg(not(target_os = "macos"))]
 fn key(provider: &str) -> anyhow::Result<Option<String>> {
@@ -138,19 +127,7 @@ pub(super) async fn response(response: reqwest::Response) -> anyhow::Result<Repl
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json")
         .to_string();
-    let reset = response
-        .headers()
-        .get("retry-after")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<i64>().ok())
-        .map(|s| crate::database::unix_now() + s)
-        .or_else(|| {
-            response
-                .headers()
-                .get("x-ratelimit-reset")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse().ok())
-        });
+    let reset = reset_at(response.headers(), crate::database::unix_now());
     anyhow::ensure!(
         response
             .content_length()
@@ -168,6 +145,54 @@ pub(super) async fn response(response: reqwest::Response) -> anyhow::Result<Repl
         content_type,
         reset,
     })
+}
+
+pub(crate) fn unix_seconds(value: i64) -> i64 {
+    if value > 100_000_000_000 {
+        value / 1000
+    } else {
+        value
+    }
+}
+fn reset_at(headers: &reqwest::header::HeaderMap, now: i64) -> Option<i64> {
+    headers
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            s.parse::<i64>()
+                .ok()
+                .filter(|n| *n >= 0)
+                .map(|n| now.saturating_add(n))
+                .or_else(|| {
+                    chrono::DateTime::parse_from_rfc2822(s)
+                        .ok()
+                        .map(|d| d.timestamp())
+                })
+        })
+        .or_else(|| {
+            headers
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<i64>().ok())
+                .map(unix_seconds)
+        })
+}
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    #[test]
+    fn reset_headers_accept_seconds_milliseconds_and_http_dates() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-ratelimit-reset", "1793059200000".parse().unwrap());
+        assert_eq!(reset_at(&headers, 1_793_000_000), Some(1_793_059_200));
+        headers.insert("retry-after", "120".parse().unwrap());
+        assert_eq!(reset_at(&headers, 1_793_000_000), Some(1_793_000_120));
+        headers.insert(
+            "retry-after",
+            "Tue, 27 Oct 2026 00:00:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(reset_at(&headers, 1_793_000_000), Some(1_793_059_200));
+    }
 }
 
 pub async fn verify(

@@ -3,7 +3,7 @@ use crate::{
     database,
     github::{
         api,
-        auth::{AppConfig, KeyStore, Keychain},
+        auth::{AppConfig, InteractiveKeychain, KeyStore, Keychain},
         setup,
     },
     AppState,
@@ -108,7 +108,7 @@ async fn configure(
         )?;
         tx.commit().map_err(anyhow::Error::from)?;
     }
-    let client = api::Client::new(cfg.clone(), Arc::new(Keychain))?;
+    let client = api::Client::new(cfg.clone(), Arc::new(InteractiveKeychain))?;
     let value = setup::configure(&s.config.home, &client, &cfg, &body.repo, &body.checkout).await?;
     Ok(Json(value))
 }
@@ -136,7 +136,7 @@ async fn allow(
             app_id: r.app_id,
             installation_id: r.installation_id,
         },
-        Arc::new(Keychain),
+        Arc::new(InteractiveKeychain),
     )?;
     setup::change_allowlist(&s.config.home, &c, &body.login, body.remove).await?;
     Ok(Json(json!({"ok":true})))
@@ -164,7 +164,7 @@ async fn preflight(
             app_id: repo.app_id,
             installation_id: repo.installation_id,
         },
-        Arc::new(Keychain),
+        Arc::new(InteractiveKeychain),
     )?;
     Ok(Json(
         setup::refresh_preflight(&s.config.home, &client, &repo).await?,

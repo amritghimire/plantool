@@ -24,6 +24,7 @@ pub fn protected(paths: &Paths) -> Vec<PathBuf> {
             "artifacts",
             "daemon.log",
             "security",
+            "backups",
         ] {
             out.push(daemon.join(name));
         }

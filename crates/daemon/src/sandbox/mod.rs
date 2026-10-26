@@ -95,6 +95,15 @@ impl Sandbox {
         anyhow::bail!("macOS sandbox-exec is unavailable on this platform")
     }
     pub fn apply_environment(&self, command: &mut tokio::process::Command) {
+        // Native TLS trust discovery can query Keychain, which agents must not
+        // access. Use the system's public roots; certificate verification stays on.
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("CODEX_CA_CERTIFICATE").is_none()
+            && std::env::var_os("SSL_CERT_FILE").is_none()
+            && Path::new("/etc/ssl/cert.pem").is_file()
+        {
+            command.env("CODEX_CA_CERTIFICATE", "/etc/ssl/cert.pem");
+        }
         command
             .env("TMPDIR", self.temp.path())
             .env("TMP", self.temp.path())

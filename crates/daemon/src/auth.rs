@@ -910,6 +910,7 @@ mod tests {
             "/api/engineering-os/projects/project/sprints/plan",
             "/api/settings/difftool",
             "/api/settings/models/diagnose",
+            "/api/settings/models/diagnose-all",
             "/api/settings/loop",
             "/api/settings/loop/override",
             "/api/settings/worktree-dir",

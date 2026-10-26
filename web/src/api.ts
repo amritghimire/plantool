@@ -1,6 +1,6 @@
 export type SprintIssue={id:string;issue:number|null;title:string;step:string;membership:string;estimate:string;plan_hash:string;pr:number|null;frozen:boolean};
 export type SprintBoardData={project:string;repository:string;current_week:string;planning_queued:boolean;planning?:{state:string;message:string;scheduler:string};backlog_count:number;sprints:{id:string;week:string;state:string;issue:number|null;items:SprintIssue[]}[]};
-export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;http_status?:number|null;retry_at?:number|null}[]};
+export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;technical_detail?:string;http_status?:number|null;retry_at?:number|null}[]};
 import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
@@ -50,6 +50,7 @@ export function setAuthorName(name: string) {
 export const api = {
   setupProgress: () => request<{step:string;project:string|null}>("GET","/api/engineering-os/setup"),
   saveSetupProgress: (body:{step:string;project:string|null}) => request<{step:string;project:string|null}>("POST","/api/engineering-os/setup",body),
+  organizeItem: (item:string,column:string|null) => request<{column:string|null}>("POST",`/api/engineering-os/items/${encodeURIComponent(item)}/board`,{column}),
   engineering: () => request<import("./engineering").EngineeringOverview>("GET","/api/engineering-os/projects"),
   recovery: (item:string) => request<{eligible:boolean;review?:boolean;attempt_id:string;step:string;message:string;routing_error?:string|null}>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`),
   retryEngineering: (item:string,attempt_id:string) => request<{queued:boolean}>("POST",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`,{attempt_id}),
@@ -69,8 +70,9 @@ export const api = {
   configureGithub: (body:{app_id:number;installation_id:number;repo:string;checkout:string;private_key:string|null}) => request<{preflight:{warnings:string[];advisories?:string[]};project?:string}>("POST","/api/settings/github",body),
   githubPreflight: (project:string) => request<{warnings:string[];advisories?:string[]}>("POST","/api/settings/github/preflight",{project}),
   githubAllowlist: (login:string,remove:boolean) => request("POST","/api/settings/github/allowlist",{login,remove}),
-  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null;diagnostic?:ProviderDiagnostic|null}[]}>("GET","/api/settings/models"),
+  modelSettings: () => request<{yaml:string;diagnostic_batch?:{started_at:number;routes:string[];completed:string[];finished:boolean;warnings?:string[]}|null;diagnostic_activity?:{owner:string;state:string;model:string}[];projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null;diagnostic?:ProviderDiagnostic|null}[]}>("GET","/api/settings/models"),
   saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),
+  diagnoseAllModels: () => request<{queued:boolean;routes:string[]}>("POST","/api/settings/models/diagnose-all",{}),
   diagnoseModel: (route:string) => request<ProviderDiagnostic>("POST","/api/settings/models/diagnose",{route}),
   verifyModels: () => request("POST","/api/settings/models/verify",{}),
   workerStatus: () => request<{worker:{available:boolean;message:string};items?:{item:string;title:string;state:{step:string;frozen?:boolean};error:string|null;summary:string|null}[]}>("GET","/api/engineering-os/status"),
@@ -83,7 +85,7 @@ export const api = {
   dismissCleanBreakNotice: () => request<{ok:boolean}>("POST","/api/notices/clean-break",{}),
   executionStatus: () => request<{ execution: { stopped: boolean; generation: number }; sandbox_supported: boolean }>("GET", "/api/execution/status"),
   stopAll: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/stop", {}),
-  resumeExecution: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/resume", {}),
+  resumeExecution: () => request<{ execution: { stopped: boolean }; recovery?:{eligible:number;attention:{item:string;title:string;reason:string}[]}; warnings?:string[] }>("POST", "/api/execution/resume", {}),
   neverSent: (repo: string) => request<{ defaults: string[]; patterns: string[] }>("GET", `/api/settings/never-sent?repo=${encodeURIComponent(repo)}`),
   setNeverSent: (repo: string, patterns: string[]) => request("POST", "/api/settings/never-sent", { repo, patterns }),
   setContext: (key: string, body: { base?: string; branch?: string; workspace?: string; difftool?: string; pause_rule?: { mode: string; rule?: string } }) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/where`, body),

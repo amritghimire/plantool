@@ -145,6 +145,21 @@ pub async fn run(
     let mut cmd = opts.command(&exe)?;
     opts.apply_environment(&mut cmd, plantool_core::Provider::Codex);
     cmd.arg("app-server").arg("--stdio");
+    if opts
+        .launch
+        .as_ref()
+        .is_some_and(|launch| launch.sandbox.is_some())
+    {
+        // Sandboxed runs have an isolated auth.json and cannot query Keychain.
+        // Select that OAuth cache explicitly; never fall back to an API key.
+        cmd.args([
+            "-c",
+            "cli_auth_credentials_store=\"file\"",
+            "-c",
+            "forced_login_method=\"chatgpt\"",
+        ]);
+    }
+
     if let Some(effort) = &opts.effort {
         cmd.arg("-c")
             .arg(format!("model_reasoning_effort={effort}"));

@@ -48,7 +48,29 @@ async fn resume(
         .execution
         .resume(&status)
         .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
-    Ok(Json(json!({"execution":status})))
+    // Stop All terminates the worker too. Resume must restore an existing
+    // installation, rather than leaving every eligible graph without a worker.
+    let mut warnings = vec![];
+    if crate::sandbox::supported()
+        && crate::worker::has_installed_worker(&state.config.home)
+        && !state.runs.worker.availability().available
+    {
+        if let Err(error) = state.runs.worker.repair(&state).await {
+            warnings.push(format!(
+                "Worker could not restart: {error}. Open Settings → Worker."
+            ));
+        }
+    }
+    if let Err(error) = crate::scheduler::tick(&state.config.home, chrono::Utc::now()) {
+        warnings.push(format!("Scheduling needs attention: {error}"));
+    }
+    if let Err(error) = crate::graph_recovery::reconcile(&state).await {
+        warnings.push(format!("Workflow restoration needs attention: {error}"));
+    }
+    let report = crate::graph_recovery::resume_report(&state.config.home)?;
+    Ok(Json(
+        json!({"execution":status,"recovery":report,"warnings":warnings,"worker":state.runs.worker.availability()}),
+    ))
 }
 pub fn routes() -> Router<AppState> {
     Router::new()

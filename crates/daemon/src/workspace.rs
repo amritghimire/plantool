@@ -525,21 +525,25 @@ pub fn operational(
         _ => event,
     };
     let body = format!("{label}: {title}\n{detail}\nOpen {url}");
-    append(
-        db,
-        &format!("{project}:channel:general:thread"),
-        "daemon",
-        &body,
-        &format!("ops:{item}:{key}"),
-    )?;
     let thread = item_thread(db, item)?;
-    append(
-        db,
-        &thread,
-        "daemon",
-        &body,
-        &format!("item-ops:{item}:{key}"),
-    )?;
+    for (thread, key) in [
+        (
+            format!("{project}:channel:general:thread"),
+            format!("ops:{item}:{key}"),
+        ),
+        (thread, format!("item-ops:{item}:{key}")),
+    ] {
+        // Status events are immutable snapshots. Wording and item titles may change
+        // across upgrades; replay must retain the original event in each thread.
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE dedupe_key=?1)",
+            [&key],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            append(db, &thread, "daemon", &body, &key)?;
+        }
+    }
     let issue: Option<u64> = db.query_row(
         "SELECT github_issue_number FROM work_items WHERE id=?1",
         [item],

@@ -20,10 +20,7 @@ pub struct Keychain;
 #[cfg(target_os = "macos")]
 impl KeyStore for Keychain {
     fn read(&self, id: u64) -> anyhow::Result<Vec<u8>> {
-        Ok(security_framework::passwords::get_generic_password(
-            "plantool/github-app",
-            &id.to_string(),
-        )?)
+        crate::keychain::read("plantool/github-app", Some(&id.to_string()), false)
     }
     fn write(&self, id: u64, pem: &[u8]) -> anyhow::Result<()> {
         security_framework::passwords::set_generic_password(
@@ -42,6 +39,16 @@ impl KeyStore for Keychain {
     }
     fn write(&self, _: u64, _: &[u8]) -> anyhow::Result<()> {
         anyhow::bail!("GitHub App keys require macOS Keychain")
+    }
+}
+/// Used only by browser mutations after their action-bound passkey check.
+pub struct InteractiveKeychain;
+impl KeyStore for InteractiveKeychain {
+    fn read(&self, id: u64) -> anyhow::Result<Vec<u8>> {
+        crate::keychain::read("plantool/github-app", Some(&id.to_string()), true)
+    }
+    fn write(&self, id: u64, pem: &[u8]) -> anyhow::Result<()> {
+        Keychain.write(id, pem)
     }
 }
 pub fn jwt(id: u64, pem: &[u8], now: i64) -> anyhow::Result<String> {
