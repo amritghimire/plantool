@@ -120,3 +120,24 @@ satisfaction and scope-revision approval scenario; populated sprint membership;
 new optional-advisory 403 scenario and end-to-end comment deduplication under those
 scenarios. Automated checks are not substitutes for these live checks. Do not bypass
 passkeys, approve plans or force provider quota to complete them.
+
+### Follow-up retry on Oct 26 UTC
+
+After the owner reported approving the macOS permission prompt, the prior Codex
+diagnostic still showed only its earlier cooldown result; it had not started a new
+model turn. A consistent SQLite backup was created at
+`~/.plantool/backups/20261026T230748Z/`. The required checks were rerun successfully:
+Rust workspace 318 passed / 1 ignored, Vitest 130, worker pytest 37, frontend build,
+CLI build and smoke on port 41377.
+
+Restarting exposed an older daemon still blocked in `SecItemCopyMatching` during
+runtime shutdown. It was terminated after sampling confirmed the Keychain call was
+still blocked; its orphan worker was stopped only after the database showed no active
+attempts or model lease. The current source-built daemon now owns port 41200 and the
+installed worker restarted. Background Keychain reads return promptly instead of
+hanging, but the GitHub App credential is currently unavailable to the new binary;
+GitHub sync is waiting for Keychain authorization. Several durable worker resume
+records returned stale-interrupt 409s and need reconciliation; no plan approval or
+GitHub write was replayed. The old Codex diagnostic result remains unchanged pending
+a fresh passkey-authorized run. These are current blockers, distinct from the earlier
+historical provider failures above.
