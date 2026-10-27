@@ -79,7 +79,16 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
             |r| r.get(0),
         )?;
         let result: plantool_contract::RoleResult = serde_json::from_str(&raw)?;
-        if result.role == "supervisor" && result.outcome == plantool_contract::Outcome::Done {
+        if result.role == "supervisor"
+            && (result.outcome == plantool_contract::Outcome::Done
+                || (result.outcome == plantool_contract::Outcome::Blocked
+                    && matches!(
+                        &result.details,
+                        Some(plantool_contract::RoleDetails::Strategy { action, .. })
+                            if action == "escalate"
+                    )
+                    && retryable_approved_qa_output(&tx, item, &facts["state"], expected)?))
+        {
             let Some(plantool_contract::RoleDetails::Strategy { action, owner, .. }) =
                 &result.details
             else {
@@ -721,7 +730,10 @@ pub fn resume_automatic(home: &Path) -> anyhow::Result<()> {
             && matches!(&result.details, Some(plantool_contract::RoleDetails::Strategy { action, .. }) if action == "escalate")
             && retryable_plan_review_evidence(&db, &item, &facts["state"], expected)?;
         let approved_qa_output_recovery = result.role == "supervisor"
-            && result.outcome == plantool_contract::Outcome::Done
+            && matches!(
+                result.outcome,
+                plantool_contract::Outcome::Done | plantool_contract::Outcome::Blocked
+            )
             && matches!(&result.details, Some(plantool_contract::RoleDetails::Strategy { action, .. }) if action == "escalate")
             && retryable_approved_qa_output(&db, &item, &facts["state"], expected)?;
         if !recommendation
@@ -1403,7 +1415,7 @@ mod tests {
             role: "supervisor".into(),
             attempt_id: "a".into(),
             generation: 3,
-            outcome: Outcome::Done,
+            outcome: Outcome::Blocked,
             summary: "Old infrastructure escalation".into(),
             tasks_done: vec![],
             artifacts: vec![],
