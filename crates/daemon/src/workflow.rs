@@ -920,6 +920,8 @@ pub fn record(
                         "-c",
                         "core.hooksPath=/dev/null",
                         "-c",
+                        "commit.gpgsign=false",
+                        "-c",
                         "user.name=PlanTool",
                         "-c",
                         "user.email=plantool@localhost",

@@ -186,3 +186,18 @@ completion of item #5's new QA attempt; live multi-project concurrency, Stop All
 / worker repair, prerequisite and revised-scope scenarios, populated sprint membership,
 optional advisory permission failure, and end-to-end message deduplication. These
 remain explicit follow-ups, not implied by the automated checks.
+
+### Automated commit-signing recovery
+
+The resumed QA role exposed a separate deterministic failure: automatic WIP commits
+used the synthetic `PlanTool <plantool@localhost>` identity while inheriting the
+owner's global `commit.gpgsign=true`, which cannot sign without that synthetic
+identity's private key. Automatic route-change checkpoints and PlanTool-authored
+documentation commits now pass `-c commit.gpgsign=false` for that individual Git
+command only. Manual user commits and global/repository settings are unchanged. A
+regression test configures signing on in a temporary repository, verifies the
+automatic checkpoint succeeds, and confirms the on-disk setting stays on. The full
+required suite passed again (Rust 321 passed / 1 ignored, Vitest 130, worker pytest
+37, frontend/CLI builds, playground baseline and smoke on port 41432). After a
+consistent backup and restart, item #5 restarted QA at generation 38; it was observed
+running under the global model lease. Its final result and GitHub sync remain pending.

@@ -358,6 +358,8 @@ fn checkpoint(root: &Path, policy: &crate::sandbox::NeverSent) -> anyhow::Result
             "user.name=PlanTool",
             "-c",
             "user.email=plantool@localhost",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-m",
             "WIP: checkpoint before changing model route",
@@ -910,6 +912,35 @@ mod read_result_tests {
         value["outcome"] = json!("blocked");
         value["tasks_done"] = json!(["T1"]);
         assert!(coding_failure_result(&value.to_string(), &request, "a").is_none());
+    }
+    #[test]
+    fn automatic_checkpoint_ignores_global_commit_signing_without_changing_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "commit.gpgsign", "true"],
+        ] {
+            crate::git::git(root, &args).unwrap();
+        }
+        std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        crate::git::git(root, &["add", "."]).unwrap();
+        crate::git::git(
+            root,
+            &["-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+        )
+        .unwrap();
+        std::fs::write(root.join("tracked.txt"), "checkpoint\n").unwrap();
+        let policy = crate::sandbox::NeverSent::new(&[]).unwrap();
+        let checkpoint = checkpoint(root, &policy).unwrap().unwrap();
+        assert_eq!(
+            crate::git::git(root, &["show", &format!("{checkpoint}:tracked.txt")]).unwrap(),
+            "checkpoint"
+        );
+        let repository_config = std::fs::read_to_string(root.join(".git/config")).unwrap();
+        assert!(repository_config.contains("gpgsign = true"));
     }
     #[test]
     fn codex_read_claims_are_scoped_and_invalid_output_is_not_exposed() {
