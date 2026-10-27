@@ -116,7 +116,7 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
                 // read-only verification once, under the same plan and commit.
                 // Do not count the malformed response as QA evidence.
                 state["step"] = json!("qa");
-                state["automatic_retries"] = json!(1);
+                state["qa_output_retries"] = json!(1);
                 state["retry_not_before"] = Value::Null;
                 state["supervisor_rounds"] = json!(0);
             } else {
@@ -194,7 +194,7 @@ fn retryable_approved_qa_output(
 ) -> anyhow::Result<bool> {
     if state["step"] != "escalated"
         || state["approved"] != true
-        || state["automatic_retries"].as_u64().unwrap_or(0) >= 1
+        || state["qa_output_retries"].as_u64().unwrap_or(0) >= 1
         || state["plan_sha"].as_str().is_none()
         || state["checkpoint_uncertain"] == true
         || state["closed_on_github"] == true
@@ -202,6 +202,19 @@ fn retryable_approved_qa_output(
         return Ok(false);
     }
     let plan_sha = state["plan_sha"].as_str().unwrap();
+    // Honor the per-step retry bound across upgrades too: older builds recorded
+    // this exact retry only in the append-only audit log.
+    let retried: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM audit WHERE subject=?1 AND action='workflow.retry'
+           AND json_extract(metadata_json,'$.automatic')=1
+           AND json_extract(metadata_json,'$.step')='qa'
+           AND json_extract(metadata_json,'$.previous_state.plan_sha')=?2)",
+        params![item, plan_sha],
+        |row| row.get(0),
+    )?;
+    if retried {
+        return Ok(false);
+    }
     let eligible: bool = db.query_row(
         "SELECT EXISTS(
            SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id
@@ -1368,7 +1381,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let state = json!({"item":"i","step":"escalated","failed_step":"supervisor","frozen":true,"approved":true,"plan_sha":plan,"generation":3,"sequence":8,"supervisor_rounds":2,"head_sha":"approved-commit"});
+        let state = json!({"item":"i","step":"escalated","failed_step":"supervisor","frozen":true,"approved":true,"plan_sha":plan,"generation":3,"sequence":8,"supervisor_rounds":2,"head_sha":"approved-commit","automatic_retries":1});
         db.execute(
             "UPDATE workflow_items SET state_json=?1 WHERE item_id='i'",
             [state.to_string()],
@@ -1459,6 +1472,7 @@ mod tests {
         assert_eq!(resumed["plan_sha"], plan);
         assert_eq!(resumed["head_sha"], "approved-commit");
         assert_eq!(resumed["automatic_retries"], 1);
+        assert_eq!(resumed["qa_output_retries"], 1);
         assert_eq!(resumed["supervisor_rounds"], 0);
         assert_eq!(
             db.query_row(
@@ -1493,6 +1507,15 @@ mod tests {
             .unwrap(),
             1
         );
+        database::audit(
+            &db,
+            "daemon",
+            "workflow.retry",
+            "i",
+            &json!({"automatic":true,"step":"qa","previous_state":{"plan_sha":plan}}),
+        )
+        .unwrap();
+        assert!(!retryable_approved_qa_output(&db, "i", &state, "a").unwrap());
     }
 
     #[test]
