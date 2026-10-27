@@ -30,8 +30,7 @@ pub(crate) fn read(
     query
         .class(ItemClass::generic_password())
         .service(service)
-        .load_data(true)
-        .skip_authenticated_items(!interactive);
+        .load_data(true);
     if let Some(account) = account {
         query.account(account);
     }
