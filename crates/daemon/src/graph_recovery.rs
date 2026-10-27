@@ -130,6 +130,132 @@ pub fn restore(home: &Path, item: &str, observed: &str) -> anyhow::Result<bool> 
     tx.commit()?;
     Ok(true)
 }
+
+/// Retry only an uncommitted plan-gate request whose completed read-only review
+/// is still current. Gate creation and its GitHub publication intent share one
+/// transaction, so the absence of both proves that no approval request escaped.
+fn restore_uncommitted_plan_gate(home: &Path, item: &str, observed: &str) -> anyhow::Result<bool> {
+    if !matches!(observed, "recovery_needed" | "missing") {
+        return Ok(false);
+    }
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let Some(mut state) = workflow::state(&tx, item)? else {
+        return Ok(false);
+    };
+    if state["step"] != "escalated"
+        || state["failed_step"] != "plan_gate"
+        || state["frozen"] != true
+        || state["checkpoint_uncertain"] != true
+        || state["approved"] == true
+        || state["closed_on_github"] == true
+        || state["uncommitted_gate_retry"] == true
+    {
+        return Ok(false);
+    }
+    let plan_sha = state["plan_sha"].as_str().unwrap_or("").to_owned();
+    let generation = state["generation"].as_u64().unwrap_or(0);
+    let sequence = state["sequence"].as_u64().unwrap_or(0);
+    if plan_sha.is_empty() || generation == 0 {
+        return Ok(false);
+    }
+    let github_binding: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM work_items i JOIN github_repositories g ON g.project_id=i.project_id WHERE i.id=?1 AND i.github_issue_number>0)",
+        [item],
+        |row| row.get(0),
+    )?;
+    if !github_binding {
+        return Ok(false);
+    }
+    let receipt: Option<(String, String, String)> = tx
+        .query_row(
+            "SELECT d.request_json,a.outcome_json,r.content_sha256
+             FROM attempts a JOIN dispatches d ON d.attempt_id=a.id
+             JOIN revisions r ON r.item_id=a.item_id AND r.doc_kind='plan'
+             WHERE a.item_id=?1 AND a.generation=?2 AND a.role='cto'
+               AND a.state='completed' AND r.content_sha256=?3
+               AND r.id=(SELECT id FROM revisions WHERE item_id=a.item_id AND doc_kind='plan' ORDER BY number DESC LIMIT 1)
+             ORDER BY a.ended_at DESC LIMIT 1",
+            params![item, generation, plan_sha],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((request, outcome, _)) = receipt else {
+        return Ok(false);
+    };
+    let request: Value = serde_json::from_str(&request)?;
+    let outcome: Value = serde_json::from_str(&outcome)?;
+    if request["capability"] != "read"
+        || request["inputs"]["step"] != "plan_review"
+        || request["plan_sha"] != plan_sha
+        || outcome["outcome"] != "done"
+        || outcome["findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| finding["severity"] == "high"))
+    {
+        return Ok(false);
+    }
+    let review_key = format!(
+        "node:{}",
+        plantool_core::sha256_hex(&format!("{item}:{sequence}:plan_gate"))
+    );
+    let uncertain_or_external: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle','recovery_needed'))
+          OR EXISTS(SELECT 1 FROM inbox WHERE source='worker.gate' AND external_event_id=?2)
+          OR EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND kind='plan' AND target_digest=?3)
+          OR EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?1 AND state='running')
+          OR EXISTS(SELECT 1 FROM outbox o JOIN github_gate_context c ON c.gate_id=json_extract(o.payload_json,'$.gate')
+                    JOIN revisions r ON r.id=c.revision_id WHERE o.kind='github.plan' AND r.item_id=?1 AND r.content_sha256=?3)
+          OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status')",
+        params![item, review_key, plan_sha],
+        |row| row.get(0),
+    )?;
+    if uncertain_or_external {
+        return Ok(false);
+    }
+
+    state["step"] = json!("plan_gate");
+    state["failed_step"] = Value::Null;
+    state["frozen"] = json!(false);
+    state["checkpoint_uncertain"] = json!(false);
+    state["uncommitted_gate_retry"] = json!(true);
+    state["sequence"] = json!(sequence + 1);
+    workflow::save(&tx, item, &state)?;
+    tx.execute(
+        r#"UPDATE outbox SET delivered_at=?2,result_json='{"restored_from_daemon_state":true}' WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind IN('worker.start','worker.resume','worker.cancel')"#,
+        params![item, plantool_core::now()],
+    )?;
+    let start = plantool_contract::Start {
+        thread_id: item.into(),
+        graph: if state["project"] == true {
+            plantool_contract::Graph::Project
+        } else {
+            plantool_contract::Graph::WorkItem
+        },
+        input: json!({"workflow":state}),
+        idempotency_key: format!("auto-gate-retry:{item}:{plan_sha}"),
+        contract_version: plantool_contract::CONTRACT_VERSION,
+        graph_version: plantool_contract::GRAPH_VERSION,
+    };
+    dispatcher::enqueue(&tx, item, "worker.recover", &serde_json::to_value(start)?)?;
+    database::audit(
+        &tx,
+        "daemon",
+        "workflow.uncommitted_gate_retried",
+        item,
+        &json!({"plan_sha":plan_sha,"approved":false}),
+    )?;
+    let thread = crate::workspace::item_thread(&tx, item)?;
+    crate::workspace::append(
+        &tx,
+        &thread,
+        "daemon",
+        "The plan review passed. I’m restoring its review request; approval is still yours.",
+        &format!("gate-retry:{item}:{plan_sha}"),
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
 fn has_current_handoff(
     db: &rusqlite::Connection,
     item: &str,
@@ -149,7 +275,7 @@ async fn probe(state: &AppState, project: Option<&str>, force: bool) -> anyhow::
     }
     let rows = {
         let db = database::open(&state.config.home)?;
-        let mut q=db.prepare("SELECT w.item_id,w.state_json FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE i.kind='eos' AND (?2 IS NULL OR i.project_id=?2) AND i.closed_at IS NULL AND coalesce(json_extract(w.state_json,'$.frozen'),0)=0 AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.item_id=i.id AND a.state IN('queued','starting','running','waiting','idle','recovery_needed')) AND coalesce((SELECT CAST(value_json AS INTEGER) FROM settings WHERE key='graph.probe:'||w.item_id),0)<=?1 ORDER BY coalesce((SELECT CAST(value_json AS INTEGER) FROM settings WHERE key='graph.probe:'||w.item_id),0),w.item_id LIMIT 32")?;
+        let mut q=db.prepare("SELECT w.item_id,w.state_json FROM workflow_items w JOIN work_items i ON i.id=w.item_id WHERE i.kind='eos' AND (?2 IS NULL OR i.project_id=?2) AND i.closed_at IS NULL AND (coalesce(json_extract(w.state_json,'$.frozen'),0)=0 OR (json_extract(w.state_json,'$.step')='escalated' AND json_extract(w.state_json,'$.failed_step')='plan_gate' AND coalesce(json_extract(w.state_json,'$.checkpoint_uncertain'),0)=1 AND coalesce(json_extract(w.state_json,'$.approved'),0)=0 AND coalesce(json_extract(w.state_json,'$.uncommitted_gate_retry'),0)=0)) AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.item_id=i.id AND a.state IN('queued','starting','running','waiting','idle','recovery_needed')) AND coalesce((SELECT CAST(value_json AS INTEGER) FROM settings WHERE key='graph.probe:'||w.item_id),0)<=?1 ORDER BY coalesce((SELECT CAST(value_json AS INTEGER) FROM settings WHERE key='graph.probe:'||w.item_id),0),w.item_id LIMIT 32")?;
         let rows = q
             .query_map(
                 params![
@@ -171,7 +297,11 @@ async fn probe(state: &AppState, project: Option<&str>, force: bool) -> anyhow::
         }
         let facts: Value = serde_json::from_str(&raw)?;
         let step = facts["step"].as_str().unwrap_or("");
+        let uncertain_gate = facts["checkpoint_uncertain"] == true
+            && facts["failed_step"] == "plan_gate"
+            && facts["frozen"] == true;
         if !safe_step(step)
+            && !uncertain_gate
             && !(facts["approved"] != true
                 && matches!(step, "backend" | "frontend" | "devops" | "qa" | "docs"))
         {
@@ -206,7 +336,9 @@ async fn probe(state: &AppState, project: Option<&str>, force: bool) -> anyhow::
             &json!({"state":observed["state"],"interrupt_id":observed["interrupt_id"],"checked_at":database::unix_now()}),
         )?;
         let kind = observed["state"].as_str().unwrap_or("");
-        if kind == "interrupted" {
+        if uncertain_gate {
+            restore_uncommitted_plan_gate(&state.config.home, &item, kind)?;
+        } else if kind == "interrupted" {
             let db = database::open(&state.config.home)?;
             let live =
                 has_current_handoff(&db, &item, observed["interrupt_id"].as_str().unwrap_or(""))?;
@@ -288,6 +420,46 @@ mod tests {
             1
         );
         assert!(!restore(t.path(), "p:project", "orphaned_interrupt").unwrap());
+    }
+    #[test]
+    fn uncertain_uncommitted_plan_gate_retries_once_without_approving() {
+        let (t, db) = setup();
+        let plan = "a".repeat(64);
+        db.execute(
+            "UPDATE work_items SET github_issue_number=9 WHERE id='p:project'",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO github_repositories(project_id,app_id,installation_id,repo_id,full_name,default_branch,app_bot_id) VALUES('p',1,1,1,'o/r','main',1)",[]).unwrap();
+        db.execute(
+            "INSERT INTO artifacts(sha256,size,created_at) VALUES(?1,1,1)",
+            [&plan],
+        )
+        .unwrap();
+        db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) VALUES('rev','p:project','plan',1,?1,'worker','now')",[&plan]).unwrap();
+        db.execute("UPDATE workflow_items SET state_json=?1",[json!({"item":"p:project","project":false,"step":"escalated","failed_step":"plan_gate","frozen":true,"checkpoint_uncertain":true,"approved":false,"plan_sha":plan,"generation":1,"sequence":4}).to_string()]).unwrap();
+        db.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,ended_at,outcome_json,idempotency_key,run_json) VALUES('review','p:project','cto',1,'codex','completed','/checkout','now','now',?1,'review','{}')",[json!({"outcome":"done","findings":[]}).to_string()]).unwrap();
+        db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('review',?1,'digest','p:project','interrupt',0)",[json!({"capability":"read","inputs":{"step":"plan_review"},"plan_sha":plan}).to_string()]).unwrap();
+        drop(db);
+
+        assert!(restore_uncommitted_plan_gate(t.path(), "p:project", "recovery_needed").unwrap());
+        let db = database::open(t.path()).unwrap();
+        let state = workflow::state(&db, "p:project").unwrap().unwrap();
+        assert_eq!(state["step"], "plan_gate");
+        assert_eq!(state["frozen"], false);
+        assert_eq!(state["checkpoint_uncertain"], false);
+        assert_eq!(state["approved"], false);
+        assert_eq!(state["uncommitted_gate_retry"], true);
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert!(!restore_uncommitted_plan_gate(t.path(), "p:project", "recovery_needed").unwrap());
     }
     #[test]
     fn cancelled_idle_graph_restores_only_unacknowledged_events_once() {

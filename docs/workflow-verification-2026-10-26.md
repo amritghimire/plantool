@@ -217,7 +217,19 @@ Supervisor escalation: it verifies the latest failed review matches the current 
 hash, the plan is still unapproved, and there are no active attempts, gates or pending
 effects. It retries `plan_review` once on the current code, without altering the plan
 or approval state. A regression test verifies the retry is idempotent and leaves the
-approval gate intact. It cannot repeat after a second failure. Full required checks
-passed: Rust workspace 323 passed / 1 ignored, Vitest 130, worker pytest 38,
-playground baseline, frontend/CLI build and smoke on port 41308. Deployment and
-observing item #9 reach its ordinary owner plan-approval gate are pending.
+approval gate intact. It cannot repeat after a second failure.
+
+The next live run exposed a second defect at the approval boundary. Plan review
+threads are attached to a shared project activity channel through an item-specific
+discussion topic, but gate validation accepted only item-owned threads. The gate
+transaction therefore rejected a valid thread and rolled back before creating any
+gate or GitHub publication intent. Validation now accepts this explicit topic
+relationship and rejects channels with no link to the item. When the worker reports
+an uncertain checkpoint after a gate request, recovery retries only if the current
+read-only review receipt is verified, the current plan revision and GitHub binding
+still match, and no gate, gate receipt, publication intent, active work or other
+external effect exists. It can retry once and leaves approval false. Regression
+tests cover the thread relationship and the bounded retry. The full required suite
+passed: Rust workspace 325 passed / 1 ignored, Vitest 130, worker pytest 38,
+playground baseline, frontend/CLI build and smoke on port 41311. Main-instance
+deployment and observing item #9 reach its normal approval checkpoint are pending.

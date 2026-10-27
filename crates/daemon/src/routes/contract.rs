@@ -273,7 +273,7 @@ async fn gate(
                     &request.kind,
                 )?;
                 if let Some(thread) = &request.discussion_thread_id {
-                    let belongs:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM threads t JOIN work_items i ON i.id=t.item_id WHERE t.id=?1 AND t.item_id=?2 AND t.project_id=i.project_id)",params![thread,request.item],|r|r.get(0))?;
+                    let belongs = discussion_thread_belongs_to_item(tx, thread, &request.item)?;
                     ensure!(belongs, "Discussion thread is outside this item");
                 }
                 tx.execute("UPDATE github_gate_context SET summary=coalesce(?2,summary),discussion_thread_id=?3 WHERE gate_id=?1",params![id,request.summary,request.discussion_thread_id])?;
@@ -298,6 +298,27 @@ async fn gate(
         "Gate idempotency key reused with different input"
     );
     Ok(Json(value))
+}
+
+fn discussion_thread_belongs_to_item(
+    db: &rusqlite::Connection,
+    thread: &str,
+    item: &str,
+) -> anyhow::Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM threads t
+            JOIN work_items i ON i.id=t.item_id
+            WHERE t.id=?1 AND t.item_id=?2 AND t.project_id=i.project_id
+         ) OR EXISTS(
+            SELECT 1 FROM threads t
+            JOIN discussion_topics d ON d.thread_id=t.id
+            JOIN work_items i ON i.id=d.item_id
+            WHERE t.id=?1 AND d.item_id=?2 AND t.project_id=i.project_id
+         )",
+        params![thread, item],
+        |row| row.get(0),
+    )?)
 }
 async fn message(
     State(state): State<AppState>,
@@ -451,4 +472,38 @@ pub fn routes() -> Router<AppState> {
             "/internal/v1/project_start_items",
             post(project_start_items),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::discussion_thread_belongs_to_item;
+
+    #[test]
+    fn accepts_shared_discussion_thread_only_when_topic_links_it_to_item() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE work_items(id TEXT PRIMARY KEY, project_id TEXT NOT NULL);
+             CREATE TABLE threads(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, item_id TEXT, channel_id TEXT);
+             CREATE TABLE discussion_topics(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, item_id TEXT NOT NULL);
+             INSERT INTO work_items VALUES('project:1','project'),('project:2','project');
+             INSERT INTO threads VALUES('project:channel:ai-activity:thread','project',NULL,'project:channel:ai-activity');
+             INSERT INTO threads VALUES('project:1:thread','project','project:1',NULL);
+             INSERT INTO discussion_topics VALUES('topic:1','project:channel:ai-activity:thread','project:1');",
+        )
+        .unwrap();
+
+        assert!(discussion_thread_belongs_to_item(
+            &db,
+            "project:channel:ai-activity:thread",
+            "project:1"
+        )
+        .unwrap());
+        assert!(discussion_thread_belongs_to_item(&db, "project:1:thread", "project:1").unwrap());
+        assert!(!discussion_thread_belongs_to_item(
+            &db,
+            "project:channel:ai-activity:thread",
+            "project:2"
+        )
+        .unwrap());
+    }
 }
