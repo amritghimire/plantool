@@ -238,3 +238,20 @@ the main daemon, consistent SQLite backups were saved at
 is pending, the item is unfrozen, and `approved=false`. The GitHub plan-publication
 outbox entry remains queued while this binary lacks Keychain access. No approval was
 recorded; the owner must still review the plan through the normal gate.
+
+### Saved live provider diagnostics
+
+The saved serial batch completed for all 11 configured routes (Oct 26 UTC); the
+Codex test was rerun later and succeeded on Oct 27 01:10 UTC. `codex-sol`
+(`gpt-6.1-sol`) passed its signed-in Codex app-server, read-tool and JSON check;
+`local-devstral` (`devstral-small-2`) passed chat, tools and structured JSON.
+`local-qwen36a3` (`qwen3.6:35b-a3b`) passed chat but its model response failed the
+tool check. `local-qwen38` (`qwen3.8:27b`) passed chat and tools; the JSON request
+returned upstream HTTP 500, “no user query found in messages.” `ollama-cloud`
+(`gemma4:31b-cloud`) passed chat and tools but its response did not satisfy the
+structured-JSON check. All five configured OpenRouter routes returned HTTP 429 at
+the basic-chat stage, with the provider reporting its daily free-model limit:
+`or-gemma4-31b`, `or-glm-5.2`, `or-laguna-xs`, `or-minimax-m3`, and `or-nemotron-s`.
+`zen-free` resolved to `beam-free` and returned HTTP 429 for the provider's free
+usage limit. Catalog checks passed for every route. These are saved live outcomes;
+the provider-limited and capability-failing routes were not counted as verified.
