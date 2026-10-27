@@ -239,6 +239,10 @@ the main daemon, consistent SQLite backups were saved at
 is pending, the item is unfrozen, and `approved=false`. The GitHub plan-publication
 outbox entry remains queued while this binary lacks Keychain access. No approval was
 recorded; the owner must still review the plan through the normal gate.
+Before the final restart that deployed stale-error cleanup, another consistent
+backup was saved at `~/.plantool/backups/20261027T142457Z`. The exact stale checkpoint
+warning is now cleared because the current pending gate and publication intent match
+the plan revision. The item remains at `plan_gate`, unfrozen, and unapproved.
 
 ### Saved live provider diagnostics
 
