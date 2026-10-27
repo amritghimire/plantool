@@ -88,6 +88,17 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
             if action == "replan" {
                 state["step"] = json!("plan");
                 state["approved"] = json!(false);
+            } else if action == "escalate"
+                && retryable_plan_review_evidence(&tx, item, &facts["state"], expected)?
+            {
+                // A contract-shape rejection is not a product decision. Retry this
+                // read-only review once with the corrected schema; the plan still
+                // reaches its normal owner approval gate if the review succeeds.
+                state["step"] = json!("plan_review");
+                state["approved"] = json!(false);
+                state["automatic_retries"] = json!(1);
+                state["retry_not_before"] = Value::Null;
+                state["supervisor_rounds"] = json!(0);
             } else {
                 ensure!(action == "retry", "Owner decision required");
                 state["step"] = json!(workflow::retry_step(
@@ -149,6 +160,64 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
     crate::workspace::operational(&tx,item,"Recovery queued",&format!("retry:{}:{}",expected,state["sequence"]),"Retry queued. We will start this step again and keep its history. Any changes still need the usual approval.")?;
     tx.commit()?;
     Ok(json!({"queued":true,"step":state["step"]}))
+}
+
+/// Recover one known plan-review contract defect after a Supervisor escalated it.
+/// This is safe only for an unapproved, current plan and a failed read-only review;
+/// it never accepts the review or changes plan approval.
+fn retryable_plan_review_evidence(
+    db: &rusqlite::Connection,
+    item: &str,
+    state: &Value,
+    supervisor_attempt: &str,
+) -> anyhow::Result<bool> {
+    if state["step"] != "escalated"
+        || state["failed_step"] != "plan_review"
+        || state["approved"] == true
+        || state["automatic_retries"].as_u64().unwrap_or(0) >= 1
+        || state["plan_sha"].as_str().is_none()
+        || state["checkpoint_uncertain"] == true
+        || state["closed_on_github"] == true
+    {
+        return Ok(false);
+    }
+    let plan_sha = state["plan_sha"].as_str().unwrap();
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM work_items i JOIN revisions r ON r.item_id=i.id
+           WHERE i.id=?1 AND i.approved_plan_revision_id IS NULL
+             AND i.deleted_at IS NULL AND i.closed_at IS NULL
+             AND i.state NOT IN('closed','merged') AND r.doc_kind='plan'
+             AND r.content_sha256=?2
+         )
+         AND EXISTS(
+           SELECT 1 FROM attempts a JOIN dispatches d ON d.attempt_id=a.id
+           WHERE a.item_id=?1 AND a.role='cto' AND a.state='failed'
+             AND a.generation=(
+               SELECT max(previous.generation) FROM attempts previous
+               JOIN dispatches pd ON pd.attempt_id=previous.id
+               WHERE previous.item_id=?1 AND previous.role='cto'
+                 AND previous.generation<(SELECT supervisor.generation FROM attempts supervisor WHERE supervisor.id=?3 AND supervisor.item_id=?1 AND supervisor.role='supervisor' AND supervisor.state='completed')
+                 AND json_extract(pd.request_json,'$.inputs.step')='plan_review'
+                 AND json_extract(pd.request_json,'$.plan_sha')=?2
+             )
+             AND json_extract(d.request_json,'$.inputs.step')='plan_review'
+             AND json_extract(d.request_json,'$.capability')='read'
+             AND json_extract(d.request_json,'$.plan_sha')=?2
+             AND json_extract(a.outcome_json,'$.summary') LIKE '%Checks require artifact evidence%'
+         )
+         AND EXISTS(
+           SELECT 1 FROM attempts supervisor JOIN dispatches sd ON sd.attempt_id=supervisor.id
+           WHERE supervisor.id=?3 AND supervisor.item_id=?1 AND supervisor.role='supervisor'
+             AND supervisor.state='completed'
+             AND json_extract(sd.request_json,'$.inputs.step')='supervisor'
+             AND json_extract(sd.request_json,'$.capability')='read'
+             AND json_extract(sd.request_json,'$.plan_sha')=?2
+         )",
+        params![item, plan_sha, supervisor_attempt],
+        |row| row.get(0),
+    )?;
+    Ok(exists)
 }
 
 /// Reconcile an interrupted approved coding attempt only when all effects are
@@ -578,7 +647,11 @@ pub fn resume_automatic(home: &Path) -> anyhow::Result<()> {
         let recommendation = result.role == "supervisor"
             && result.outcome == plantool_contract::Outcome::Done
             && matches!(&result.details,Some(plantool_contract::RoleDetails::Strategy{action,owner,..}) if action=="replan" || (action=="retry" && owner.as_deref().and_then(|o|workflow::retry_step(o,&facts["state"])).is_some()));
-        if !recommendation && !transient_read_failure(&result) {
+        let plan_review_evidence_recovery = result.role == "supervisor"
+            && result.outcome == plantool_contract::Outcome::Done
+            && matches!(&result.details, Some(plantool_contract::RoleDetails::Strategy { action, .. }) if action == "escalate")
+            && retryable_plan_review_evidence(&db, &item, &facts["state"], expected)?;
+        if !recommendation && !plan_review_evidence_recovery && !transient_read_failure(&result) {
             continue;
         }
         if let Err(error) = queue_retry(home, &item, expected, true) {
@@ -1076,6 +1149,123 @@ mod tests {
             "completed"
         );
     }
+    #[test]
+    fn escalated_plan_review_evidence_error_gets_one_safe_retry_without_approval() {
+        let t = fixture();
+        let db = database::open(t.path()).unwrap();
+        let plan = crate::artifacts::put(t.path(), b"current immutable plan").unwrap();
+        crate::artifacts::register(&db, &plan, 22).unwrap();
+        db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) VALUES('plan','i','plan',1,?1,'pm','now')", [&plan]).unwrap();
+        let state = json!({"item":"i","step":"escalated","failed_step":"plan_review","frozen":true,"approved":false,"plan_sha":plan,"generation":3,"sequence":2,"automatic_retries":0,"supervisor_rounds":2});
+        db.execute(
+            "UPDATE workflow_items SET state_json=?1 WHERE item_id='i'",
+            [state.to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE item_generations SET generation=3 WHERE item_id='i'",
+            [],
+        )
+        .unwrap();
+        let failed = plantool_contract::RoleResult {
+            item: "i".into(),
+            role: "cto".into(),
+            attempt_id: "review-failed".into(),
+            generation: 2,
+            outcome: plantool_contract::Outcome::Failed,
+            summary: "Dispatch stopped: invalid_role_result: Checks require artifact evidence"
+                .into(),
+            tasks_done: vec![],
+            artifacts: vec![],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: None,
+        };
+        db.execute("INSERT INTO attempts VALUES('review-failed','i','cto',2,'route','failed','/checkout','now','now',?1,'review-failed','{}',0)", [serde_json::to_string(&failed).unwrap()]).unwrap();
+        let failed_request = plantool_contract::Dispatch {
+            item: "i".into(),
+            role: "cto".into(),
+            generation: 2,
+            inputs: json!({"step":"plan_review"}),
+            plan_sha: plan.clone(),
+            policy_version: 1,
+            capability: "read".into(),
+            idempotency_key: "failed".into(),
+            thread_id: "i".into(),
+            interrupt_id: "failed".into(),
+        };
+        db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('review-failed',?1,'failed','i','failed',0)", [serde_json::to_string(&failed_request).unwrap()]).unwrap();
+        let escalation = plantool_contract::RoleResult {
+            item: "i".into(),
+            role: "supervisor".into(),
+            attempt_id: "a".into(),
+            generation: 3,
+            outcome: plantool_contract::Outcome::Done,
+            summary: "Repeated evidence-format failure".into(),
+            tasks_done: vec![],
+            artifacts: vec![],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: Some(plantool_contract::RoleDetails::Strategy {
+                action: "escalate".into(),
+                owner: None,
+                task_key: None,
+                reason: "The plan-review output repeatedly failed validation".into(),
+            }),
+        };
+        db.execute("UPDATE attempts SET role='supervisor',generation=3,state='completed',outcome_json=?1 WHERE id='a'", [serde_json::to_string(&escalation).unwrap()]).unwrap();
+        let supervisor_request = plantool_contract::Dispatch {
+            item: "i".into(),
+            role: "supervisor".into(),
+            generation: 3,
+            inputs: json!({"step":"supervisor"}),
+            plan_sha: plan.clone(),
+            policy_version: 1,
+            capability: "read".into(),
+            idempotency_key: "supervisor".into(),
+            thread_id: "i".into(),
+            interrupt_id: "supervisor".into(),
+        };
+        db.execute(
+            "UPDATE dispatches SET request_json=?1 WHERE attempt_id='a'",
+            [serde_json::to_string(&supervisor_request).unwrap()],
+        )
+        .unwrap();
+
+        assert_eq!(snapshot(t.path(), "i").unwrap()["eligible"], true);
+        assert!(retryable_plan_review_evidence(&db, "i", &state, "a").unwrap());
+        resume_automatic(t.path()).unwrap();
+        let resumed = workflow::state(&db, "i").unwrap().unwrap();
+        assert_eq!(resumed["step"], "plan_review");
+        assert_eq!(resumed["frozen"], false);
+        assert_eq!(resumed["approved"], false);
+        assert_eq!(resumed["automatic_retries"], 1);
+        assert_eq!(resumed["supervisor_rounds"], 0);
+        assert!(resumed["retry_not_before"].is_null());
+        assert!(db
+            .query_row(
+                "SELECT approved_plan_revision_id IS NULL FROM work_items WHERE id='i'",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap());
+        assert!(db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE kind='worker.recover' AND delivered_at IS NULL)", [], |r| r.get::<_, bool>(0)).unwrap());
+        resume_automatic(t.path()).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+
     #[test]
     fn transient_read_failure_gets_a_timed_retry_but_uncertain_work_does_not() {
         let t = fixture();

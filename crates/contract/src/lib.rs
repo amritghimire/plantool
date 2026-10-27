@@ -123,11 +123,14 @@ macro_rules! wire_enum {($name:ident {$($variant:ident=>$text:literal),*})=>{
 wire_enum!(CheckStatus {Pass=>"pass",Fail=>"fail",Skipped=>"skipped"});
 wire_enum!(Severity {High=>"high",Medium=>"medium",Low=>"low"});
 wire_enum!(FindingScope {In=>"in",Out=>"out"});
-wire!(Check {
-    name: String,
-    status: CheckStatus,
-    evidence: String
-});
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Check {
+    pub name: String,
+    pub status: CheckStatus,
+    #[schemars(regex(pattern = r"^artifact://[a-f0-9]{64}$"))]
+    pub evidence: String,
+}
 wire!(Finding {severity:Severity, scope:FindingScope, title:String, detail:String, file:Option<String>, line:Option<u32>, task_key:Option<String>});
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -271,5 +274,11 @@ mod tests {
         assert!(
             serde_json::from_value::<RoleResult>(serde_json::json!({"approval":true})).is_err()
         );
+    }
+    #[test]
+    fn check_evidence_schema_requires_an_artifact_sha256() {
+        let schema: serde_json::Value = serde_json::from_str(&result_schema()).unwrap();
+        let evidence = &schema["definitions"]["Check"]["properties"]["evidence"];
+        assert_eq!(evidence["pattern"], r"^artifact://[a-f0-9]{64}$");
     }
 }

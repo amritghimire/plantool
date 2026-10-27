@@ -333,7 +333,7 @@ def create_app(home: Path, token: str, transport=None):
                         # tools are supplied, so prior tool effects are not repeated.
                         formatting_retry=True
                         messages.append({"role":"assistant","content":message.get("content") if isinstance(message.get("content"),str) else ""})
-                        messages.append({"role":"user","content":"The final response was not a complete valid RoleResult. Return one complete JSON object matching the system schema, using only evidence already obtained. No tools, Markdown, commentary or new claims. Keep the summary concise."})
+                        messages.append({"role":"user","content":"The final response was not a complete valid RoleResult. Return one complete JSON object matching the system schema, using only evidence already obtained. For every check, evidence must be the exact artifact:// URI of a stored artifact. If this read-only step ran no checks, return checks: [] and put observations in details/findings; never invent evidence. No tools, Markdown, commentary or new claims. Keep the summary concise."})
                 raise ValueError("Role tool/call budget exhausted")
             graph=StateGraph(State);graph.add_node("role",call_role);graph.add_edge(START,"role");graph.add_edge("role",END)
             result=(await graph.compile().ainvoke({}))["result"]

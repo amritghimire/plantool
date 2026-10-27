@@ -6,7 +6,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, conint
+from pydantic import BaseModel, ConfigDict, Field, RootModel, conint, constr
 
 
 class Type(str, Enum):
@@ -601,7 +601,7 @@ class Check(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
     )
-    evidence: str
+    evidence: constr(pattern=r'^artifact://[a-f0-9]{64}$')
     name: str
     status: CheckStatus
 

@@ -39,7 +39,10 @@ Use artifacts entries {kind, ref}, checks {name, status, evidence} and findings
 {severity, scope, title, detail, file, line, task_key}; nullable location/task fields stay
 null when unknown. Check status is pass/fail/skipped, severity high/medium/low and scope
 in/out. Do not add imagined schema fields. A missing artifact cannot be replaced by a
-local pathname or an invented digest. Roles that did not execute checks must not claim them.
+local pathname or an invented digest. Check evidence must be the exact `artifact://` URI
+of a stored artifact. If this read-only step did not run a check, return `checks: []` and
+put observations in the appropriate details/findings fields; never invent evidence.
+Roles that did not execute checks must not claim them.
 
 Use details.kind research for CTO markdown, plan for PM markdown/acceptance_criteria/
 affected_files, security for Reviewer commit/passed/criteria, docs for guide body/optional

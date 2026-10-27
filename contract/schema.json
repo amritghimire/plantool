@@ -442,7 +442,8 @@
       ],
       "properties": {
         "evidence": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^artifact://[a-f0-9]{64}$"
         },
         "name": {
           "type": "string"

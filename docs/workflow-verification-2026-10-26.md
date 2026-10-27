@@ -201,3 +201,23 @@ required suite passed again (Rust 321 passed / 1 ignored, Vitest 130, worker pyt
 37, frontend/CLI builds, playground baseline and smoke on port 41432). After a
 consistent backup and restart, item #5 restarted QA at generation 38; it was observed
 running under the global model lease. Its final result and GitHub sync remain pending.
+
+### Frozen plan-review evidence failure (Oct 27 UTC)
+
+Item #9 was frozen after repeated CTO `plan_review` outputs failed with
+`Checks require artifact evidence`. The daemon correctly requires stored `artifact://`
+evidence, but the model-facing schema only described check evidence as an arbitrary
+string. The shared contract now constrains it to an artifact SHA-256 URI; worker
+schemas were regenerated, and the one allowed same-route format correction explains
+that read-only reviews with no executed checks must return `checks: []`. CTO review
+instructions now say the same.
+
+One narrowly guarded automatic recovery handles this exact old failure after a
+Supervisor escalation: it verifies the latest failed review matches the current plan
+hash, the plan is still unapproved, and there are no active attempts, gates or pending
+effects. It retries `plan_review` once on the current code, without altering the plan
+or approval state. A regression test verifies the retry is idempotent and leaves the
+approval gate intact. It cannot repeat after a second failure. Full required checks
+passed: Rust workspace 323 passed / 1 ignored, Vitest 130, worker pytest 38,
+playground baseline, frontend/CLI build and smoke on port 41308. Deployment and
+observing item #9 reach its ordinary owner plan-approval gate are pending.

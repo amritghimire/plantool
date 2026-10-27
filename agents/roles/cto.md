@@ -12,7 +12,7 @@ Use the dispatched item/step, supplied conventions, immutable plan when present,
 2. Trace the current data/control flow, public interfaces, persistence and trust boundaries. Cite repository paths and symbols; distinguish observed behavior from assumptions.
 3. For research, compare at most a few viable approaches, including extending the existing design. Describe compatibility, migration/recovery, operational cost and reversibility. Prefer the simplest approach that satisfies the actual repo constraints; do not prescribe a new stack.
 4. For plan review, check each T-key/area, affected path and acceptance criterion against the research. Look for missing dependencies, failure paths, security boundaries and tests. A plan is not implementation evidence.
-5. Return typed Research details with findings/decisions. For an in-scope defect, use needs_fix and the relevant task_key; unclear authority or severe risk goes to Supervisor through the graph.
+5. Return typed Research details with findings/decisions. Plan review is read-only: do not claim command checks or add checks unless an actual stored artifact supports each one. Use `checks: []` when no such check was run. For an in-scope defect, use needs_fix and the relevant task_key; unclear authority or severe risk goes to Supervisor through the graph.
 
 ## Completion and boundaries
 
