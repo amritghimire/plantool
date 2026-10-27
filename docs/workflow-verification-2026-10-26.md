@@ -141,3 +141,16 @@ records returned stale-interrupt 409s and need reconciliation; no plan approval 
 GitHub write was replayed. The old Codex diagnostic result remains unchanged pending
 a fresh passkey-authorized run. These are current blockers, distinct from the earlier
 historical provider failures above.
+
+### Keychain query follow-up
+
+The owner completed a passkey-authorized GitHub preflight and the saved preflight
+shows `rulesets_checked: true`. Review of that path showed background reads were
+explicitly filtering out authenticated Keychain entries. The filter was removed while
+keeping macOS interaction disabled for background reads, so an authorized entry can
+be read without prompting and an unauthorized read returns promptly. Required checks
+passed again (Rust workspace 318 passed / 1 ignored, Vitest 130, worker pytest 37,
+frontend/CLI builds and smoke on port 41349). A consistent backup was made before
+the next restart. That restart uses a new executable hash, so the earlier Keychain
+grant does not apply to it. The current build still logs a Keychain access error;
+verification awaits the owner authorizing this exact build with “Always Allow.”
