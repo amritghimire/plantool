@@ -256,6 +256,59 @@ fn restore_uncommitted_plan_gate(home: &Path, item: &str, observed: &str) -> any
     tx.commit()?;
     Ok(true)
 }
+
+fn clear_recovered_gate_error(home: &Path, item: &str) -> anyhow::Result<bool> {
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let Some(state) = workflow::state(&tx, item)? else {
+        return Ok(false);
+    };
+    if state["step"] != "plan_gate"
+        || state["uncommitted_gate_retry"] != true
+        || state["approved"] == true
+        || state["frozen"] == true
+        || state["checkpoint_uncertain"] == true
+        || state["closed_on_github"] == true
+    {
+        return Ok(false);
+    }
+    let digest = state["plan_sha"].as_str().unwrap_or("");
+    if digest.is_empty() {
+        return Ok(false);
+    }
+    let confirmed: bool = tx.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM gates g
+            JOIN github_gate_context c ON c.gate_id=g.id
+            JOIN revisions r ON r.id=c.revision_id
+            JOIN outbox o ON o.aggregate_id=g.item_id AND o.kind='github.plan'
+              AND json_extract(o.payload_json,'$.gate')=g.id
+            WHERE g.item_id=?1 AND g.kind='plan' AND g.state IN('pending','open')
+              AND g.target_digest=?2 AND r.content_sha256=?2
+              AND r.id=(SELECT id FROM revisions WHERE item_id=?1 AND doc_kind='plan' ORDER BY number DESC LIMIT 1)
+         )",
+        params![item, digest],
+        |row| row.get(0),
+    )?;
+    if !confirmed {
+        return Ok(false);
+    }
+    let cleared = tx.execute(
+        "UPDATE workflow_items SET last_error=NULL WHERE item_id=?1 AND last_error='Worker checkpoint acknowledgement is uncertain; manual reconciliation required'",
+        [item],
+    )? > 0;
+    if cleared {
+        database::audit(
+            &tx,
+            "daemon",
+            "workflow.recovered_gate_error_cleared",
+            item,
+            &json!({"plan_sha":digest,"approved":false}),
+        )?;
+    }
+    tx.commit()?;
+    Ok(cleared)
+}
 fn has_current_handoff(
     db: &rusqlite::Connection,
     item: &str,
@@ -296,6 +349,7 @@ async fn probe(state: &AppState, project: Option<&str>, force: bool) -> anyhow::
             break;
         }
         let facts: Value = serde_json::from_str(&raw)?;
+        clear_recovered_gate_error(&state.config.home, &item)?;
         let step = facts["step"].as_str().unwrap_or("");
         let uncertain_gate = facts["checkpoint_uncertain"] == true
             && facts["failed_step"] == "plan_gate"
@@ -460,6 +514,39 @@ mod tests {
             1
         );
         assert!(!restore_uncommitted_plan_gate(t.path(), "p:project", "recovery_needed").unwrap());
+    }
+    #[test]
+    fn clears_only_the_stale_checkpoint_error_after_current_gate_is_durable() {
+        let (t, db) = setup();
+        let plan = "b".repeat(64);
+        db.execute(
+            "INSERT INTO artifacts(sha256,size,created_at) VALUES(?1,1,1)",
+            [&plan],
+        )
+        .unwrap();
+        db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) VALUES('rev','p:project','plan',1,?1,'worker','now')", [&plan]).unwrap();
+        db.execute("INSERT INTO gates(id,item_id,kind,target_digest,policy_version,state,created_at) VALUES('gate','p:project','plan',?1,1,'pending','now')", [&plan]).unwrap();
+        db.execute("INSERT INTO github_gate_context(gate_id,revision_id,thread_id,interrupt_id,publication_key) VALUES('gate','rev','p:project','interrupt','gate')", []).unwrap();
+        db.execute("INSERT INTO outbox(id,aggregate_id,kind,payload_json,created_at,idempotency_key) VALUES('publication','p:project','github.plan','{\"gate\":\"gate\"}','now','publication')", []).unwrap();
+        db.execute("UPDATE workflow_items SET state_json=?1,last_error='Worker checkpoint acknowledgement is uncertain; manual reconciliation required' WHERE item_id='p:project'", [json!({"item":"p:project","step":"plan_gate","plan_sha":plan,"uncommitted_gate_retry":true,"approved":false,"frozen":false,"checkpoint_uncertain":false}).to_string()]).unwrap();
+        drop(db);
+
+        assert!(clear_recovered_gate_error(t.path(), "p:project").unwrap());
+        let db = database::open(t.path()).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT last_error FROM workflow_items WHERE item_id='p:project'",
+                [],
+                |row| row.get::<_, Option<String>>(0)
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            workflow::state(&db, "p:project").unwrap().unwrap()["approved"],
+            false
+        );
+        assert!(!clear_recovered_gate_error(t.path(), "p:project").unwrap());
     }
     #[test]
     fn cancelled_idle_graph_restores_only_unacknowledged_events_once() {

@@ -229,8 +229,9 @@ an uncertain checkpoint after a gate request, recovery retries only if the curre
 read-only review receipt is verified, the current plan revision and GitHub binding
 still match, and no gate, gate receipt, publication intent, active work or other
 external effect exists. It can retry once and leaves approval false. Regression
-tests cover the thread relationship and the bounded retry. The full required suite
-passed: Rust workspace 325 passed / 1 ignored, Vitest 130, worker pytest 38,
+tests cover the thread relationship, bounded retry and clearing the exact stale
+checkpoint message only after the current gate and publication intent are durable.
+The latest full required suite passed: Rust workspace 326 passed / 1 ignored, Vitest 130, worker pytest 38,
 playground baseline, frontend/CLI build and smoke on port 41311. Before restarting
 the main daemon, consistent SQLite backups were saved at
 `~/.plantool/backups/20261027T141234Z`. The source-built daemon is healthy on port
