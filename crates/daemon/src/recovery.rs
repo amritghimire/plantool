@@ -99,6 +99,17 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
                 state["automatic_retries"] = json!(1);
                 state["retry_not_before"] = Value::Null;
                 state["supervisor_rounds"] = json!(0);
+            } else if action == "escalate"
+                && retryable_approved_qa_output(&tx, item, &facts["state"], expected)?
+            {
+                // An escalation based on a missing typed QA result is not a
+                // decision about the approved implementation. Retry the
+                // read-only verification once, under the same plan and commit.
+                // Do not count the malformed response as QA evidence.
+                state["step"] = json!("qa");
+                state["automatic_retries"] = json!(1);
+                state["retry_not_before"] = Value::Null;
+                state["supervisor_rounds"] = json!(0);
             } else {
                 ensure!(action == "retry", "Owner decision required");
                 state["step"] = json!(workflow::retry_step(
@@ -160,6 +171,64 @@ fn queue_retry(home: &Path, item: &str, expected: &str, automatic: bool) -> anyh
     crate::workspace::operational(&tx,item,"Recovery queued",&format!("retry:{}:{}",expected,state["sequence"]),"Retry queued. We will start this step again and keep its history. Any changes still need the usual approval.")?;
     tx.commit()?;
     Ok(json!({"queued":true,"step":state["step"]}))
+}
+
+/// A completed Supervisor can carry a stale infrastructure narrative. If its
+/// latest underlying QA attempt produced no typed result, retry that read-only
+/// step once only when the exact implementation plan remains approved and
+/// there are no recovery blockers (checked by `snapshot`/`queue_retry`).
+fn retryable_approved_qa_output(
+    db: &rusqlite::Connection,
+    item: &str,
+    state: &Value,
+    supervisor_attempt: &str,
+) -> anyhow::Result<bool> {
+    if state["step"] != "escalated"
+        || state["approved"] != true
+        || state["automatic_retries"].as_u64().unwrap_or(0) >= 1
+        || state["plan_sha"].as_str().is_none()
+        || state["checkpoint_uncertain"] == true
+        || state["closed_on_github"] == true
+    {
+        return Ok(false);
+    }
+    let plan_sha = state["plan_sha"].as_str().unwrap();
+    let eligible: bool = db.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id
+           WHERE i.id=?1 AND i.deleted_at IS NULL AND i.closed_at IS NULL
+             AND i.state NOT IN('closed','merged') AND r.doc_kind='plan'
+             AND r.content_sha256=?2
+         )
+         AND EXISTS(
+           SELECT 1 FROM attempts qa JOIN dispatches qd ON qd.attempt_id=qa.id
+           WHERE qa.item_id=?1 AND qa.role='qa' AND qa.state='completed'
+             AND qa.generation=(
+               SELECT max(previous.generation) FROM attempts previous
+               WHERE previous.item_id=?1 AND previous.role='qa'
+                 AND previous.generation<(SELECT supervisor.generation FROM attempts supervisor
+                   WHERE supervisor.id=?3 AND supervisor.item_id=?1
+                     AND supervisor.role='supervisor' AND supervisor.state='completed')
+             )
+             AND json_extract(qd.request_json,'$.inputs.step')='qa'
+             AND json_extract(qd.request_json,'$.capability')='tests'
+             AND json_extract(qd.request_json,'$.plan_sha')=?2
+             AND json_extract(qa.outcome_json,'$.outcome')='needs_fix'
+             AND json_extract(qa.outcome_json,'$.summary') IN(
+               'Provider turn completed without a submitted typed result; checkpoint required',
+               'Provider exited without a typed result; review its transcript before retrying'
+             )
+         )
+         AND EXISTS(
+           SELECT 1 FROM dispatches sd WHERE sd.attempt_id=?3
+             AND json_extract(sd.request_json,'$.inputs.step')='supervisor'
+             AND json_extract(sd.request_json,'$.capability')='read'
+             AND json_extract(sd.request_json,'$.plan_sha')=?2
+         )",
+        params![item, plan_sha, supervisor_attempt],
+        |row| row.get(0),
+    )?;
+    Ok(eligible)
 }
 
 /// Recover one known plan-review contract defect after a Supervisor escalated it.
@@ -651,7 +720,15 @@ pub fn resume_automatic(home: &Path) -> anyhow::Result<()> {
             && result.outcome == plantool_contract::Outcome::Done
             && matches!(&result.details, Some(plantool_contract::RoleDetails::Strategy { action, .. }) if action == "escalate")
             && retryable_plan_review_evidence(&db, &item, &facts["state"], expected)?;
-        if !recommendation && !plan_review_evidence_recovery && !transient_read_failure(&result) {
+        let approved_qa_output_recovery = result.role == "supervisor"
+            && result.outcome == plantool_contract::Outcome::Done
+            && matches!(&result.details, Some(plantool_contract::RoleDetails::Strategy { action, .. }) if action == "escalate")
+            && retryable_approved_qa_output(&db, &item, &facts["state"], expected)?;
+        if !recommendation
+            && !plan_review_evidence_recovery
+            && !approved_qa_output_recovery
+            && !transient_read_failure(&result)
+        {
             continue;
         }
         if let Err(error) = queue_retry(home, &item, expected, true) {
@@ -1254,6 +1331,146 @@ mod tests {
             )
             .unwrap());
         assert!(db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE kind='worker.recover' AND delivered_at IS NULL)", [], |r| r.get::<_, bool>(0)).unwrap());
+        resume_automatic(t.path()).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn escalated_stale_qa_output_retries_once_under_the_same_approval() {
+        use plantool_contract::{Outcome, RoleDetails, RoleResult};
+        let t = fixture();
+        let db = database::open(t.path()).unwrap();
+        let plan = crate::artifacts::put(t.path(), b"approved plan").unwrap();
+        crate::artifacts::register(&db, &plan, 13).unwrap();
+        db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) VALUES('plan','i','plan',1,?1,'owner','now')", [&plan]).unwrap();
+        db.execute(
+            "UPDATE work_items SET approved_plan_revision_id='plan' WHERE id='i'",
+            [],
+        )
+        .unwrap();
+        let state = json!({"item":"i","step":"escalated","failed_step":"supervisor","frozen":true,"approved":true,"plan_sha":plan,"generation":3,"sequence":8,"supervisor_rounds":2,"head_sha":"approved-commit"});
+        db.execute(
+            "UPDATE workflow_items SET state_json=?1 WHERE item_id='i'",
+            [state.to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE item_generations SET generation=3 WHERE item_id='i'",
+            [],
+        )
+        .unwrap();
+        let qa = RoleResult {
+            item: "i".into(),
+            role: "qa".into(),
+            attempt_id: "qa-failed".into(),
+            generation: 2,
+            outcome: Outcome::NeedsFix,
+            summary:
+                "Provider turn completed without a submitted typed result; checkpoint required"
+                    .into(),
+            tasks_done: vec![],
+            artifacts: vec![],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: None,
+        };
+        db.execute("INSERT INTO attempts VALUES('qa-failed','i','qa',2,'ollama-cloud','completed','/checkout','now','now',?1,'qa-key','{}',0)", [serde_json::to_string(&qa).unwrap()]).unwrap();
+        let qa_request = plantool_contract::Dispatch {
+            item: "i".into(),
+            role: "qa".into(),
+            generation: 2,
+            inputs: json!({"step":"qa"}),
+            plan_sha: plan.clone(),
+            policy_version: 1,
+            capability: "tests".into(),
+            idempotency_key: "qa-key".into(),
+            thread_id: "i".into(),
+            interrupt_id: "qa".into(),
+        };
+        db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('qa-failed',?1,'qa-digest','i','qa',0)", [serde_json::to_string(&qa_request).unwrap()]).unwrap();
+        let supervisor = RoleResult {
+            item: "i".into(),
+            role: "supervisor".into(),
+            attempt_id: "a".into(),
+            generation: 3,
+            outcome: Outcome::Done,
+            summary: "Old infrastructure escalation".into(),
+            tasks_done: vec![],
+            artifacts: vec![],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: Some(RoleDetails::Strategy {
+                action: "escalate".into(),
+                owner: None,
+                task_key: None,
+                reason: "Old failure narrative".into(),
+            }),
+        };
+        db.execute("UPDATE attempts SET role='supervisor',generation=3,state='completed',outcome_json=?1 WHERE id='a'", [serde_json::to_string(&supervisor).unwrap()]).unwrap();
+        let supervisor_request = plantool_contract::Dispatch {
+            item: "i".into(),
+            role: "supervisor".into(),
+            generation: 3,
+            inputs: json!({"step":"supervisor"}),
+            plan_sha: plan.clone(),
+            policy_version: 1,
+            capability: "read".into(),
+            idempotency_key: "supervisor-key".into(),
+            thread_id: "i".into(),
+            interrupt_id: "supervisor".into(),
+        };
+        db.execute(
+            "UPDATE dispatches SET request_json=?1 WHERE attempt_id='a'",
+            [serde_json::to_string(&supervisor_request).unwrap()],
+        )
+        .unwrap();
+
+        assert_eq!(snapshot(t.path(), "i").unwrap()["eligible"], true);
+        assert!(retryable_approved_qa_output(&db, "i", &state, "a").unwrap());
+        resume_automatic(t.path()).unwrap();
+        let resumed = workflow::state(&db, "i").unwrap().unwrap();
+        assert_eq!(resumed["step"], "qa");
+        assert_eq!(resumed["frozen"], false);
+        assert_eq!(resumed["approved"], true);
+        assert_eq!(resumed["plan_sha"], plan);
+        assert_eq!(resumed["head_sha"], "approved-commit");
+        assert_eq!(resumed["automatic_retries"], 1);
+        assert_eq!(resumed["supervisor_rounds"], 0);
+        assert_eq!(
+            db.query_row(
+                "SELECT approved_plan_revision_id FROM work_items WHERE id='i'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "plan"
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM decisions", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
+        );
         resume_automatic(t.path()).unwrap();
         assert_eq!(
             db.query_row(
