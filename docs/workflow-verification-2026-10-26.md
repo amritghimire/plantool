@@ -231,5 +231,10 @@ still match, and no gate, gate receipt, publication intent, active work or other
 external effect exists. It can retry once and leaves approval false. Regression
 tests cover the thread relationship and the bounded retry. The full required suite
 passed: Rust workspace 325 passed / 1 ignored, Vitest 130, worker pytest 38,
-playground baseline, frontend/CLI build and smoke on port 41311. Main-instance
-deployment and observing item #9 reach its normal approval checkpoint are pending.
+playground baseline, frontend/CLI build and smoke on port 41311. Before restarting
+the main daemon, consistent SQLite backups were saved at
+`~/.plantool/backups/20261027T141234Z`. The source-built daemon is healthy on port
+41200. On restart, item #9 automatically recovered to `plan_gate`; its local gate
+is pending, the item is unfrozen, and `approved=false`. The GitHub plan-publication
+outbox entry remains queued while this binary lacks Keychain access. No approval was
+recorded; the owner must still review the plan through the normal gate.
