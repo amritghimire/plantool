@@ -154,3 +154,35 @@ frontend/CLI builds and smoke on port 41349). A consistent backup was made befor
 the next restart. That restart uses a new executable hash, so the earlier Keychain
 grant does not apply to it. The current build still logs a Keychain access error;
 verification awaits the owner authorizing this exact build with “Always Allow.”
+
+### QA checkpoint recovery and signed-in Codex retest (Oct 27 UTC)
+
+The owner reran the Codex diagnostic with the physical passkey. The saved result
+confirms the exact `gpt-6.1-sol` catalog entry and a successful signed-in Codex
+app-server turn using the read tool and JSON output. No OpenAI API key was used.
+
+Item #5 had an approved implementation commit (`079c375d`) and a QA attempt
+interrupted during daemon restart. A guarded recovery path now rechecks the approved
+plan hash, clean project checkout, checkpoint ancestry and approved file scope, then
+marks the uncertain QA attempt failed and starts a new QA attempt with a fresh key.
+It never accepts the interrupted run's evidence. Older QA work with no checkpoint,
+including item #4, is left untouched for owner recovery. A regression test also
+verifies that unrelated uncommitted files are preserved. After deployment, item #5
+advanced to QA and attempt 33 was observed running against the preserved approved
+commit; successful QA completion remains pending.
+
+The final `scripts/check-continuity.sh` run passed the playground baseline, Rust
+workspace tests (320 passed, 1 ignored), Vitest (43 files / 130 tests), worker pytest
+(37 tests), frontend and CLI builds, and isolated smoke (port 41432). A prior full
+run had one API setup failure (403 during shared passkey registration); its isolated
+rerun passed, and the subsequent full run passed. A consistent backup was created
+before each main-daemon restart. The current source build is healthy on port 41200.
+Rebuilding changed the executable identity, so GitHub App background sync again
+requires the owner to authorize this exact binary in Settings → GitHub; no data,
+approval or checkpoint was modified to work around it.
+
+Still unverified: GitHub sync after this latest binary's physical authorization;
+completion of item #5's new QA attempt; live multi-project concurrency, Stop All / resume
+/ worker repair, prerequisite and revised-scope scenarios, populated sprint membership,
+optional advisory permission failure, and end-to-end message deduplication. These
+remain explicit follow-ups, not implied by the automated checks.

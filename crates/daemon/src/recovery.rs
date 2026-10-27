@@ -181,6 +181,14 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
             continue;
         }
         let request: Dispatch = serde_json::from_str(&request)?;
+        if request.role == "qa"
+            && request.capability == "tests"
+            && request.inputs["step"] == "qa"
+            && s["failed_step"] == "qa"
+            && reconcile_interrupted_qa(home, &id, &item, generation, &request, &s)?
+        {
+            continue;
+        }
         let latest:Option<String>=db.query_row("SELECT outcome_json FROM attempts WHERE item_id=?1 AND state='completed' AND role='supervisor' AND generation<?2 ORDER BY generation DESC LIMIT 1",params![item,generation],|r|r.get(0)).optional()?.flatten();
         let Some(latest) = latest else { continue };
         let Ok(recommendation) = serde_json::from_str::<RoleResult>(&latest) else {
@@ -279,6 +287,184 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// Resume an interrupted QA step only when its exact approved implementation
+/// commit is already recorded and present in a clean project checkout. The
+/// interrupted QA result is marked failed; no test evidence or completion is
+/// accepted, and the next attempt gets a fresh idempotency key.
+fn reconcile_interrupted_qa(
+    home: &Path,
+    attempt: &str,
+    item: &str,
+    generation: u64,
+    request: &plantool_contract::Dispatch,
+    state: &Value,
+) -> anyhow::Result<bool> {
+    use plantool_contract::{Outcome, RoleResult};
+    if state["approved"] != true
+        || state["checkpoint_uncertain"] == true
+        || state["closed_on_github"] == true
+        || state["frozen"] == true
+    {
+        return Ok(false);
+    }
+    let Some(checkpoint) = state["head_sha"].as_str() else {
+        // Older interrupted QA runs may predate a recorded implementation
+        // checkpoint. They are not safe to replay automatically.
+        return Ok(false);
+    };
+    let db = database::open(home)?;
+    let (_, root) = dispatcher::item(&db, item)?;
+    let (recorded_worktree, active, effects, gate, approved): (String, bool, bool, bool, bool) =
+        db.query_row(
+            "SELECT a.worktree,
+               EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND id<>?1 AND state IN('queued','starting','running','waiting','idle')),
+               EXISTS(SELECT 1 FROM supervised_processes WHERE id=?1)
+                 OR EXISTS(SELECT 1 FROM proxy_calls WHERE attempt_id=?1 AND state='pending')
+                 OR EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?2 AND state='running')
+                 OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?2 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status'),
+               EXISTS(SELECT 1 FROM gates WHERE item_id=?2 AND state IN('open','pending')),
+               EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id
+                      WHERE i.id=?2 AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0
+                        AND r.content_sha256=?3 AND r.content_sha256=json_extract(?4,'$.plan_sha'))
+             FROM attempts a WHERE a.id=?1 AND a.item_id=?2 AND a.state='recovery_needed'
+               AND a.role='qa' AND a.generation=?5",
+            params![attempt, item, request.plan_sha, state.to_string(), generation],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )?;
+    if active || effects || gate || !approved {
+        return Ok(false);
+    }
+    let root = root.canonicalize()?;
+    if Path::new(&recorded_worktree).canonicalize().ok().as_deref() != Some(root.as_path())
+        || !crate::git::git(&root, &["status", "--porcelain", "--untracked-files=all"])?.is_empty()
+    {
+        return Ok(false);
+    }
+    crate::git::git(
+        &root,
+        &["cat-file", "-e", &format!("{checkpoint}^{{commit}}")],
+    )?;
+    let default_ref = crate::instructions::default_ref(&root)?;
+    let default = crate::git::git(&root, &["rev-parse", &default_ref])?;
+    if crate::git::git(
+        &root,
+        &["merge-base", "--is-ancestor", &default, checkpoint],
+    )
+    .is_err()
+    {
+        return Ok(false);
+    }
+    let rules = crate::execution::Execution::load(home)?.rules(&root);
+    let never_sent = crate::sandbox::NeverSent::new(&rules)?;
+    let changed = crate::git::git(&root, &["diff", "--name-only", &default, checkpoint])?;
+    if changed.is_empty() {
+        return Ok(false);
+    }
+    for file in changed.lines() {
+        let in_scope = state["affected_files"].as_array().is_some_and(|patterns| {
+            patterns.iter().filter_map(Value::as_str).any(|pattern| {
+                file == pattern
+                    || pattern
+                        .strip_suffix("/**")
+                        .is_some_and(|prefix| file.starts_with(&format!("{prefix}/")))
+            })
+        });
+        if !in_scope || never_sent.check(&root, &root.join(file)).is_err() {
+            return Ok(false);
+        }
+    }
+    let (backend_outcome, backend_request): (String, String) = db.query_row(
+        "SELECT a.outcome_json,d.request_json FROM attempts a JOIN dispatches d ON d.attempt_id=a.id
+         WHERE a.item_id=?1 AND a.generation<?2 AND a.state='completed'
+           AND a.role IN('backend','frontend','devops')
+         ORDER BY a.generation DESC LIMIT 1",
+        params![item, generation],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let backend: plantool_contract::RoleResult = serde_json::from_str(&backend_outcome)?;
+    let backend_request: plantool_contract::Dispatch = serde_json::from_str(&backend_request)?;
+    if backend.outcome != Outcome::Done
+        || backend_request.plan_sha != request.plan_sha
+        || !backend
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.kind == "commit" && artifact.reference == checkpoint)
+    {
+        return Ok(false);
+    }
+
+    let mut conn = database::open(home)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if workflow::state(&tx, item)? != Some(state.clone()) {
+        return Ok(false);
+    }
+    let still_safe: bool = tx.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND id<>?1 AND state IN('queued','starting','running','waiting','idle'))
+           AND NOT EXISTS(SELECT 1 FROM proxy_calls WHERE attempt_id=?1 AND state='pending')
+           AND NOT EXISTS(SELECT 1 FROM workflow_actions WHERE item_id=?2 AND state='running')
+           AND NOT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?2 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status')
+           AND NOT EXISTS(SELECT 1 FROM gates WHERE item_id=?2 AND state IN('open','pending'))
+           AND EXISTS(SELECT 1 FROM work_items i JOIN revisions r ON r.id=i.approved_plan_revision_id WHERE i.id=?2 AND r.content_sha256=?3 AND coalesce(json_extract(i.state_json,'$.plan_revision_pending'),0)=0)",
+        params![attempt, item, request.plan_sha],
+        |r| r.get(0),
+    )?;
+    if !still_safe {
+        return Ok(false);
+    }
+    let result = RoleResult {
+        item: item.into(),
+        role: "qa".into(),
+        attempt_id: attempt.into(),
+        generation,
+        outcome: Outcome::Failed,
+        summary: "Interrupted QA attempt reconciled; no test result was accepted.".into(),
+        tasks_done: vec![],
+        artifacts: vec![],
+        checks: vec![],
+        findings: vec![],
+        next: None,
+        review_guide: None,
+        details: None,
+    };
+    tx.execute(
+        "UPDATE proxy_calls SET state='failed' WHERE attempt_id=?1 AND state='recovery_needed'",
+        [attempt],
+    )?;
+    tx.execute("UPDATE attempts SET state='failed',ended_at=?2,outcome_json=?3 WHERE id=?1 AND state='recovery_needed'", params![attempt, plantool_core::now(), serde_json::to_string(&result)?])?;
+    let mut next = state.clone();
+    next["step"] = json!("qa");
+    next["sequence"] = json!(state["sequence"].as_u64().unwrap_or(0) + 1);
+    next["generation"] = json!(generation);
+    workflow::save(&tx, item, &next)?;
+    tx.execute(
+        "UPDATE workflow_items SET head_sha=?2,last_error=NULL WHERE item_id=?1",
+        params![item, checkpoint],
+    )?;
+    tx.execute(
+        "UPDATE outbox SET delivered_at=?2,result_json=?3 WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind IN('worker.start','worker.resume','worker.cancel','worker.recover')",
+        params![item, plantool_core::now(), json!({"superseded_by_safe_qa_recovery":true}).to_string()],
+    )?;
+    let start = plantool_contract::Start {
+        thread_id: item.into(),
+        graph: plantool_contract::Graph::WorkItem,
+        input: json!({"workflow":next}),
+        idempotency_key: format!("qa-reconcile:{attempt}"),
+        contract_version: plantool_contract::CONTRACT_VERSION,
+        graph_version: plantool_contract::GRAPH_VERSION,
+    };
+    dispatcher::enqueue(&tx, item, "worker.recover", &serde_json::to_value(start)?)?;
+    database::audit(
+        &tx,
+        "daemon",
+        "attempt.qa_reconciled",
+        attempt,
+        &json!({"checkpoint":checkpoint,"approved_plan":request.plan_sha,"previous_state":state}),
+    )?;
+    crate::workspace::operational(&tx, item, "QA resumed", &format!("qa-reconcile:{attempt}"), "The approved implementation is intact. The interrupted QA run was not counted; verification is starting again.")?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Adopt only observed committed state, never uncommitted source edits. Generated
@@ -636,6 +822,204 @@ mod tests {
             "base\n"
         );
     }
+    #[test]
+    fn interrupted_qa_restarts_at_the_approved_commit_without_accepting_results() {
+        use plantool_contract::{Artifact, Dispatch, Outcome, RoleResult};
+        let t = fixture();
+        let home = t.path();
+        let db = database::open(home).unwrap();
+        let root = home.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "user.email", "test@example.com"],
+        ] {
+            crate::git::git(&root, &args).unwrap();
+        }
+        std::fs::write(root.join("src.py"), "base\n").unwrap();
+        crate::git::git(&root, &["add", "."]).unwrap();
+        crate::git::git(&root, &["commit", "-qm", "base"]).unwrap();
+        let base = crate::git::git(&root, &["rev-parse", "HEAD"]).unwrap();
+        let implementation = home.join("worktrees/backend");
+        std::fs::create_dir_all(implementation.parent().unwrap()).unwrap();
+        crate::git::git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                implementation.to_str().unwrap(),
+                &base,
+            ],
+        )
+        .unwrap();
+        std::fs::write(implementation.join("src.py"), "approved implementation\n").unwrap();
+        crate::git::git(&implementation, &["add", "."]).unwrap();
+        crate::git::git(
+            &implementation,
+            &["commit", "-qm", "approved implementation"],
+        )
+        .unwrap();
+        let head = crate::git::git(&implementation, &["rev-parse", "HEAD"]).unwrap();
+        crate::git::git(
+            &root,
+            &[
+                "fetch",
+                "--no-tags",
+                "--no-write-fetch-head",
+                implementation.to_str().unwrap(),
+                &head,
+            ],
+        )
+        .unwrap();
+
+        let plan = crate::artifacts::put(home, b"approved plan").unwrap();
+        crate::artifacts::register(&db, &plan, 13).unwrap();
+        db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) VALUES('qa-plan','i','plan',1,?1,'test','now')", [&plan]).unwrap();
+        db.execute(
+            "UPDATE projects SET local_checkout=?1",
+            [root.to_str().unwrap()],
+        )
+        .unwrap();
+        db.execute("UPDATE work_items SET approved_plan_revision_id='qa-plan',state_json='{}' WHERE id='i'", []).unwrap();
+        let state = json!({"item":"i","step":"supervisor","failed_step":"qa","approved":true,"frozen":false,"checkpoint_uncertain":false,"closed_on_github":false,"plan_sha":plan,"generation":2,"sequence":8,"head_sha":head,"affected_files":["src.py"]});
+        db.execute(
+            "UPDATE workflow_items SET base_sha=?1,head_sha=?1,state_json=?2 WHERE item_id='i'",
+            params![base, state.to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE item_generations SET generation=2 WHERE item_id='i'",
+            [],
+        )
+        .unwrap();
+        let backend = RoleResult {
+            item: "i".into(),
+            role: "backend".into(),
+            attempt_id: "backend".into(),
+            generation: 1,
+            outcome: Outcome::Done,
+            summary: "Implementation committed".into(),
+            tasks_done: vec![],
+            artifacts: vec![Artifact {
+                kind: "commit".into(),
+                reference: head.clone(),
+            }],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: None,
+        };
+        db.execute("INSERT INTO attempts VALUES('backend','i','backend',1,'route','completed',?1,'now','now',?2,'backend','{}',0)", params![implementation.to_str().unwrap(),serde_json::to_string(&backend).unwrap()]).unwrap();
+        let backend_request = Dispatch {
+            item: "i".into(),
+            role: "backend".into(),
+            generation: 1,
+            inputs: json!({"step":"backend"}),
+            plan_sha: plan.clone(),
+            policy_version: 1,
+            capability: "write".into(),
+            idempotency_key: "backend-key".into(),
+            thread_id: "i".into(),
+            interrupt_id: "backend-interrupt".into(),
+        };
+        db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('backend',?1,'d','i','backend-interrupt',0)", [serde_json::to_string(&backend_request).unwrap()]).unwrap();
+        let interrupted = RoleResult {
+            item: "i".into(),
+            role: "qa".into(),
+            attempt_id: "qa".into(),
+            generation: 2,
+            outcome: Outcome::Failed,
+            summary: "Recovery needed: the daemon/worker stopped without a verified outcome".into(),
+            tasks_done: vec![],
+            artifacts: vec![],
+            checks: vec![],
+            findings: vec![],
+            next: None,
+            review_guide: None,
+            details: None,
+        };
+        db.execute("INSERT INTO attempts VALUES('qa','i','qa',2,'route','recovery_needed',?1,'now','now',?2,'qa','{}',0)", params![root.to_str().unwrap(),serde_json::to_string(&interrupted).unwrap()]).unwrap();
+        let qa_request = Dispatch {
+            item: "i".into(),
+            role: "qa".into(),
+            generation: 2,
+            inputs: json!({"step":"qa"}),
+            plan_sha: plan.clone(),
+            policy_version: 1,
+            capability: "tests".into(),
+            idempotency_key: "qa-key".into(),
+            thread_id: "i".into(),
+            interrupt_id: "qa-interrupt".into(),
+        };
+        db.execute("INSERT INTO dispatches(attempt_id,request_json,digest,thread_id,interrupt_id,execution_generation) VALUES('qa',?1,'d','i','qa-interrupt',0)", [serde_json::to_string(&qa_request).unwrap()]).unwrap();
+
+        std::fs::write(
+            root.join("owner-notes.txt"),
+            "preserve uncommitted owner work\n",
+        )
+        .unwrap();
+        reconcile_clean_coding(home).unwrap();
+        let before_resume: String = db
+            .query_row("SELECT state FROM attempts WHERE id='qa'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before_resume, "recovery_needed");
+        assert_eq!(
+            std::fs::read_to_string(root.join("owner-notes.txt")).unwrap(),
+            "preserve uncommitted owner work\n"
+        );
+        std::fs::remove_file(root.join("owner-notes.txt")).unwrap();
+        reconcile_clean_coding(home).unwrap();
+        let reconciled = workflow::state(&db, "i").unwrap().unwrap();
+        assert_eq!(reconciled["step"], "qa");
+        assert_eq!(reconciled["head_sha"], head);
+        assert_eq!(reconciled["approved"], true);
+        let status: String = db
+            .query_row("SELECT state FROM attempts WHERE id='qa'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "failed");
+        let summary: String = db
+            .query_row(
+                "SELECT json_extract(outcome_json,'$.summary') FROM attempts WHERE id='qa'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(summary.contains("no test result was accepted"));
+        let recovery: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id='i' AND kind='worker.recover' AND delivered_at IS NULL)", [], |r| r.get(0)).unwrap();
+        assert!(recovery);
+        let completed_qa: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id='i' AND role='qa' AND state='completed')", [], |r| r.get(0)).unwrap();
+        assert!(!completed_qa);
+    }
+
+    #[test]
+    fn interrupted_qa_without_checkpoint_is_left_for_owner_recovery() {
+        use plantool_contract::Dispatch;
+        let t = fixture();
+        let state = json!({
+            "approved": true,
+            "frozen": false,
+            "checkpoint_uncertain": false,
+            "closed_on_github": false,
+            "failed_step": "qa"
+        });
+        let request = Dispatch {
+            item: "i".into(),
+            role: "qa".into(),
+            generation: 1,
+            inputs: json!({"step":"qa"}),
+            plan_sha: "plan".into(),
+            policy_version: 1,
+            capability: "tests".into(),
+            idempotency_key: "qa-key".into(),
+            thread_id: "i".into(),
+            interrupt_id: "qa-interrupt".into(),
+        };
+        assert!(!reconcile_interrupted_qa(t.path(), "missing", "i", 1, &request, &state).unwrap());
+    }
+
     #[test]
     fn completed_supervisor_retry_resumes_automatically_without_approving() {
         let t = fixture();
