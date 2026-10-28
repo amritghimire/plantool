@@ -49,6 +49,38 @@ async def test_every_role_dispatch_interrupt_resume_and_both_gates(tmp_path):
             assert len(seen)==7
 
 @pytest.mark.asyncio
+async def test_authoritative_workflow_advance_survives_role_handoff(tmp_path):
+    original={"item":"p:stale-infra","step":"backend","generation":0,"sequence":7,"plan_sha":"a"*64,"policy_version":1,"areas":["backend"],"owners":{"T1":"backend"},"retries":{},"supervisor_rounds":0,"frozen":False,"approved":True,"infra_changed":True,"affected_files":["playground/text.py"],"acceptance_criteria":["slug works"]}
+    facts=copy.deepcopy(original);contexts=0;roles=[]
+    async def daemon(request):
+        nonlocal contexts
+        path=request.url.path
+        if path.endswith('/health'):return httpx.Response(200,json=VERSIONS)
+        data=json.loads(request.content)
+        if path.endswith('/workflow_context'):
+            contexts+=1
+            if contexts>1:
+                facts.update(step='devops',infra_changed=False,generation=1,sequence=8)
+            return httpx.Response(200,json={"state":facts,"policy_version":1})
+        if path.endswith('/request_dispatch'):
+            roles.append(data['role'])
+            return httpx.Response(200,json={"attempt_id":"a"+str(data['generation']),"generation":data['generation']})
+        raise AssertionError(path)
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    headers={"x-plantool-worker-token":'t'*40,"x-plantool-contract-version":str(VERSIONS['contract_version'])}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers=headers) as client:
+            started=await client.post('/internal/v1/start',json={"thread_id":"p:stale-infra","graph":"work_item","input":{"workflow":original},"idempotency_key":"start",**VERSIONS})
+            assert started.status_code==200,started.text
+            value={"item":"p:stale-infra","role":"backend","attempt_id":"a1","generation":1,"outcome":"done","summary":"Implementation accepted","tasks_done":["T1"],"artifacts":[],"checks":[],"findings":[],"next":None,"review_guide":None,"details":None}
+            resumed=await client.post('/internal/v1/resume',json={"thread_id":"p:stale-infra","interrupt_id":started.json()['interrupt_id'],"value":value,"idempotency_key":"resume",**VERSIONS})
+            assert resumed.status_code==200,resumed.text
+            assert resumed.json()['state']=='interrupted'
+            # Re-entering the interrupted node reuses its dispatch key; it
+            # does not create a second model attempt before adopting DevOps.
+            assert roles==['backend','backend','devops']
+
+@pytest.mark.asyncio
 async def test_llm_role_scope_and_cached_result_use_no_real_provider(tmp_path):
     calls=[]
     async def daemon(request):

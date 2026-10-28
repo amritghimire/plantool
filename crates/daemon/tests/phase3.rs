@@ -673,6 +673,27 @@ async fn main_movement_rebases_and_invalidates_qa_and_review_evidence() {
     assert!(qa.is_none() && review.is_none());
     assert!(!lifecycle::policy_facts(&f.home, &f.item, &head).unwrap());
 }
+
+#[test]
+fn backend_completion_recalculates_devops_from_the_committed_diff() {
+    let f = Fixture::new();
+    f.planning();
+    f.approve_plan();
+    let mut state = f.state();
+    state["infra_changed"] = json!(true);
+    let mut db = database::open(&f.home).unwrap();
+    let tx = db.transaction().unwrap();
+    workflow::save(&tx, &f.item, &state).unwrap();
+    tx.commit().unwrap();
+
+    // The backend fixture changes only src/a.rs. A stale plan-time infra flag
+    // must not send this change to DevOps or desynchronize the worker graph.
+    f.run("backend", None, vec!["T1".into()]);
+
+    assert_eq!(f.state()["step"], "qa");
+    assert_eq!(f.state()["infra_changed"], false);
+}
+
 #[tokio::test]
 async fn rebase_conflicts_return_to_an_implementer_without_publishing() {
     let f = Fixture::new();

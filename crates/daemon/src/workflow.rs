@@ -805,6 +805,22 @@ pub fn record(
             || p == "flake.nix"
             || p == "Cargo.toml"
             || p.ends_with("lock")));
+        // The next role depends on the committed diff, not the plan-time flag.
+        // A stale flag can survive a recovery/rebase and otherwise route a
+        // backend-only change to DevOps while the worker computes QA.
+        if result.outcome == Outcome::Done && (step == "backend" || step == "frontend") {
+            s["step"] = json!(if step == "backend"
+                && s["areas"]
+                    .as_array()
+                    .is_some_and(|areas| areas.contains(&json!("frontend")))
+            {
+                "frontend"
+            } else if s["infra_changed"] == true {
+                "devops"
+            } else {
+                "qa"
+            });
+        }
         if (step == "backend" || step == "frontend")
             && s["step"] == "qa"
             && s["infra_changed"] == true

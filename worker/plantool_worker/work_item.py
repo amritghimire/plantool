@@ -110,12 +110,28 @@ async def build_step(daemon, store, state):
             if updated["step"]!=facts["state"]["step"] or (updated["step"]=="discussion" and updated["discussion"]!=facts["state"]["discussion"]):raise RuntimeError("Discussion projection mismatch")
             updated.update(generation=facts["state"]["generation"],sequence=facts["state"]["sequence"],policy_version=facts["policy_version"])
             return {"workflow":updated,"result":updated}
+        previous_sequence=workflow.get("sequence",0)
+        previous_plan=workflow.get("plan_sha")
         for key in ["urgent","phase_restart","head_sha","preset","phases","research_sha","research_approved","discuss_enabled","discussion","discussion_summary","areas","owners","plan_sha","infra_changed","generation","sequence","affected_files","acceptance_criteria","route_retry","retry_not_before","supervisor_retries","docs_changed","docs_rounds"]:
             if key in facts["state"]: workflow[key]=facts["state"][key]
         updated=route(workflow,result)
         if step in {"backend","frontend"} and updated["step"]=="qa" and workflow.get("infra_changed"): updated["step"]="devops"
         if workflow.get("phase_restart"): updated["step"]="qa"
-        if updated["step"]!=facts["state"]["step"]: raise RuntimeError("Daemon rejected graph transition")
+        if updated["step"]!=facts["state"]["step"]:
+            current=facts["state"]
+            # The daemon records a completed role result before this graph
+            # node resumes. If its authoritative transition differs (for
+            # example, because it recalculated infrastructure from the actual
+            # commit), adopt that newer projection instead of failing the
+            # worker after the result has already been accepted.
+            advanced = (
+                result.get("outcome")=="done"
+                    and previous_plan==current.get("plan_sha")
+                and current.get("generation",0)>=result.get("generation",0)
+                    and current.get("sequence",0)>previous_sequence
+            )
+            if not advanced: raise RuntimeError("Daemon rejected graph transition")
+            updated={**current,"policy_version":facts["policy_version"]}
         updated["policy_version"]=facts["policy_version"]
         updated["summary"]=result["summary"]
         if "phase_index" in facts["state"]: updated["phase_index"]=facts["state"]["phase_index"]
