@@ -548,17 +548,61 @@ fn reconcile_interrupted_qa(
     )?;
     let default_ref = crate::instructions::default_ref(&root)?;
     let default = crate::git::git(&root, &["rev-parse", &default_ref])?;
-    if crate::git::git(
+    let on_current_base = crate::git::git(
         &root,
         &["merge-base", "--is-ancestor", &default, &checkpoint],
     )
-    .is_err()
-    {
-        return Ok(false);
-    }
+    .is_ok();
+    let mut approved_base_for_reapply = None;
+    let reapply_on_current_base = if on_current_base {
+        false
+    } else {
+        let (approved_base, current_head): (String, String) = db.query_row(
+            "SELECT base_sha,head_sha FROM workflow_items WHERE item_id=?1",
+            [item],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let already_reapplied: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM audit WHERE subject=?1
+               AND action='attempt.qa_stale_base_reapplied'
+               AND json_extract(metadata_json,'$.approved_plan')=?2)",
+            params![item, request.plan_sha],
+            |row| row.get(0),
+        )?;
+        if already_reapplied
+            || approved_base.is_empty()
+            || current_head != default
+            || crate::git::git(
+                &root,
+                &["merge-base", "--is-ancestor", &approved_base, &default],
+            )
+            .is_err()
+            || crate::git::git(
+                &root,
+                &["merge-base", "--is-ancestor", &approved_base, &checkpoint],
+            )
+            .is_err()
+        {
+            return Ok(false);
+        }
+        approved_base_for_reapply = Some(approved_base);
+        true
+    };
     let rules = crate::execution::Execution::load(home)?.rules(&root);
     let never_sent = crate::sandbox::NeverSent::new(&rules)?;
-    let changed = crate::git::git(&root, &["diff", "--name-only", &default, &checkpoint])?;
+    let changed = if reapply_on_current_base {
+        crate::git::git(
+            &root,
+            &[
+                "diff",
+                "--name-only",
+                approved_base_for_reapply.as_deref().unwrap(),
+                &checkpoint,
+            ],
+        )?
+    } else {
+        crate::git::git(&root, &["diff", "--name-only", &default, &checkpoint])?
+    };
     if changed.is_empty() {
         return Ok(false);
     }
@@ -593,13 +637,27 @@ fn reconcile_interrupted_qa(
     if !still_safe {
         return Ok(false);
     }
+    if reapply_on_current_base {
+        let still_current: bool = tx.query_row(
+            "SELECT base_sha=?2 AND head_sha=?3 FROM workflow_items WHERE item_id=?1",
+            params![item, approved_base_for_reapply.as_deref().unwrap(), default],
+            |row| row.get(0),
+        )?;
+        if !still_current {
+            return Ok(false);
+        }
+    }
     let result = RoleResult {
         item: item.into(),
         role: "qa".into(),
         attempt_id: attempt.into(),
         generation,
         outcome: Outcome::Failed,
-        summary: "Interrupted QA attempt reconciled; no test result was accepted.".into(),
+        summary: if reapply_on_current_base {
+            "Interrupted QA result was not accepted. The approved change is based on an older default, so implementation is being reapplied on the current default before QA.".into()
+        } else {
+            "Interrupted QA attempt reconciled; no test result was accepted.".into()
+        },
         tasks_done: vec![],
         artifacts: vec![],
         checks: vec![],
@@ -614,15 +672,33 @@ fn reconcile_interrupted_qa(
     )?;
     tx.execute("UPDATE attempts SET state='failed',ended_at=?2,outcome_json=?3 WHERE id=?1 AND state='recovery_needed'", params![attempt, plantool_core::now(), serde_json::to_string(&result)?])?;
     let mut next = state.clone();
-    next["step"] = json!("qa");
-    next["head_sha"] = json!(checkpoint);
+    next["step"] = json!(if reapply_on_current_base {
+        "backend"
+    } else {
+        "qa"
+    });
+    next["head_sha"] = json!(if reapply_on_current_base {
+        &default
+    } else {
+        &checkpoint
+    });
+    if reapply_on_current_base {
+        next["stale_base_reapplies"] = json!(1);
+    }
     next["sequence"] = json!(state["sequence"].as_u64().unwrap_or(0) + 1);
     next["generation"] = json!(generation);
     workflow::save(&tx, item, &next)?;
-    tx.execute(
-        "UPDATE workflow_items SET head_sha=?2,last_error=NULL WHERE item_id=?1",
-        params![item, checkpoint],
-    )?;
+    if reapply_on_current_base {
+        tx.execute(
+            "UPDATE workflow_items SET base_sha=?2,head_sha=?2,last_error=NULL WHERE item_id=?1",
+            params![item, default],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE workflow_items SET head_sha=?2,last_error=NULL WHERE item_id=?1",
+            params![item, checkpoint],
+        )?;
+    }
     tx.execute(
         "UPDATE outbox SET delivered_at=?2,result_json=?3 WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind IN('worker.start','worker.resume','worker.cancel','worker.recover')",
         params![item, plantool_core::now(), json!({"superseded_by_safe_qa_recovery":true}).to_string()],
@@ -631,7 +707,11 @@ fn reconcile_interrupted_qa(
         thread_id: item.into(),
         graph: plantool_contract::Graph::WorkItem,
         input: json!({"workflow":next}),
-        idempotency_key: format!("qa-reconcile:{attempt}"),
+        idempotency_key: if reapply_on_current_base {
+            format!("qa-stale-base-reapply:{attempt}")
+        } else {
+            format!("qa-reconcile:{attempt}")
+        },
         contract_version: plantool_contract::CONTRACT_VERSION,
         graph_version: plantool_contract::GRAPH_VERSION,
     };
@@ -639,11 +719,29 @@ fn reconcile_interrupted_qa(
     database::audit(
         &tx,
         "daemon",
-        "attempt.qa_reconciled",
+        if reapply_on_current_base {
+            "attempt.qa_stale_base_reapplied"
+        } else {
+            "attempt.qa_reconciled"
+        },
         attempt,
-        &json!({"checkpoint":checkpoint,"approved_plan":request.plan_sha,"previous_state":state}),
+        &json!({"checkpoint":checkpoint,"current_default":default,"approved_plan":request.plan_sha,"previous_state":state}),
     )?;
-    crate::workspace::operational(&tx, item, "QA resumed", &format!("qa-reconcile:{attempt}"), "The approved implementation is intact. The interrupted QA run was not counted; verification is starting again.")?;
+    crate::workspace::operational(
+        &tx,
+        item,
+        if reapply_on_current_base {
+            "Implementation resumed"
+        } else {
+            "QA resumed"
+        },
+        &format!("qa-reconcile:{attempt}"),
+        if reapply_on_current_base {
+            "The old QA run did not produce a result. The approved change is being reapplied to the current default before checks run."
+        } else {
+            "The approved implementation is intact. The interrupted QA run was not counted; verification is starting again."
+        },
+    )?;
     tx.commit()?;
     Ok(true)
 }
@@ -1019,7 +1117,7 @@ mod tests {
         );
     }
     #[test]
-    fn interrupted_qa_restarts_at_the_approved_commit_without_accepting_results() {
+    fn interrupted_qa_on_stale_base_reapplies_approved_scope_before_qa() {
         use plantool_contract::{Artifact, Dispatch, Outcome, RoleResult};
         let t = fixture();
         let home = t.path();
@@ -1037,6 +1135,10 @@ mod tests {
         crate::git::git(&root, &["add", "."]).unwrap();
         crate::git::git(&root, &["commit", "-qm", "base"]).unwrap();
         let base = crate::git::git(&root, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(root.join("default-only.txt"), "new default content\n").unwrap();
+        crate::git::git(&root, &["add", "."]).unwrap();
+        crate::git::git(&root, &["commit", "-qm", "advance default branch"]).unwrap();
+        let default = crate::git::git(&root, &["rev-parse", "HEAD"]).unwrap();
         let implementation = home.join("worktrees/backend");
         std::fs::create_dir_all(implementation.parent().unwrap()).unwrap();
         crate::git::git(
@@ -1079,13 +1181,13 @@ mod tests {
         )
         .unwrap();
         db.execute("UPDATE work_items SET approved_plan_revision_id='qa-plan',state_json='{}' WHERE id='i'", []).unwrap();
-        // Older workflow projections can omit the checkpoint while retaining
-        // only the base commit in the daemon row. QA must recover the exact
-        // accepted implementation commit from the backend receipt.
+        // The projection omitted the implementation checkpoint. The daemon
+        // row still identifies the current default, while the accepted backend
+        // receipt is based on an older default and remains within plan scope.
         let state = json!({"item":"i","step":"supervisor","failed_step":"qa","approved":true,"frozen":false,"checkpoint_uncertain":false,"closed_on_github":false,"plan_sha":plan,"generation":2,"sequence":8,"affected_files":["src.py"]});
         db.execute(
             "UPDATE workflow_items SET base_sha=?1,head_sha=?2,state_json=?3 WHERE item_id='i'",
-            params![base, base, state.to_string()],
+            params![base, default, state.to_string()],
         )
         .unwrap();
         db.execute(
@@ -1172,8 +1274,9 @@ mod tests {
         std::fs::remove_file(root.join("owner-notes.txt")).unwrap();
         reconcile_clean_coding(home).unwrap();
         let reconciled = workflow::state(&db, "i").unwrap().unwrap();
-        assert_eq!(reconciled["step"], "qa");
-        assert_eq!(reconciled["head_sha"], head);
+        assert_eq!(reconciled["step"], "backend");
+        assert_eq!(reconciled["head_sha"], default);
+        assert_eq!(reconciled["stale_base_reapplies"], 1);
         assert_eq!(reconciled["approved"], true);
         let status: String = db
             .query_row("SELECT state FROM attempts WHERE id='qa'", [], |r| r.get(0))
@@ -1186,7 +1289,17 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(summary.contains("no test result was accepted"));
+        assert!(summary.contains("result was not accepted"));
+        assert!(summary.contains("older default"));
+        let (new_base, new_head): (String, String) = db
+            .query_row(
+                "SELECT base_sha,head_sha FROM workflow_items WHERE item_id='i'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(new_base, default);
+        assert_eq!(new_head, default);
         let recovery: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id='i' AND kind='worker.recover' AND delivered_at IS NULL)", [], |r| r.get(0)).unwrap();
         assert!(recovery);
         let completed_qa: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id='i' AND role='qa' AND state='completed')", [], |r| r.get(0)).unwrap();
