@@ -16,7 +16,7 @@ export function AppShell() {
           <NavLink to="/personal">Personal</NavLink>
           <NavLink to="/engineering">Engineering OS</NavLink>
           <NavLink to="/workspace">Workspace</NavLink>
-          <NavLink to="/settings">Settings</NavLink>
+          <NavLink to="/settings/access">Access &amp; permissions</NavLink>
         </nav>
         <div className="spacer" />
         <ExecutionControls />
