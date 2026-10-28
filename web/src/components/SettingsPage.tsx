@@ -11,6 +11,7 @@ import { LoopSettings } from "./LoopSettings";
 import { NeverSentSettings } from "./NeverSentSettings";
 import { RetentionSettings } from "./RetentionSettings";
 const sections = [
+  ["access", "Access & permissions"],
   ["general", "Personal"],
   ["github", "GitHub & approvers"],
   ["worker", "Worker"],
@@ -75,7 +76,20 @@ export function SettingsPage() {
         </nav>
       </aside>
       <section className="settings-content" key={section}>
-        {section === "general" ? (
+        {section === "access" ? (
+          <>
+            <h2>Access and permissions</h2>
+            <p>
+              Review GitHub, worker, and model access in one place. Each action
+              explains what it needs and asks for its own passkey or system
+              authorization when required. Approvals for plans and changes stay
+              separate.
+            </p>
+            <GithubSettings mode="settings" />
+            <WorkerSettings expanded showItems={false} />
+            <ModelSettings expanded />
+          </>
+        ) : section === "general" ? (
           <SettingsDialog embedded onClose={() => {}} />
         ) : section === "github" ? (
           <>
