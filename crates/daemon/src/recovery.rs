@@ -388,6 +388,8 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
         let Some(head) = observed_checkpoint(&path, &checkpoint, &default, &s, &policy)? else {
             continue;
         };
+        let based_on_current_default =
+            crate::git::git(&path, &["merge-base", "--is-ancestor", &default, &head]).is_ok();
         if request.role == "qa" && head != checkpoint && head != default {
             continue;
         }
@@ -422,8 +424,8 @@ pub fn reconcile_clean_coding(home: &Path) -> anyhow::Result<()> {
             params![id, plantool_core::now(), serde_json::to_string(&result)?],
         )?;
         tx.execute(
-            "UPDATE workflow_items SET base_sha=CASE WHEN base_sha=?3 AND ?2=?4 THEN ?2 ELSE base_sha END,head_sha=?2,last_error=NULL WHERE item_id=?1",
-            params![item, head, checkpoint,default],
+            "UPDATE workflow_items SET base_sha=CASE WHEN ?3 THEN ?4 ELSE base_sha END,head_sha=?2,last_error=NULL WHERE item_id=?1",
+            params![item, head, based_on_current_default, default],
         )?;
         tx.execute("UPDATE work_items SET outcome=NULL WHERE id=?1", [&item])?;
         workflow::save(&tx, &item, &next)?;
@@ -779,6 +781,18 @@ fn observed_checkpoint(
     if head == default {
         return Ok(Some(head));
     }
+    // Older workflow projections can retain a pre-merge base while an
+    // interrupted commit was created on the current default. In that case,
+    // validate only the change introduced after the current default; otherwise
+    // unrelated merged prerequisite files make a safe checkpoint look out of
+    // scope and strand the item. The caller still checks every changed path
+    // against the approved plan and never accepts task/check completion here.
+    let comparison_base =
+        if crate::git::git(path, &["merge-base", "--is-ancestor", default, &head]).is_ok() {
+            default
+        } else {
+            checkpoint
+        };
     let files = crate::git::git(
         path,
         &[
@@ -786,7 +800,7 @@ fn observed_checkpoint(
             "--no-ext-diff",
             "--no-textconv",
             "--name-only",
-            checkpoint,
+            &comparison_base,
             &head,
         ],
     )?;
@@ -985,6 +999,41 @@ mod tests {
         )
         .unwrap()
         .is_none());
+
+        // Simulate a prerequisite merge after the saved workflow base. A
+        // clean commit based on the new default is still adoptable when only
+        // the approved file changed after that default.
+        std::fs::write(root.join("prerequisite.txt"), "merged prerequisite").unwrap();
+        crate::git::git(root, &["add", "."]).unwrap();
+        crate::git::git(root, &["commit", "-qm", "merged prerequisite"]).unwrap();
+        let current_default = crate::git::git(root, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(root.join("code.py"), "updated after prerequisite").unwrap();
+        crate::git::git(root, &["add", "."]).unwrap();
+        crate::git::git(
+            root,
+            &["commit", "-qm", "implementation on current default"],
+        )
+        .unwrap();
+        let refreshed_head = crate::git::git(root, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(
+            observed_checkpoint(root, &base, &current_default, &state, &policy).unwrap(),
+            Some(refreshed_head.clone())
+        );
+        std::fs::write(root.join("unexpected.txt"), "outside approved scope").unwrap();
+        crate::git::git(root, &["add", "."]).unwrap();
+        crate::git::git(root, &["commit", "-qm", "out of scope"]).unwrap();
+        let unsafe_head = crate::git::git(root, &["rev-parse", "HEAD"]).unwrap();
+        assert!(
+            observed_checkpoint(root, &base, &current_default, &state, &policy)
+                .unwrap()
+                .is_none()
+        );
+        crate::git::git(root, &["reset", "--hard", &refreshed_head]).unwrap();
+        assert_eq!(
+            crate::git::git(root, &["rev-parse", "HEAD"]).unwrap(),
+            refreshed_head
+        );
+        assert_ne!(unsafe_head, refreshed_head);
         assert_eq!(
             std::fs::read_to_string(root.join("AC1.log")).unwrap(),
             "evidence retained, not accepted"
@@ -1011,6 +1060,10 @@ mod tests {
         crate::git::git(&root, &["add", "."]).unwrap();
         crate::git::git(&root, &["commit", "-qm", "base"]).unwrap();
         let head = crate::git::git(&root, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(root.join("prerequisite.txt"), "merged prerequisite\n").unwrap();
+        crate::git::git(&root, &["add", "."]).unwrap();
+        crate::git::git(&root, &["commit", "-qm", "merge prerequisite"]).unwrap();
+        let current_default = crate::git::git(&root, &["rev-parse", "HEAD"]).unwrap();
         let tree = t.path().join("worktrees/a");
         std::fs::create_dir_all(tree.parent().unwrap()).unwrap();
         crate::git::git(
@@ -1033,7 +1086,7 @@ mod tests {
         .unwrap();
         db.execute("UPDATE work_items SET approved_plan_revision_id='r'", [])
             .unwrap();
-        db.execute("UPDATE workflow_items SET head_sha=?1,base_sha=?1,state_json=?2",params![head,json!({"item":"i","step":"escalated","frozen":true,"approved":true,"plan_sha":hash,"generation":1,"sequence":1}).to_string()]).unwrap();
+        db.execute("UPDATE workflow_items SET head_sha=?1,base_sha=?1,state_json=?2",params![head,json!({"item":"i","step":"escalated","failed_step":"backend","frozen":true,"approved":true,"plan_sha":hash,"affected_files":["README.md"],"generation":1,"sequence":1}).to_string()]).unwrap();
         db.execute("UPDATE attempts SET generation=2,role='backend',state='recovery_needed',worktree=?1,outcome_json=NULL",[tree.to_str().unwrap()]).unwrap();
         db.execute("UPDATE item_generations SET generation=2", [])
             .unwrap();
@@ -1079,13 +1132,26 @@ mod tests {
         std::fs::write(tree.join("README.md"), "unverified changes\n").unwrap();
         reconcile_clean_coding(t.path()).unwrap();
         assert_eq!(workflow::state(&db, "i").unwrap().unwrap()["frozen"], true);
-        std::fs::write(tree.join("README.md"), "base\n").unwrap();
+        std::fs::write(tree.join("README.md"), "approved checkpoint\n").unwrap();
+        crate::git::git(&tree, &["add", "README.md"]).unwrap();
+        crate::git::git(&tree, &["commit", "-qm", "approved checkpoint"]).unwrap();
+        let checkpoint = crate::git::git(&tree, &["rev-parse", "HEAD"]).unwrap();
         reconcile_clean_coding(t.path()).unwrap();
         reconcile_clean_coding(t.path()).unwrap();
         let state = workflow::state(&db, "i").unwrap().unwrap();
         assert_eq!(state["step"], "backend");
         assert_eq!(state["approved"], true);
         assert_eq!(state["frozen"], false);
+        assert_eq!(state["head_sha"], checkpoint);
+        let (base_sha, head_sha): (String, String) = db
+            .query_row(
+                "SELECT base_sha,head_sha FROM workflow_items WHERE item_id='i'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(base_sha, current_default);
+        assert_eq!(head_sha, checkpoint);
         assert_eq!(
             db.query_row("SELECT state FROM gates WHERE id='approved'", [], |r| {
                 r.get::<_, String>(0)
@@ -1113,7 +1179,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(tree.join("README.md")).unwrap(),
-            "base\n"
+            "approved checkpoint\n"
         );
     }
     #[test]
