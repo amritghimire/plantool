@@ -469,15 +469,51 @@ fn reconcile_interrupted_qa(
     {
         return Ok(false);
     }
-    let Some(checkpoint) = state["head_sha"].as_str() else {
-        // Older interrupted QA runs may predate a recorded implementation
-        // checkpoint. They are not safe to replay automatically.
+    let db = database::open(home)?;
+    // Use the exact commit from the latest accepted implementation receipt when
+    // older workflow projections omit their head. A workflow_items.head_sha can
+    // still be the base commit after a lost event, so it is not sufficient proof
+    // of which code QA should inspect.
+    let (backend_outcome, backend_request): (String, String) = match db
+        .query_row(
+            "SELECT a.outcome_json,d.request_json FROM attempts a JOIN dispatches d ON d.attempt_id=a.id
+             WHERE a.item_id=?1 AND a.generation<?2 AND a.state='completed'
+               AND a.role IN('backend','frontend','devops')
+             ORDER BY a.generation DESC LIMIT 1",
+            params![item, generation],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+    {
+        Some(receipt) => receipt,
+        None => return Ok(false),
+    };
+    let backend: RoleResult = serde_json::from_str(&backend_outcome)?;
+    let backend_request: plantool_contract::Dispatch = serde_json::from_str(&backend_request)?;
+    if backend.outcome != Outcome::Done || backend_request.plan_sha != request.plan_sha {
+        return Ok(false);
+    }
+    let Some(backend_checkpoint) = backend
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.kind == "commit")
+        .map(|artifact| artifact.reference.as_str())
+    else {
         return Ok(false);
     };
-    let db = database::open(home)?;
+    let checkpoint = state["head_sha"]
+        .as_str()
+        .filter(|sha| !sha.is_empty())
+        .unwrap_or(backend_checkpoint);
+    if checkpoint != backend_checkpoint {
+        // A conflicting head needs explicit reconciliation; never guess which
+        // completed attempt represents the approved implementation.
+        return Ok(false);
+    }
+    let checkpoint = checkpoint.to_owned();
     let (_, root) = dispatcher::item(&db, item)?;
-    let (recorded_worktree, active, effects, gate, approved): (String, bool, bool, bool, bool) =
-        db.query_row(
+    let facts: Option<(String, bool, bool, bool, bool)> = db
+        .query_row(
             "SELECT a.worktree,
                EXISTS(SELECT 1 FROM attempts WHERE item_id=?2 AND id<>?1 AND state IN('queued','starting','running','waiting','idle')),
                EXISTS(SELECT 1 FROM supervised_processes WHERE id=?1)
@@ -490,9 +526,13 @@ fn reconcile_interrupted_qa(
                         AND r.content_sha256=?3 AND r.content_sha256=json_extract(?4,'$.plan_sha'))
              FROM attempts a WHERE a.id=?1 AND a.item_id=?2 AND a.state='recovery_needed'
                AND a.role='qa' AND a.generation=?5",
-            params![attempt, item, request.plan_sha, state.to_string(), generation],
+        params![attempt, item, request.plan_sha, state.to_string(), generation],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )?;
+        )
+        .optional()?;
+    let Some((recorded_worktree, active, effects, gate, approved)) = facts else {
+        return Ok(false);
+    };
     if active || effects || gate || !approved {
         return Ok(false);
     }
@@ -510,7 +550,7 @@ fn reconcile_interrupted_qa(
     let default = crate::git::git(&root, &["rev-parse", &default_ref])?;
     if crate::git::git(
         &root,
-        &["merge-base", "--is-ancestor", &default, checkpoint],
+        &["merge-base", "--is-ancestor", &default, &checkpoint],
     )
     .is_err()
     {
@@ -518,7 +558,7 @@ fn reconcile_interrupted_qa(
     }
     let rules = crate::execution::Execution::load(home)?.rules(&root);
     let never_sent = crate::sandbox::NeverSent::new(&rules)?;
-    let changed = crate::git::git(&root, &["diff", "--name-only", &default, checkpoint])?;
+    let changed = crate::git::git(&root, &["diff", "--name-only", &default, &checkpoint])?;
     if changed.is_empty() {
         return Ok(false);
     }
@@ -535,26 +575,6 @@ fn reconcile_interrupted_qa(
             return Ok(false);
         }
     }
-    let (backend_outcome, backend_request): (String, String) = db.query_row(
-        "SELECT a.outcome_json,d.request_json FROM attempts a JOIN dispatches d ON d.attempt_id=a.id
-         WHERE a.item_id=?1 AND a.generation<?2 AND a.state='completed'
-           AND a.role IN('backend','frontend','devops')
-         ORDER BY a.generation DESC LIMIT 1",
-        params![item, generation],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let backend: plantool_contract::RoleResult = serde_json::from_str(&backend_outcome)?;
-    let backend_request: plantool_contract::Dispatch = serde_json::from_str(&backend_request)?;
-    if backend.outcome != Outcome::Done
-        || backend_request.plan_sha != request.plan_sha
-        || !backend
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.kind == "commit" && artifact.reference == checkpoint)
-    {
-        return Ok(false);
-    }
-
     let mut conn = database::open(home)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if workflow::state(&tx, item)? != Some(state.clone()) {
@@ -595,6 +615,7 @@ fn reconcile_interrupted_qa(
     tx.execute("UPDATE attempts SET state='failed',ended_at=?2,outcome_json=?3 WHERE id=?1 AND state='recovery_needed'", params![attempt, plantool_core::now(), serde_json::to_string(&result)?])?;
     let mut next = state.clone();
     next["step"] = json!("qa");
+    next["head_sha"] = json!(checkpoint);
     next["sequence"] = json!(state["sequence"].as_u64().unwrap_or(0) + 1);
     next["generation"] = json!(generation);
     workflow::save(&tx, item, &next)?;
@@ -1058,10 +1079,13 @@ mod tests {
         )
         .unwrap();
         db.execute("UPDATE work_items SET approved_plan_revision_id='qa-plan',state_json='{}' WHERE id='i'", []).unwrap();
-        let state = json!({"item":"i","step":"supervisor","failed_step":"qa","approved":true,"frozen":false,"checkpoint_uncertain":false,"closed_on_github":false,"plan_sha":plan,"generation":2,"sequence":8,"head_sha":head,"affected_files":["src.py"]});
+        // Older workflow projections can omit the checkpoint while retaining
+        // only the base commit in the daemon row. QA must recover the exact
+        // accepted implementation commit from the backend receipt.
+        let state = json!({"item":"i","step":"supervisor","failed_step":"qa","approved":true,"frozen":false,"checkpoint_uncertain":false,"closed_on_github":false,"plan_sha":plan,"generation":2,"sequence":8,"affected_files":["src.py"]});
         db.execute(
-            "UPDATE workflow_items SET base_sha=?1,head_sha=?1,state_json=?2 WHERE item_id='i'",
-            params![base, state.to_string()],
+            "UPDATE workflow_items SET base_sha=?1,head_sha=?2,state_json=?3 WHERE item_id='i'",
+            params![base, base, state.to_string()],
         )
         .unwrap();
         db.execute(
