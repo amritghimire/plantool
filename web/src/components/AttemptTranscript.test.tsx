@@ -31,14 +31,19 @@ it("refreshes an open transcript while its attempt is running", async () => {
   const liveAttempt = { ...attempt, state: "running" };
   const transcript = vi.spyOn(api, "engineeringTranscript")
     .mockResolvedValueOnce({ attempt: "a1", events: [] })
+    .mockResolvedValueOnce({ attempt: "a1", events: [
+      { seq: 1, event: { type: "message", id: "m2", role: "assistant", content: "The plan fields were incomplete." } },
+    ] })
     .mockResolvedValue({ attempt: "a1", events: [
       { seq: 1, event: { type: "message", id: "m2", role: "assistant", content: "The plan fields were incomplete." } },
+      { seq: 2, event: { type: "message", id: "m3", role: "assistant", content: "I am correcting the plan now." } },
     ] });
   render(<AttemptTranscript item="p:1" attempt={liveAttempt} />);
   fireEvent.click(screen.getByText("View AI transcript"));
   expect(await screen.findByText(/No provider events have arrived yet/)).toBeInTheDocument();
   await waitFor(() => expect(screen.getByText("The plan fields were incomplete.")).toBeInTheDocument(), { timeout: 4000 });
-  expect(transcript.mock.calls.length).toBeGreaterThanOrEqual(2);
+  await waitFor(() => expect(screen.getByText("I am correcting the plan now.")).toBeInTheDocument(), { timeout: 4000 });
+  expect(transcript.mock.calls.length).toBeGreaterThanOrEqual(3);
 });
 
 it("explains when a completed historical attempt has no retained transcript", async () => {

@@ -19,8 +19,8 @@ export function AttemptTranscript({
   const [open, setOpen] = useState(false);
   const eventsRef = useRef<RunLine[] | null>(null);
   const busyRef = useRef(false);
-  const load = async () => {
-    if (eventsRef.current?.length || busyRef.current) return;
+  const load = async (refresh = false) => {
+    if ((!refresh && eventsRef.current !== null) || busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError("");
@@ -46,7 +46,7 @@ export function AttemptTranscript({
     if (!open) return;
     void loadRef.current();
     if (!active) return;
-    const timer = window.setInterval(() => void loadRef.current(), 2000);
+    const timer = window.setInterval(() => void loadRef.current(true), 2000);
     return () => window.clearInterval(timer);
   }, [open, active]);
   const projected = events ? projectRun(events) : null;
