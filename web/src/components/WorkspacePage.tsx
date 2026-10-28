@@ -263,7 +263,7 @@ export function WorkspacePage() {
                 void reply();
               }}
             >
-              {thread.question && <section className="panel" role="status"><h3>Answer needed</h3><p>{thread.question.question}</p>{thread.question.settling && <p>Recording the question… You can answer when this finishes.</p>}<p>Your answer queues a read-only review. It does not approve implementation or change approval gates.</p></section>}
+              {thread.question && <section className="panel workspace-question" role="status"><h3>Answer needed</h3><p>{thread.question.question}</p>{thread.question.options?.length ? <div className="button-row" aria-label="Suggested answers">{thread.question.options.map(option=><button className="btn" key={option} type="button" disabled={!!sending||!!thread.question?.settling} onClick={()=>setDrafts(d=>({...d,[thread.id]:{body:option,key:crypto.randomUUID()}}))}>{option}</button>)}</div> : null}{thread.question.settling && <p>Recording the question… You can answer when this finishes.</p>}<p>Your answer queues a read-only review. It does not approve implementation or change approval gates.</p></section>}
               <label htmlFor="owner-context">{thread.question ? "Your answer" : "Owner reply · context only"}</label>
               <textarea
                 id="owner-context"

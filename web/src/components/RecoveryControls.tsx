@@ -17,6 +17,7 @@ export function RecoveryControls({
     <section className="next-action">
       <strong>Owner recovery</strong>
       <p>{data?.message ?? "Checking recovery eligibility…"}</p>
+      {!data?.eligible && data?.attempt_id && <a href={`#attempt-transcript-${data.attempt_id}`}>Open the latest attempt transcript ↓</a>}
       {data?.routing_error && <p role="alert">No eligible model route now: {data.routing_error}. Update and verify routes in Settings → Models & providers; this panel refreshes current eligibility automatically.</p>}
       {data?.eligible && (
         <>

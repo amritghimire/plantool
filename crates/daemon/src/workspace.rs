@@ -1,7 +1,7 @@
 //! Project-visible, turn-based discussions. Messages are context, never approval.
 use crate::{database, dispatcher};
 use anyhow::{ensure, Context};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use std::path::Path;
 pub const ROLES: &[&str] = &[
@@ -234,8 +234,13 @@ pub fn snapshot(home: &Path) -> anyhow::Result<Value> {
     for t in &mut threads {
         if let Some(item) = t["item"].as_str().map(str::to_owned) {
             if let Some(state) = crate::workflow::state(&db, &item)? {
-                if state["step"] == "owner_question" {
-                    t["question"] = state["owner_question"].clone();
+                let question = if state["owner_question"].is_object() {
+                    Some(state["owner_question"].clone())
+                } else {
+                    blocker_question(&db, &item, &state)?
+                };
+                if let Some(question) = question {
+                    t["question"] = question;
                     t["question"]["settling"] = json!(db.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind LIKE 'worker.%')", [item], |r| r.get::<_,bool>(0))?);
                 }
             }
@@ -244,6 +249,62 @@ pub fn snapshot(home: &Path) -> anyhow::Result<Value> {
         t["messages"]=json!(q.query_map([t["id"].as_str().unwrap()],|r|Ok(json!({"id":r.get::<_,String>(0)?,"sender":r.get::<_,String>(1)?,"body":r.get::<_,String>(2)?,"mentions":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!([])),"at":r.get::<_,String>(4)?})))?.collect::<Result<Vec<_>,_>>()?);
     }
     Ok(json!({"projects":projects,"threads":threads}))
+}
+/// Frozen supervisor escalations with no approval gate, uncertain write, active
+/// attempt or pending external effect get a deterministic workspace question.
+/// The choices are guidance for a read-only supervisor review, never approvals.
+pub(crate) fn blocker_question(
+    db: &rusqlite::Connection,
+    item: &str,
+    state: &Value,
+) -> anyhow::Result<Option<Value>> {
+    if state["step"] != "escalated"
+        || state["frozen"] != true
+        || state["checkpoint_uncertain"] == true
+    {
+        return Ok(None);
+    }
+    let blocked: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle','recovery_needed')) OR EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND state IN('open','pending')) OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind NOT LIKE 'worker.%' AND kind<>'github.status')",
+        [item],
+        |r| r.get(0),
+    )?;
+    if blocked {
+        return Ok(None);
+    }
+    let latest: Option<(String, Option<String>)> = db.query_row(
+        "SELECT a.id,json_extract(a.outcome_json,'$.summary') FROM attempts a WHERE a.item_id=?1 ORDER BY a.generation DESC LIMIT 1",
+        [item],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional()?;
+    let Some((attempt, summary)) = latest else {
+        return Ok(None);
+    };
+    let failure: Option<String> = db.query_row(
+        "SELECT last_error FROM workflow_items WHERE item_id=?1",
+        [item],
+        |r| r.get(0),
+    )?;
+    let reason = summary
+        .filter(|s| !s.trim().is_empty())
+        .or(failure)
+        .unwrap_or_else(|| {
+            format!(
+                "The {} step could not complete safely",
+                state["failed_step"].as_str().unwrap_or("current")
+            )
+        });
+    let reason = reason.trim().chars().take(500).collect::<String>();
+    Ok(Some(json!({
+        "id":format!("blocked:{attempt}"),
+        "question":format!("Work is paused because: {reason}. What should the team try next? Your answer starts a read-only review; any revised plan or code changes still need the usual approval."),
+        "options":[
+            "Retry this step with the approved plan",
+            "Try a different approach and show me a revised plan if scope changes",
+            "I fixed the blocker; check the current evidence again",
+            "I will explain another direction"
+        ]
+    })))
 }
 pub fn owner_reply(home: &Path, thread: &str, body: &str, key: &str) -> anyhow::Result<String> {
     reply_to_question(home, thread, body, key, None)
@@ -274,17 +335,30 @@ pub fn reply_to_question(
         let mut state = crate::workflow::state(&tx, &item)?.context("Workflow missing")?;
         // A replay of the same answer is harmless; a stale answer cannot wake a new question.
         if state["clarification_answer"]["message_id"] != id {
+            let question = if state["owner_question"]["id"] == question_id
+                && state["step"] == "owner_question"
+            {
+                Some(state["owner_question"].clone())
+            } else {
+                blocker_question(&tx, &item, &state)?.filter(|q| q["id"] == question_id)
+            };
+            ensure!(
+                question.is_some(),
+                "Question changed; refresh the thread before answering"
+            );
             ensure!(
                 state["step"] == "owner_question"
-                    && state["frozen"] != true
-                    && state["owner_question"]["id"] == question_id,
-                "Question changed; refresh the thread before answering"
+                    || (state["step"] == "escalated" && state["frozen"] == true),
+                "This item no longer needs an answer; refresh the thread"
             );
             let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE item_id=?1 AND state IN('queued','starting','running','waiting','idle','recovery_needed')) OR EXISTS(SELECT 1 FROM gates WHERE item_id=?1 AND state IN('open','pending')) OR EXISTS(SELECT 1 FROM outbox WHERE aggregate_id=?1 AND delivered_at IS NULL AND kind<>'github.status')", [&item], |r| r.get(0))?;
             ensure!(!blocked, "The question is still being recorded, or an active attempt, approval gate or uncertain external effect needs attention. Refresh and retry after pending workflow delivery completes");
-            state["clarification_answer"] = json!({"question":state["owner_question"]["question"],"answer":body,"message_id":id});
+            let question = question.unwrap();
+            state["clarification_answer"] =
+                json!({"question":question["question"],"answer":body,"message_id":id});
             state["owner_question"] = Value::Null;
             state["step"] = json!("supervisor");
+            state["frozen"] = json!(false);
             state["supervisor_rounds"] = json!(0);
             state["sequence"] = json!(state["sequence"].as_u64().unwrap_or(0) + 1);
             crate::workflow::save(&tx, &item, &state)?;
@@ -442,6 +516,46 @@ mod tests {
         );
         assert!(
             reply_to_question(home.path(), &thread, "different", "answer2", Some("q1")).is_err()
+        );
+    }
+    #[test]
+    fn frozen_safe_escalation_offers_choices_and_answer_resumes_supervisor_without_approving() {
+        let (home, db, _) = setup();
+        let frozen = json!({"item":"p:1","project":"p","step":"escalated","failed_step":"qa","frozen":true,"sequence":7,"generation":2,"approved":true,"plan_sha":"approved-plan","checkpoint_uncertain":false});
+        db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES('p:1',?1,'base','head')", [frozen.to_string()]).unwrap();
+        db.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,idempotency_key,run_json,outcome_json) VALUES('attempt-7','p:1','supervisor',7,'route','completed','/checkout','now','attempt-7','{}',?1)", [json!({"summary":"QA could not verify the required check"}).to_string()]).unwrap();
+        let thread = item_thread(&db, "p:1").unwrap();
+        let question = snapshot(home.path()).unwrap()["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == thread)
+            .unwrap()["question"]
+            .clone();
+        assert_eq!(question["id"], "blocked:attempt-7");
+        assert_eq!(question["options"].as_array().unwrap().len(), 4);
+        let answer = reply_to_question(
+            home.path(),
+            &thread,
+            question["options"][1].as_str().unwrap(),
+            "blocker-answer-1",
+            Some("blocked:attempt-7"),
+        )
+        .unwrap();
+        let state = crate::workflow::state(&db, "p:1").unwrap().unwrap();
+        assert_eq!(state["step"], "supervisor");
+        assert_eq!(state["frozen"], false);
+        assert_eq!(state["approved"], true);
+        assert_eq!(state["plan_sha"], "approved-plan");
+        assert_eq!(state["clarification_answer"]["message_id"], answer);
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM outbox WHERE aggregate_id='p:1' AND kind='worker.recover'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+            1
         );
     }
     fn result(role: &str, n: u64, body: &str, decision: Option<&str>) -> RoleResult {

@@ -135,3 +135,13 @@ it("answers the current clarification in the item thread with its question ident
   await waitFor(()=>expect(reply).toHaveBeenCalledWith(expect.objectContaining({thread:"item",question_id:"q1",body:"Yes, documentation only"})));
   expect(screen.getByText(/does not approve implementation/)).toBeInTheDocument();
 });
+it("fills a blocker answer from its suggested safe next steps", async () => {
+  vi.mocked(api.workspace).mockResolvedValue({...value,threads:value.threads.map(t=>t.id==="item"?{...t,question:{id:"blocked:a1",question:"What should the team try next?",options:["Retry this step with the approved plan","Try a different approach"]}}:t)});
+  const reply=vi.spyOn(api,"workspaceReply").mockResolvedValue({id:"answer",authority:"context_only"});
+  render(<MemoryRouter initialEntries={["/workspace?project=p&item=p%3A1"]}><WorkspacePage/></MemoryRouter>);
+  await screen.findByText("What should the team try next?");
+  fireEvent.click(screen.getByRole("button",{name:"Retry this step with the approved plan"}));
+  expect(screen.getByLabelText("Your answer")).toHaveValue("Retry this step with the approved plan");
+  fireEvent.click(screen.getByRole("button",{name:"Answer question"}));
+  await waitFor(()=>expect(reply).toHaveBeenCalledWith(expect.objectContaining({thread:"item",question_id:"blocked:a1",body:"Retry this step with the approved plan"})));
+});

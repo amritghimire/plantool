@@ -173,7 +173,10 @@ pub fn next_action(db: &rusqlite::Connection, item: &str, state: &Value) -> anyh
     }
     let (kind, message, href, button) = if step == "closed" || step == "merged" {
         ("done", "This item is finished.", String::new(), "")
-    } else if step == "owner_question" {
+    } else if step == "owner_question"
+        || state["owner_question"].is_object()
+        || crate::workspace::blocker_question(db, item, state)?.is_some()
+    {
         (
             "question",
             "Reply to the question so planning can continue.",

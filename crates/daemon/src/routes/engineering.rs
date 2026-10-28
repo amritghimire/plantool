@@ -96,6 +96,16 @@ async fn item(
         .map(Json)
         .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))
 }
+async fn transcript(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, attempt)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    human(&state, &headers)?;
+    crate::engineering_view::transcript(&state.config.home, &id, &attempt)
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))
+}
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct SetupCursor {
@@ -179,8 +189,25 @@ async fn recovery(
     } else {
         None
     };
+    let message = if facts["eligible"] == true {
+        if facts["review"] == true {
+            "Review this paused planning decision using current evidence. Existing approvals are preserved."
+        } else {
+            "Retry this failed read-only step. Existing approvals and old checkpoints are preserved."
+        }
+    } else if facts["state"]["checkpoint_uncertain"] == true {
+        "The last checkpoint was not acknowledged, so its result is uncertain. PlanTool will not replay it. Open the attempt transcript below and compare the saved checkout with GitHub before choosing recovery."
+    } else if facts["active"] == true {
+        "A role attempt is still queued, running or being recovered. Let that handoff finish; PlanTool will refresh this item automatically."
+    } else if facts["gates"] == true {
+        "An approval gate is still open. Review the exact plan or checkpoint on GitHub; workspace replies do not approve it."
+    } else if facts["external"] == true {
+        "A GitHub action has an uncertain delivery. PlanTool is checking its existing request before retrying, to avoid duplicates."
+    } else {
+        "This step is not safe to replay automatically. Open its transcript below to see the exact result and current evidence; any new plan or changes still need their normal approval."
+    };
     Ok(Json(
-        json!({"routing_error":routing_error,"review":facts["review"],"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":if facts["eligible"]==true {if facts["review"]==true {"Review this paused planning decision using current evidence. Existing approvals are preserved."}else{"Retry this failed read-only step. Existing approvals and old checkpoints are preserved."}}else{"Recovery requires a failed read-only step, no active/uncertain attempts, no pending external effects and no open gates. Reconcile other work manually."}}),
+        json!({"routing_error":routing_error,"review":facts["review"],"eligible":facts["eligible"],"attempt_id":facts["attempt_id"],"step":facts["step"],"message":message}),
     ))
 }
 async fn retry(
@@ -272,6 +299,10 @@ pub fn browser_routes() -> Router<AppState> {
         .route(
             "/engineering-os/items/{id}/recover",
             get(recovery).post(retry),
+        )
+        .route(
+            "/engineering-os/items/{id}/attempts/{attempt}/transcript",
+            get(transcript),
         )
         .route("/engineering-os/setup", get(setup_cursor).post(save_cursor))
         .route("/engineering-os/projects", get(projects))

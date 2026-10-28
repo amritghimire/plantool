@@ -1076,6 +1076,12 @@ mod tests {
             ],
         )
         .unwrap();
+        for args in [
+            vec!["config", "user.name", "Test"],
+            vec!["config", "user.email", "test@example.com"],
+        ] {
+            crate::git::git(&tree, &args).unwrap();
+        }
         let hash = crate::artifacts::put(t.path(), b"# Plan").unwrap();
         crate::artifacts::register(&db, &hash, 6).unwrap();
         db.execute("INSERT INTO revisions(id,item_id,doc_kind,number,content_sha256,created_by,created_at) VALUES('r','i','plan',1,?1,'test','now')",[&hash]).unwrap();

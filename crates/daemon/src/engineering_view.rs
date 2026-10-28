@@ -150,9 +150,61 @@ pub fn item(home: &Path, id: &str) -> anyhow::Result<Value> {
         json!({"scan_snapshot":scan_snapshot,"scan_sources":scan_sources,"notification_delivery":{"pending":pending},"item":item,"repository":repo,"base":base,"head":head,"attempts":attempts,"gates":gates,"events":events,"history_limit":200}),
     )
 }
+
+/// Read the persisted provider transcript for an Engineering OS attempt.
+/// The item/attempt pair is checked before artifact hashes are followed so a
+/// browser cannot use this endpoint to inspect another item's transcript.
+pub fn transcript(home: &Path, item: &str, attempt: &str) -> anyhow::Result<Value> {
+    let db = database::open(home)?;
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM attempts a JOIN work_items i ON i.id=a.item_id WHERE a.id=?1 AND a.item_id=?2 AND a.hidden=0 AND i.kind='eos' AND i.deleted_at IS NULL)",
+        rusqlite::params![attempt, item],
+        |r| r.get(0),
+    )?;
+    anyhow::ensure!(exists, "Transcript not found for this work item");
+    let mut q =
+        db.prepare("SELECT seq,content_sha256 FROM run_events WHERE attempt_id=?1 ORDER BY seq")?;
+    let refs = q
+        .query_map([attempt], |r| {
+            Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut events = Vec::with_capacity(refs.len());
+    for (seq, sha) in refs {
+        let bytes = crate::artifacts::read(home, &sha)?;
+        let event: Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("Invalid transcript event {seq}"))?;
+        events.push(json!({"seq":seq,"event":event}));
+    }
+    Ok(json!({"attempt":attempt,"events":events}))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn attempt_transcript_is_available_only_through_its_own_engineering_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = database::open(tmp.path()).unwrap();
+        db.execute(
+            "INSERT INTO projects VALUES('p',NULL,NULL,?1,'eos','public','now')",
+            [tmp.path().to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        db.execute("INSERT INTO work_items(id,project_id,kind,title,created_at,repo_slug,slug,session_json) VALUES('i','p','eos','Issue','now','repo','issue','{}')", []).unwrap();
+        db.execute("INSERT INTO workflow_items(item_id,state_json,base_sha,head_sha) VALUES('i','{}','base','head')", []).unwrap();
+        db.execute("INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,idempotency_key,run_json) VALUES('a','i','pm',1,'route','completed','/checkout','now','a','{}')", []).unwrap();
+        let bytes = br#"{"type":"message","role":"assistant","content":"found the issue"}"#;
+        let sha = crate::artifacts::put(tmp.path(), bytes).unwrap();
+        crate::artifacts::register(&db, &sha, bytes.len()).unwrap();
+        db.execute(
+            "INSERT INTO run_events(attempt_id,seq,content_sha256) VALUES('a',1,?1)",
+            [&sha],
+        )
+        .unwrap();
+        let result = transcript(tmp.path(), "i", "a").unwrap();
+        assert_eq!(result["events"][0]["event"]["content"], "found the issue");
+        assert!(transcript(tmp.path(), "other-item", "a").is_err());
+    }
     #[test]
     fn manual_done_column_preserves_workflow_approvals_and_checkpoints() {
         let t = tempfile::tempdir().unwrap();

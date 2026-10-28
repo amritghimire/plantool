@@ -684,7 +684,15 @@ pub fn record(
                     "An exact owner question is required"
                 );
                 s["step"] = json!("owner_question");
-                s["owner_question"] = json!({"id":result.attempt_id,"question":reason});
+                s["owner_question"] = json!({
+                    "id":result.attempt_id,
+                    "question":reason,
+                    "options":[
+                        "Use the safest choice supported by repository evidence",
+                        "Wait; I will provide more context",
+                        "I will explain a different direction"
+                    ]
+                });
                 let thread = crate::workspace::item_thread(tx, &result.item)?;
                 crate::workspace::append(tx, &thread, "daemon", &format!("A question before we continue\n\n{reason}\n\nReply in this thread. Your answer helps planning; any changes still need approval."), &format!("question:{}",result.attempt_id))?;
             }

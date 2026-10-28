@@ -7,6 +7,7 @@ import { api } from "../api";
 import { stepLabel } from "../engineering";
 import { usePolling } from "../lib/usePolling";
 import { RecoveryControls } from "./RecoveryControls";
+import { AttemptTranscript } from "./AttemptTranscript";
 import { GithubSettings } from "./GithubSettings";
 export function EngineeringPage() {
   const { data, error, refresh, updated } = usePolling(api.engineering);
@@ -389,7 +390,7 @@ export function EngineeringItemPage() {
       </div>}
       {(data.notification_delivery?.pending ?? 0)>0 && <p role="status">{data.notification_delivery?.pending} issue status update(s) pending GitHub delivery. The item thread already contains them. Check App access/rate limits if this persists; pending informational updates do not block recovery.</p>}
       <Link to="/settings/models">Diagnose model providers</Link>
-      {item.frozen && <RecoveryControls item={item.id} onRecovered={refresh} />}
+      {item.frozen && item.next_action?.kind !== "question" && <RecoveryControls item={item.id} onRecovered={refresh} />}
       <nav className="detail-tabs" aria-label="Item activity">
         {[
           ["attempts", "Role attempts"],
@@ -426,6 +427,7 @@ export function EngineeringItemPage() {
                   {a.provider ? ` · ${a.provider}` : ""}
                 </p>
                 <p>{a.summary ?? "No result summary recorded yet."}</p>
+                <AttemptTranscript item={item.id} attempt={a} />
                 <div className="small muted">
                   {new Date(a.started_at).toLocaleString()}
                   {a.duration_ms !== null
