@@ -2,6 +2,7 @@ use super::{
     gateway::{Gateway, Reply},
     lease, router,
 };
+use crate::providers::ProviderEvent;
 use crate::{artifacts, database};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
@@ -104,6 +105,99 @@ async fn fenced_chat(
         tokio::select! {reply=&mut future=>return reply,_=tokio::time::sleep(std::time::Duration::from_millis(50))=>{if let Some(attempt)=attempt { let cancelled:bool=database::open(home)?.query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND state='cancelled')",[attempt],|r|r.get(0))?; anyhow::ensure!(!cancelled,"Work item closed or cancelled"); } let status=execution.status();anyhow::ensure!(!status.stopped&&status.generation==generation,"Stop All cancelled the model request");}}
     }
 }
+
+fn content_text(value: &Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_owned();
+    }
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn record_transcript(
+    home: &Path,
+    attempt: &str,
+    request: &Value,
+    response: &str,
+    call_id: &str,
+) -> anyhow::Result<()> {
+    let mut events = Vec::new();
+    if let Some(message) = request["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+    {
+        let role = message["role"].as_str().unwrap_or("");
+        let content = content_text(&message["content"]);
+        if role == "user" && !content.trim().is_empty() {
+            events.push(ProviderEvent::Message {
+                id: format!("proxy-user:{call_id}"),
+                role: "user".into(),
+                content,
+            });
+        } else if role == "tool" {
+            events.push(ProviderEvent::ActivityComplete {
+                id: message["tool_call_id"].as_str().unwrap_or("tool").into(),
+                status: "completed".into(),
+                output: Some(content),
+            });
+        }
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(response) {
+        let message = &value["choices"][0]["message"];
+        let content = content_text(&message["content"]);
+        if !content.trim().is_empty() {
+            events.push(ProviderEvent::Message {
+                id: format!("proxy-assistant:{call_id}"),
+                role: "assistant".into(),
+                content,
+            });
+        }
+        if let Some(calls) = message["tool_calls"].as_array() {
+            for call in calls {
+                events.push(ProviderEvent::ActivityStart {
+                    id: call["id"].as_str().unwrap_or("tool").into(),
+                    kind: "tool".into(),
+                    title: call["function"]["name"].as_str().unwrap_or("Tool").into(),
+                    detail: call["function"]["arguments"]
+                        .as_str()
+                        .map(|value| crate::providers::shorten(value, 1000)),
+                });
+            }
+        }
+    }
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut seq: u64 = tx.query_row(
+        "SELECT coalesce(max(seq),0) FROM run_events WHERE attempt_id=?1",
+        [attempt],
+        |row| row.get(0),
+    )?;
+    for event in events {
+        seq += 1;
+        let bytes = format!("{}\n", serde_json::to_string(&event)?);
+        let sha = artifacts::put(home, bytes.as_bytes())?;
+        artifacts::register(&tx, &sha, bytes.len())?;
+        tx.execute(
+            "INSERT INTO run_events(attempt_id,seq,content_sha256) VALUES(?1,?2,?3)",
+            params![attempt, seq, sha],
+        )?;
+        tx.execute(
+            "INSERT INTO artifact_refs VALUES('transcript',?1,?2,?3,?4)",
+            params![attempt, seq.to_string(), sha, database::unix_now()],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub async fn complete(
     home: &Path,
     owner: &str,
@@ -307,7 +401,7 @@ pub async fn complete(
             reply = fenced_chat(
                 gateway,
                 &selected.route.provider,
-                body,
+                body.clone(),
                 &execution,
                 execution_generation,
                 home,
@@ -328,6 +422,9 @@ pub async fn complete(
             return Err(error);
         }
     };
+    if let Some(attempt) = &attempt {
+        record_transcript(home, attempt, &body, &reply.body, &context.idempotency_key)?;
+    }
     if router::quota(reply.status, &reply.body) || reply.status >= 500 {
         router::exhaust(
             home,
@@ -389,4 +486,77 @@ pub async fn complete(
     tx.commit()?;
     drop(lease);
     Ok(reply)
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use super::*;
+
+    fn attempt(home: &Path) {
+        database::initialize(home).unwrap();
+        let db = rusqlite::Connection::open(database::path(home)).unwrap();
+        db.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        db.execute(
+            "INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,idempotency_key,run_json) VALUES('a','i','pm',1,'route','running','/tmp','now','a','{}')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn proxy_turn_records_user_and_invalid_assistant_output_before_validation() {
+        let temp = tempfile::tempdir().unwrap();
+        attempt(temp.path());
+        let request = json!({"messages":[{"role":"system","content":"private instructions"},{"role":"user","content":"Create a plan"}]});
+        let response =
+            json!({"choices":[{"message":{"role":"assistant","content":"{\\\"tasks\\\":[]}"}}]})
+                .to_string();
+
+        record_transcript(temp.path(), "a", &request, &response, "turn-1").unwrap();
+
+        let db = database::open(temp.path()).unwrap();
+        let mut statement = db
+            .prepare("SELECT content_sha256 FROM run_events WHERE attempt_id='a' ORDER BY seq")
+            .unwrap();
+        let hashes = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(hashes.len(), 2);
+        let user = String::from_utf8(artifacts::read(temp.path(), &hashes[0]).unwrap()).unwrap();
+        let assistant =
+            String::from_utf8(artifacts::read(temp.path(), &hashes[1]).unwrap()).unwrap();
+        assert!(user.contains("Create a plan"));
+        assert!(!user.contains("private instructions"));
+        assert!(assistant.contains("tasks"));
+    }
+
+    #[test]
+    fn proxy_turn_records_tool_calls_and_later_tool_output() {
+        let temp = tempfile::tempdir().unwrap();
+        attempt(temp.path());
+        let request =
+            json!({"messages":[{"role":"tool","tool_call_id":"call-1","content":"file contents"}]});
+        let response = json!({"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call-2","function":{"name":"read_file","arguments":"{\\\"path\\\":\\\"README.md\\\"}"}}]}}]}).to_string();
+
+        record_transcript(temp.path(), "a", &request, &response, "turn-2").unwrap();
+
+        let db = database::open(temp.path()).unwrap();
+        let mut statement = db
+            .prepare("SELECT content_sha256 FROM run_events WHERE attempt_id='a' ORDER BY seq")
+            .unwrap();
+        let hashes = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(hashes.len(), 2);
+        let events = hashes
+            .iter()
+            .map(|sha| String::from_utf8(artifacts::read(temp.path(), sha).unwrap()).unwrap())
+            .collect::<String>();
+        assert!(events.contains("file contents"));
+        assert!(events.contains("read_file"));
+    }
 }
