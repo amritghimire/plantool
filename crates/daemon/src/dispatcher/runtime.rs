@@ -7,6 +7,31 @@ use crate::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+fn record_provider_event(
+    home: &std::path::Path,
+    attempt_id: &str,
+    seq: u64,
+    event: &ProviderEvent,
+) -> anyhow::Result<()> {
+    let value = serde_json::to_value(event)?;
+    let mut db = database::open(home)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let bytes = format!("{value}\n");
+    let sha = artifacts::put(home, bytes.as_bytes())?;
+    artifacts::register(&tx, &sha, bytes.len())?;
+    tx.execute(
+        "INSERT INTO run_events(attempt_id,seq,content_sha256) VALUES(?1,?2,?3)",
+        params![attempt_id, seq, sha],
+    )?;
+    tx.execute(
+        "INSERT INTO artifact_refs VALUES('transcript',?1,?2,?3,?4)",
+        params![attempt_id, seq.to_string(), sha, database::unix_now()],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Persisted messages are retried under their original idempotency key.
 pub async fn deliver_worker(state: &AppState) -> anyhow::Result<()> {
     if !state.runs.worker.availability().available {
@@ -679,6 +704,10 @@ async fn run(
               _=tokio::time::sleep(std::time::Duration::from_millis(100))=>{let pending:bool=database::open(home)?.query_row("SELECT quota_pending FROM dispatches WHERE attempt_id=?1",[id],|r|r.get(0))?;if pending{quota=true;error=Some("Quota reached; checkpoint required before changing routes".into());break}let completed:bool=database::open(home)?.query_row("SELECT state NOT IN('starting','running') FROM attempts WHERE id=?1",[id],|r|r.get(0))?;if completed{break}}
         event=ev.recv()=>if let Some(event)=event{
                 if let ProviderEvent::Message{role,content,..}=&event {if role=="assistant" { role_reply=Some(content.clone()); }}
+                // Persist before interpreting a final result. A rejected RoleResult
+                // still needs its provider response in the attempt transcript.
+                seq+=1;
+                record_provider_event(home,id,seq,&event)?;
                 if read_call {
                     if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
                         let parsed=read_turn_result(status,turn_error.as_deref(),role_reply.as_deref(),request,id);
@@ -688,11 +717,7 @@ async fn run(
                         }
                     }
                 }
-                seq+=1;let value=serde_json::to_value(&event)?;quota|=match &event {ProviderEvent::TurnCompleted{error:Some(error),..}=>router::quota(200,error),ProviderEvent::Raw{line}=>serde_json::from_str::<Value>(line).ok().is_some_and(|v|!v["error"].is_null()&&router::quota(200,line)),_=>false};
-                let mut db=database::open(home)?;let tx=db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                let bytes=format!("{value}\n");let sha=artifacts::put(home,bytes.as_bytes())?;artifacts::register(&tx,&sha,bytes.len())?;
-                tx.execute("INSERT INTO run_events(attempt_id,seq,content_sha256) VALUES(?1,?2,?3)",params![id,seq,sha])?;
-                tx.execute("INSERT INTO artifact_refs VALUES('transcript',?1,?2,?3,?4)",params![id,seq.to_string(),sha,database::unix_now()])?;tx.commit()?;
+                quota|=match &event {ProviderEvent::TurnCompleted{error:Some(error),..}=>router::quota(200,error),ProviderEvent::Raw{line}=>serde_json::from_str::<Value>(line).ok().is_some_and(|v|!v["error"].is_null()&&router::quota(200,line)),_=>false};
                 if quota {error=Some("Provider quota exhausted; checkpoint before the next attempt".into());break;}
                 let completed:bool=database::open(home)?.query_row("SELECT state NOT IN('starting','running') FROM attempts WHERE id=?1",[id],|r|r.get(0))?;if completed{break}
                 if let ProviderEvent::TurnCompleted{status,error:turn_error,..}=&event {
@@ -872,6 +897,41 @@ fn read_result(text: &str, request: &Dispatch, id: &str) -> anyhow::Result<RoleR
 #[cfg(test)]
 mod read_result_tests {
     use super::*;
+    #[test]
+    fn final_provider_event_is_saved_for_a_result_the_daemon_can_reject() {
+        let temp = tempfile::tempdir().unwrap();
+        database::initialize(temp.path()).unwrap();
+        let raw = rusqlite::Connection::open(database::path(temp.path())).unwrap();
+        raw.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        raw.execute(
+            "INSERT INTO attempts(id,item_id,role,generation,model_route,state,worktree,started_at,idempotency_key,run_json) VALUES('a','i','pm',1,'route','failed','/tmp','now','a','{}')",
+            [],
+        )
+        .unwrap();
+        drop(raw);
+
+        let event = ProviderEvent::Message {
+            id: "final".into(),
+            role: "assistant".into(),
+            content: "A plan object without required fields".into(),
+        };
+        record_provider_event(temp.path(), "a", 1, &event).unwrap();
+        let validation_error = "Plan needs keyed tasks, acceptance criteria and affected files";
+        assert!(validation_error.contains("acceptance criteria"));
+
+        let db = database::open(temp.path()).unwrap();
+        let (count, sha): (u64, String) = db
+            .query_row(
+                "SELECT count(*),max(content_sha256) FROM run_events WHERE attempt_id='a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let saved = String::from_utf8(artifacts::read(temp.path(), &sha).unwrap()).unwrap();
+        assert!(saved.contains("A plan object without required fields"));
+    }
+
     #[tokio::test]
     async fn event_eof_preserves_a_provider_error_before_task_completion() {
         let (tx, mut rx) = mpsc::channel::<ProviderEvent>(1);

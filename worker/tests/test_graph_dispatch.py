@@ -188,6 +188,32 @@ async def test_provider_format_correction_is_bounded_validated_and_cached(tmp_pa
             assert len(calls)==(1 if first=='fenced' else 2)
 
 @pytest.mark.asyncio
+async def test_plan_with_missing_semantic_fields_gets_one_targeted_correction(tmp_path):
+    calls=[]
+    bad={"item":"p:1","role":"pm","attempt_id":"a","generation":1,"outcome":"done","summary":"Plan prepared","tasks_done":[],"artifacts":[],"checks":[],"findings":[],"details":{"kind":"plan","markdown":"# Plan\n","acceptance_criteria":[],"affected_files":[]}}
+    good={**bad,"details":{"kind":"plan","markdown":"# Plan\n## Phase 1 [review]\n- [ ] T1: [docs] Add running tests instructions\n","acceptance_criteria":["AC1 (T1, docs): README documents the existing test command; verify it by running that command."],"affected_files":["README.md"]}}
+    async def daemon(request):
+        if request.url.path.endswith('/health'):return httpx.Response(200,json=VERSIONS)
+        body=json.loads(request.content);calls.append(body)
+        assert body['plantool']['idempotency_key']==f"role:a:{len(calls)-1}"
+        if len(calls)==1:
+            content=json.dumps(bad)
+        else:
+            assert body['tools']==[]
+            assert "Plan needs at least one concrete acceptance criterion" in body['messages'][-1]['content']
+            content=json.dumps(good)
+        return httpx.Response(200,json={'choices':[{'message':{'content':content},'finish_reason':'stop'}]})
+    app=create_app(tmp_path,'t'*40,httpx.MockTransport(daemon))
+    payload={'request':{'item':'p:1','role':'pm','generation':1,'inputs':{'step':'plan'},'plan_sha':'','policy_version':1,'capability':'read','idempotency_key':'d','thread_id':'p:1','interrupt_id':'i'},'attempt_id':'a','prompt':'Prepare a bounded plan.'}
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker',headers={'x-plantool-worker-token':'t'*40,'x-plantool-contract-version':'5'}) as client:
+            response=await client.post('/internal/v1/role',json=payload)
+            assert response.status_code==200,response.text
+            assert response.json()['details']['acceptance_criteria']==good['details']['acceptance_criteria']
+            assert len(calls)==2
+            assert (await client.post('/internal/v1/role',json=payload)).json()==response.json()
+
+@pytest.mark.asyncio
 async def test_empty_prepared_sprint_does_not_invent_items_or_call_provider(tmp_path):
     async def daemon(request):
         assert request.url.path.endswith('/health')

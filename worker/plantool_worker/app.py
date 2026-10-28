@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -91,6 +92,43 @@ def parse_role_content(content):
     data=json.loads(text)
     if not isinstance(data,dict):raise ValueError("Role result must be an object")
     return data
+
+def validate_role_semantics(expected_kind, data):
+    """Catch known schema-valid but unusable results before ending a model turn."""
+    if expected_kind != "plan" or data.get("outcome") != "done":
+        return
+    details = data.get("details")
+    if not isinstance(details, dict) or details.get("kind") != "plan":
+        return  # The step-specific schema check below reports this case.
+    markdown = details.get("markdown")
+    criteria = details.get("acceptance_criteria")
+    affected = details.get("affected_files")
+    if not isinstance(markdown, str):
+        raise ValueError("Plan details need a markdown task list")
+    if not isinstance(criteria, list) or not any(isinstance(x, str) and x.strip() for x in criteria):
+        raise ValueError("Plan needs at least one concrete acceptance criterion")
+    if not isinstance(affected, list) or not any(isinstance(x, str) and x.strip() for x in affected):
+        raise ValueError("Plan needs at least one repository-relative affected file")
+    task_count = 0
+    keys = set()
+    supported = {"backend", "frontend", "devops", "qa", "docs"}
+    for line in markdown.splitlines():
+        match = re.match(r"^\s*[-*+]\s+\[(?: |x|X)\]\s+(T[^:]*):\s*(.*)$", line)
+        if not match:
+            continue
+        key, title = match.groups()
+        if not re.fullmatch(r"T[1-9][0-9]*", key) or key in keys or not title.strip():
+            raise ValueError("Plan tasks need unique T1-style keys and nonempty titles")
+        keys.add(key)
+        task_count += 1
+        area = re.match(r"^\[([^]]+)\]", title)
+        if not area or area.group(1) not in supported:
+            raise ValueError("Every plan task needs a lowercase supported area such as [docs]")
+    if task_count == 0:
+        raise ValueError("Plan needs keyed checkbox tasks such as '- [ ] T1: [docs] Verify the documented commands'")
+    for path in affected:
+        if not isinstance(path, str) or not path.strip() or path.startswith("/") or ".." in path.split("/") or any(c in path for c in "\n\r\0"):
+            raise ValueError("Affected files must be safe repository-relative paths")
 
 def create_app(home: Path, token: str, transport=None):
     locks: dict[str, asyncio.Lock] = {}
@@ -297,6 +335,7 @@ def create_app(home: Path, token: str, transport=None):
                 tools=[{"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":{arg:{"type":"string"}},"required":[arg],"additionalProperties":False}}} for name,arg,description in [("read_repo_file","path","Read a regular default-branch file; never-sent files are denied"),("read_artifact","sha256","Read an item-bound immutable artifact")]]
                 tools.append({"type":"function","function":{"name":"request_urgent","description":"Request owner urgency; never promotes or approves","parameters":{"type":"object","properties":{},"additionalProperties":False}}})
                 formatting_retry=False
+                correction_hint=None
                 for index in range(12):
                     response=await daemon.post("/v1/chat/completions",json={"plantool":{"item":request.request.item,"role":request.request.role,"generation":request.request.generation,"attempt_id":request.attempt_id,"idempotency_key":f"{key}:{index}"},"messages":messages,"tools":[] if formatting_retry else tools,"stream":False,"response_format":{"type":"json_schema","json_schema":{"name":"role_result","schema":RoleResult.model_json_schema()}}})
                     response.raise_for_status();message=response.json()["choices"][0]["message"]
@@ -321,6 +360,12 @@ def create_app(home: Path, token: str, transport=None):
                         data.update(item=request.request.item,role=request.request.role,attempt_id=request.attempt_id,generation=request.request.generation)
                         if expected_kind and (not isinstance(data.get("details"),dict) or data["details"].get("kind")!=expected_kind):
                             raise ValueError("Wrong step-specific result details")
+                        correction_hint=None
+                        try:
+                            validate_role_semantics(expected_kind,data)
+                        except ValueError as error:
+                            correction_hint=str(error)
+                            raise
                         if candidates is not None:
                             allowed={c["item"] for c in candidates}
                             details=data.get("details") or {}
@@ -333,7 +378,10 @@ def create_app(home: Path, token: str, transport=None):
                         # tools are supplied, so prior tool effects are not repeated.
                         formatting_retry=True
                         messages.append({"role":"assistant","content":message.get("content") if isinstance(message.get("content"),str) else ""})
-                        messages.append({"role":"user","content":"The final response was not a complete valid RoleResult. Return one complete JSON object matching the system schema, using only evidence already obtained. For every check, evidence must be the exact artifact:// URI of a stored artifact. If this read-only step ran no checks, return checks: [] and put observations in details/findings; never invent evidence. No tools, Markdown, commentary or new claims. Keep the summary concise."})
+                        correction="The final response was not a complete valid RoleResult. Return one complete JSON object matching the system schema, using only evidence already obtained. For every check, evidence must be the exact artifact:// URI of a stored artifact. If this read-only step ran no checks, return checks: [] and put observations in details/findings; never invent evidence. No tools, Markdown, commentary or new claims. Keep the summary concise."
+                        if correction_hint:
+                            correction += f" This plan failed validation: {correction_hint}. Correct the plan fields before returning."
+                        messages.append({"role":"user","content":correction})
                 raise ValueError("Role tool/call budget exhausted")
             graph=StateGraph(State);graph.add_node("role",call_role);graph.add_edge(START,"role");graph.add_edge("role",END)
             result=(await graph.compile().ainvoke({}))["result"]
