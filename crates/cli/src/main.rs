@@ -17,13 +17,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Report progress against stable keys in an approved plan.
-    Task(commands::task::Args),
-    /// Report a typed result for this hosted attempt.
-    Attempt(commands::attempt::Args),
-    /// Create a one-time code for registering the first browser passkey.
-    Setup,
-    /// Read global settings (changes belong in the browser).
+    /// Read or change global settings.
     Settings(commands::settings::Args),
     /// Export a session as a portable zip.
     Export(commands::archive::ExportArgs),
@@ -62,9 +56,6 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Task(a) => commands::task::run(a),
-        Command::Attempt(a) => commands::attempt::run(a),
-        Command::Setup => setup(),
         Command::Settings(a) => commands::settings::run(a),
         Command::Export(a) => commands::archive::export(a),
         Command::Import(a) => commands::archive::import(a),
@@ -86,91 +77,5 @@ fn main() {
     if let Err(e) = result {
         eprintln!("error: {e:#}");
         std::process::exit(1);
-    }
-}
-
-fn setup() -> anyhow::Result<()> {
-    client::ensure_owner_process()?;
-    let c = client::Client::bare(plantool_daemon::config::default_port());
-    c.ensure_daemon()?;
-    let _: serde_json::Value = reqwest::blocking::Client::builder().no_proxy().build()?.get(format!("{}/api/auth/status", c.base)).send()?.error_for_status()?.json().map_err(|_| anyhow::anyhow!("The running daemon does not support passkeys. Run `plantool daemon restart` with this binary first."))?;
-    let code = c.setup_code()?;
-    println!("One-time setup code (expires in 10 minutes): {code}");
-    let url = format!("{}/setup", c.base);
-    println!("Open {url} and enter the code to register your passkey.");
-    client::open_browser(&url);
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn cli_rejects_human_confirmation_commands() {
-        for args in [
-            vec![
-                "plantool",
-                "session",
-                "set",
-                "--session",
-                "s",
-                "--base",
-                "main",
-                "--confirm",
-            ],
-            vec!["plantool", "import", "s.zip", "--repo", ".", "--confirm"],
-            vec!["plantool", "settings", "difftool", "built-in", "--confirm"],
-            vec![
-                "plantool",
-                "session",
-                "comment",
-                "resolve",
-                "--session",
-                "s",
-                "--id",
-                "one",
-            ],
-            vec![
-                "plantool",
-                "session",
-                "comment",
-                "rm",
-                "--session",
-                "s",
-                "--id",
-                "one",
-            ],
-            vec!["plantool", "implement", "s", "--permission", "allow-all"],
-            vec!["plantool", "implement", "s", "--step-by-step"],
-        ] {
-            assert!(Cli::try_parse_from(args).is_err());
-        }
-        for args in [
-            vec![
-                "plantool",
-                "session",
-                "set",
-                "--session",
-                "s",
-                "--base",
-                "main",
-            ],
-            vec![
-                "plantool",
-                "session",
-                "propose",
-                "--session",
-                "s",
-                "--branch",
-                "feature",
-            ],
-            vec!["plantool", "export", "s", "-o", "s.zip"],
-            vec!["plantool", "import", "s.zip", "--repo", "."],
-            vec!["plantool", "settings", "difftool"],
-            vec!["plantool", "daemon", "stop"],
-            vec!["plantool", "daemon", "restart"],
-        ] {
-            assert!(Cli::try_parse_from(args).is_ok());
-        }
     }
 }

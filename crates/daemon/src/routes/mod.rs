@@ -1,23 +1,12 @@
 pub mod archive;
 pub mod changes;
 pub mod comments;
-mod contract;
-pub mod engineering;
-pub mod execution;
-pub mod github;
 pub mod live;
-pub mod loop_settings;
-mod models;
-pub mod notices;
-pub mod oversight;
 pub mod pr;
-pub mod retention;
 pub mod runs;
 pub mod sessions;
 pub mod settings;
-pub mod tasks;
 pub mod where_context;
-mod workspace;
 
 use crate::registry::RegistryError;
 use crate::AppState;
@@ -67,10 +56,12 @@ pub fn bad_request(msg: impl Into<String>) -> ApiError {
 }
 
 pub fn actor_from(headers: &HeaderMap, state: &AppState) -> Actor {
-    if state.auth.authenticated(headers) {
-        Actor::Human
-    } else {
-        Actor::Agent
+    match headers
+        .get("x-plantool-actor")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(t) if t == state.config.token => Actor::Human,
+        _ => Actor::Agent,
     }
 }
 
@@ -97,93 +88,37 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-async fn shutdown(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    if !state.runs.execution.can_shutdown(&headers) {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Daemon lifecycle credential required".into(),
-        ));
-    }
+async fn shutdown(State(state): State<AppState>) -> Json<serde_json::Value> {
     let tx = state.shutdown.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let _ = tx.send(()).await;
     });
-    Ok(Json(json!({ "ok": true })))
+    Json(json!({ "ok": true }))
 }
 
-// Bootstrap is owner-terminal maintenance, never browser or run-token authority.
-async fn owner_setup_code(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    transport: Option<axum::Extension<crate::socket::SocketTransport>>,
-) -> Result<impl axum::response::IntoResponse, ApiError> {
-    #[cfg(unix)]
-    if transport.is_none() {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Owner setup requires the local daemon socket".into(),
-        ));
-    }
-    #[cfg(not(unix))]
-    let _ = transport;
-    if headers.contains_key("origin")
-        || headers.contains_key("cookie")
-        || !state.runs.execution.can_shutdown(&headers)
-    {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Owner terminal credential required".into(),
-        ));
-    }
-    let code = crate::auth::setup_code(&state.config.home)?;
-    Ok(([("cache-control", "no-store")], Json(json!({"code":code}))))
-}
-
-async fn spa(uri: Uri) -> Response {
-    crate::assets::serve(&uri)
+async fn spa(State(state): State<AppState>, uri: Uri) -> Response {
+    crate::assets::serve(&uri, &state.config.token)
 }
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/shutdown", post(shutdown))
-        .merge(crate::auth::routes())
         .merge(sessions::routes())
-        .merge(tasks::routes())
-        .merge(execution::routes())
-        .merge(engineering::browser_routes())
-        .merge(workspace::routes())
-        .merge(oversight::routes())
-        .merge(loop_settings::routes())
-        .merge(models::browser_routes())
-        .merge(github::routes())
-        .merge(notices::routes())
         .merge(comments::routes())
         .merge(changes::routes())
         .merge(archive::routes())
         .merge(live::routes())
         .merge(runs::routes())
-        .merge(retention::routes())
         .merge(settings::routes())
         .merge(where_context::routes())
         .merge(pr::routes());
     Router::new()
         .nest("/api", api)
-        .merge(engineering::internal_routes())
-        .merge(contract::routes())
-        .merge(models::proxy_routes())
         .route("/health", get(health))
         .route("/shutdown", post(shutdown))
-        .route("/owner/setup-code", post(owner_setup_code))
         .fallback(spa)
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::guard,
-        ))
         .layer(DefaultBodyLimit::max(crate::security::MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(crate::security::guard))
         .with_state(state)

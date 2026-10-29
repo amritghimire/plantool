@@ -14,6 +14,7 @@ import { DocView, type ViewMode } from "./DocView";
 import { RunPanel, type RunLine } from "./RunPanel";
 import { Sidebar, docKindOf } from "./Sidebar";
 import { StartRunDialog, type RunStage } from "./StartRunDialog";
+import { ThemeToggle } from "./ThemeToggle";
 import { PrDialog } from "./PrDialog";
 import { AskAgentDialog } from "./AskAgentDialog";
 import type { ThreadActions } from "./Thread";
@@ -179,11 +180,6 @@ export function SessionPage() {
           break;
         case "thread-resolution":
           setComments((c) => c.map((x) => (e.ids.includes(x.id) || (x.parent && e.ids.includes(x.parent)) ? { ...x, resolved: e.resolved } : x)));
-          break;
-        case "task-progress":
-          void loadDoc("plan");
-          void api.session(key).then(setView).catch(()=>{});
-          toast(`${e.task_key} completed`);
           break;
         case "doc-refreshed":
           void loadDoc(e.kind);
@@ -410,7 +406,6 @@ export function SessionPage() {
       <div className="page">
         <header className="topbar">
           <Link to="/" className="brand">plantool</Link>
-          <span className="spacer" />
         </header>
         <main className="list">
           <p className="error">{error}</p>
@@ -459,7 +454,7 @@ export function SessionPage() {
             </button>
           </div>
         )}
-
+        <ThemeToggle />
       </header>
       <Sidebar
         onHandoff={onHandoff}

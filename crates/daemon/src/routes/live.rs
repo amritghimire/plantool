@@ -5,7 +5,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use axum::routing::get;
-use axum::{Extension, Router};
+use axum::Router;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -18,22 +18,16 @@ async fn live(
     State(state): State<AppState>,
     Path((repo, slug)): Path<(String, String)>,
     Query(q): Query<LiveQuery>,
-    authorization: Option<Extension<crate::identities::AuthorizedRun>>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
-    Ok(
-        ws.on_upgrade(move |socket| {
-            handle(socket, s, q.since, authorization.map(|Extension(a)| a))
-        }),
-    )
+    Ok(ws.on_upgrade(move |socket| handle(socket, s, q.since)))
 }
 
 async fn handle(
     mut socket: WebSocket,
     s: std::sync::Arc<crate::registry::LiveSession>,
     since: Option<u64>,
-    mut authorization: Option<crate::identities::AuthorizedRun>,
 ) {
     let mut rx = s.tx.subscribe();
     let hello = serde_json::json!({ "type": "hello", "seq": s.seq(), "key": s.key });
@@ -63,14 +57,6 @@ async fn handle(
     }
     loop {
         tokio::select! {
-            _ = async {
-                match &mut authorization {
-                    Some(a) => {
-                        if !*a.revoked.borrow() { let _ = a.revoked.changed().await; }
-                    },
-                    None => std::future::pending::<()>().await,
-                }
-            } => break,
             ev = rx.recv() => {
                 match ev {
                     Ok(msg) => {

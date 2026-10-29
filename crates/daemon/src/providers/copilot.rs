@@ -3,6 +3,7 @@ use anyhow::Context;
 use plantool_core::PermissionMode;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 pub async fn run(
@@ -54,8 +55,7 @@ pub async fn run(
         )
         .await;
         let exe = opts.executable.clone().unwrap_or_else(|| "copilot".into());
-        let mut cmd = opts.command(&exe)?;
-        opts.apply_environment(&mut cmd, plantool_core::Provider::Copilot);
+        let mut cmd = Command::new(&exe);
         cmd.arg("-p")
             .arg(&prompt)
             .arg("--silent")
@@ -95,8 +95,8 @@ pub async fn run(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = opts
-            .spawn(&mut cmd)
+        let mut child = cmd
+            .spawn()
             .with_context(|| format!("failed to start {}", exe.display()))?;
         let stdout = child.stdout.take().context("copilot has no stdout")?;
         let mut lines = BufReader::new(stdout).lines();

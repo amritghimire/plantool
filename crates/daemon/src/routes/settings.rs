@@ -56,16 +56,6 @@ fn describe(
     let example = root
         .as_deref()
         .map(|r| git::resolve_worktree_dir(r, template, "<slug>"));
-    crate::database::set(
-        &crate::database::open(&state.config.home)?,
-        &format!(
-            "worktree_setting:{}",
-            root.as_ref()
-                .map(|p| p.to_string_lossy())
-                .unwrap_or_default()
-        ),
-        &json!({"global":global,"local":local}),
-    )?;
     Ok(json!({
         "key": git::WORKTREE_DIR_KEY,
         "default": git::DEFAULT_WORKTREE_DIR,
@@ -162,59 +152,7 @@ async fn set_difftool(
         &["config", "--global", "plantool.difftool", &body.value],
     )
     .map_err(|e| bad_request(e.to_string()))?;
-    crate::database::set(
-        &crate::database::open(&state.config.home)?,
-        "difftool_setting",
-        &body.value,
-    )?;
     Ok(get_difftool(State(state)).await)
-}
-
-#[derive(Deserialize)]
-struct NeverSentQuery {
-    repo: PathBuf,
-}
-#[derive(Deserialize)]
-struct NeverSentBody {
-    repo: PathBuf,
-    patterns: Vec<String>,
-}
-async fn get_never_sent(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<NeverSentQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    if actor_from(&headers, &state) != Actor::Human {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Never-sent settings are browser-only".into(),
-        ));
-    }
-    let root = main_root(&q.repo)?;
-    Ok(Json(
-        json!({"defaults":crate::sandbox::never_sent::DEFAULTS,"patterns":state.runs.execution.rules(&root)}),
-    ))
-}
-async fn set_never_sent(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::Extension(approval): axum::Extension<crate::auth::ApprovedAction>,
-    Json(body): Json<NeverSentBody>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    if actor_from(&headers, &state) != Actor::Human {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Never-sent settings are browser-only".into(),
-        ));
-    }
-    let root = main_root(&body.repo)?;
-    approval.recheck(&state)?;
-    state
-        .runs
-        .execution
-        .set_rules(approval.execution()?, root, body.patterns)
-        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
-    Ok(Json(json!({"ok":true})))
 }
 
 pub fn routes() -> Router<AppState> {
@@ -224,8 +162,4 @@ pub fn routes() -> Router<AppState> {
             get(get_worktree_dir).post(set_worktree_dir),
         )
         .route("/settings/difftool", get(get_difftool).post(set_difftool))
-        .route(
-            "/settings/never-sent",
-            get(get_never_sent).post(set_never_sent),
-        )
 }

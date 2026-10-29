@@ -1,4 +1,3 @@
-mod common;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -38,13 +37,13 @@ fn harness() -> Harness {
     let home = tmp.path().join("home");
     let config = Arc::new(Config {
         home: home.clone(),
-        port: 41300,
+        port: 0,
+        token: "tok".into(),
         version: "test".into(),
     });
     let registry = Arc::new(Registry::load(home).unwrap());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let state = AppState {
-        auth: Arc::new(plantool_daemon::auth::Auth::new(&config.home, config.port).unwrap()),
         registry,
         config,
         runs: Arc::new(plantool_daemon::runs::RunManager::default()),
@@ -67,21 +66,19 @@ async fn call(
     human: bool,
     host: &str,
 ) -> (StatusCode, Value) {
-    let req = Request::builder()
+    let mut req = Request::builder()
         .method(method)
         .uri(path)
         .header(header::HOST, host);
+    if human {
+        req = req.header("x-plantool-actor", "tok");
+    }
     let req = match body {
         Some(b) => req
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(b.to_string()))
             .unwrap(),
         None => req.body(Body::empty()).unwrap(),
-    };
-    let req = if human {
-        common::with_human(app, req).await
-    } else {
-        req
     };
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
@@ -111,6 +108,7 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
             .method("POST")
             .uri(&path)
             .header(header::HOST, "127.0.0.1")
+            .header("x-plantool-actor", "tok")
             .header("x-plantool-filename", "notes / plan.txt")
             .body(Body::from(bytes))
             .unwrap()
@@ -143,6 +141,7 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
                 .method("POST")
                 .uri(&path)
                 .header(header::HOST, "127.0.0.1")
+                .header("x-plantool-actor", "tok")
                 .header("x-plantool-filename", format!("{}.png", "x".repeat(150)))
                 .body(Body::from(b"image".to_vec()))
                 .unwrap(),
@@ -161,6 +160,7 @@ async fn uploads_a_file_into_the_session_and_rejects_empty_files() {
                 .method("POST")
                 .uri(&path)
                 .header(header::HOST, "127.0.0.1")
+                .header("x-plantool-actor", "tok")
                 .body(Body::from(vec![0; 10 * 1024 * 1024 + 1]))
                 .unwrap(),
         )
@@ -215,7 +215,7 @@ async fn full_session_flow() {
 
     std::fs::write(
         &plan_path,
-        "# Plan\n\nalpha\nbeta\n\n### Phase 1: X\n- [ ] T1: one\n- [x] T2: two\n",
+        "# Plan\n\nalpha\nbeta\n\n### Phase 1: X\n- [ ] one\n- [x] two\n",
     )
     .unwrap();
     let (st, v) = call(
@@ -240,7 +240,7 @@ async fn full_session_flow() {
     )
     .await;
     assert_eq!(v["state"]["stage"], "plan-review");
-    assert_eq!(v["docs"][1]["progress"][0]["done"], 0);
+    assert_eq!(v["docs"][1]["progress"][0]["done"], 1);
 
     let live = h.state.registry.get_key(&key).unwrap();
     let mut rx = live.tx.subscribe();
@@ -444,7 +444,7 @@ async fn brief_and_prompt() {
     .await;
     assert_eq!(v["session"]["brief"], "Rename the scopes");
     let meta: serde_json::Value =
-        serde_json::to_value(live.store.load_meta().unwrap().unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
     assert_eq!(meta["brief"], "Rename the scopes");
 
     let (_, v) = call(
@@ -505,9 +505,6 @@ async fn brief_and_prompt() {
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     let stopped = plantool_core::Run {
-        pinned: false,
-        sandboxed: false,
-        execution_generation: 0,
         idle_stopped: false,
         milestone_key: None,
         plan_sha: None,
@@ -538,7 +535,7 @@ async fn brief_and_prompt() {
     .unwrap();
     live.append_run_event("r1", 1, json!({ "type": "status", "label": "x" }))
         .unwrap();
-    assert!(!live.store.read_run_events("r1", 0).unwrap().is_empty());
+    assert!(live.store.run_log_path("r1").is_file());
     let (st, v) = call(
         app,
         "DELETE",
@@ -549,8 +546,8 @@ async fn brief_and_prompt() {
     )
     .await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    assert!(!live.store.load_runs().unwrap().iter().any(|r| r.id == "r1"));
-    assert!(live.store.read_run_events("r1", 0).unwrap().is_empty());
+    assert!(!live.store.run_meta_path("r1").exists());
+    assert!(!live.store.run_log_path("r1").exists());
     let (_, v) = call(
         app,
         "GET",
@@ -664,9 +661,6 @@ async fn step_mode_previews_one_ticket_and_reviews_uncommitted_changes() {
     let base = plantool_daemon::git::commit_all(&h.repo, "Milestone 1: first").unwrap();
     std::fs::write(h.repo.join("b.txt"), "milestone two\n").unwrap();
     let run = plantool_core::Run {
-        pinned: false,
-        sandboxed: false,
-        execution_generation: 0,
         idle_stopped: false,
         milestone_key: None,
         plan_sha: None,
@@ -1093,7 +1087,8 @@ async fn pr_drafts_require_human_and_old_meta_loads() {
     .await;
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
-    let mut old: Value = serde_json::to_value(live.store.load_meta().unwrap().unwrap()).unwrap();
+    let mut old: Value =
+        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
     old.as_object_mut().unwrap().remove("pull_request");
     let parsed: plantool_core::Session = serde_json::from_value(old).unwrap();
     assert!(parsed.pull_request.is_none());
@@ -1188,13 +1183,13 @@ exit 1
     std::env::remove_var("PLANTOOL_GH_BIN");
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["pull_request"]["number"], 23);
-    let saved: plantool_core::Session = live.store.load_meta().unwrap().unwrap();
+    let saved: plantool_core::Session =
+        serde_json::from_str(&std::fs::read_to_string(live.store.meta_path()).unwrap()).unwrap();
     assert_eq!(saved.pull_request.unwrap().number, 23);
 }
 
 #[tokio::test]
 async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
-    use plantool_core::DocKind;
     let h = harness();
     let (_, created) = call(
         &h.app,
@@ -1207,13 +1202,6 @@ async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
     .await;
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
-    std::fs::write(
-        live.doc_path(DocKind::Plan),
-        "# Plan\n- [ ] T1: Original task\n",
-    )
-    .unwrap();
-    live.capture_doc(DocKind::Plan).unwrap();
-    let original_sha = live.doc(DocKind::Plan).unwrap().sha;
     let dir = live.store.dir.clone();
     h.state.registry.remove(key, false).unwrap();
     assert!(!dir.exists());
@@ -1226,36 +1214,6 @@ async fn dropped_session_cannot_be_recreated_by_late_pr_refresh() {
     });
     assert!(result.is_err());
     assert!(!dir.exists());
-    let (_, recreated) = call(
-        &h.app,
-        "POST",
-        "/api/sessions",
-        Some(json!({"slug":"fix-it","cwd":h.repo})),
-        false,
-        "127.0.0.1",
-    )
-    .await;
-    assert_eq!(recreated["session"]["key"], key);
-    let replacement = h.state.registry.get_key(key).unwrap();
-    assert_ne!(live.store.key(), replacement.store.key());
-    assert!(replacement.state().comments.is_empty());
-    assert!(replacement.doc(DocKind::Plan).is_none());
-    assert!(replacement
-        .store
-        .load_revision(DocKind::Plan, &original_sha)
-        .unwrap()
-        .is_none());
-    assert!(live
-        .store
-        .load_revision(DocKind::Plan, &original_sha)
-        .unwrap()
-        .is_some());
-
-    assert!(live.store.save_meta(&live.session()).is_err());
-    assert_eq!(
-        h.state.registry.get_key(key).unwrap().store.key(),
-        replacement.store.key()
-    );
 }
 
 #[tokio::test]
@@ -1305,7 +1263,7 @@ async fn pr_commit_from_dialog() {
         "{draft}"
     );
     std::fs::write(
-        live.store.dir.join("docs/commit-draft.md"),
+        live.store.dir.join("commit-draft.md"),
         "Add the change\n\nSession: repo/fix-it\n",
     )
     .unwrap();
@@ -1366,7 +1324,7 @@ async fn pr_commit_from_dialog() {
         plantool_daemon::git::git(&wt, &["log", "-1", "--format=%s"]).unwrap(),
         "Add the change"
     );
-    assert!(!live.store.dir.join("docs/commit-draft.md").exists());
+    assert!(!live.store.dir.join("commit-draft.md").exists());
 
     git(&wt, &["checkout", "-q", "--detach"]);
     std::fs::write(wt.join("more.txt"), "more").unwrap();
@@ -1540,7 +1498,7 @@ async fn scoped_comments_gate_approval_and_record_override() {
     let live = h.state.registry.get_key(key).unwrap();
     std::fs::write(
         live.doc_path(plantool_core::DocKind::Plan),
-        "# Plan\n\n## Risks\n- [ ] T1: Task\n",
+        "# Plan\n\n## Risks\n- [ ] Task\n",
     )
     .unwrap();
     live.capture_doc(plantool_core::DocKind::Plan).unwrap();
@@ -1598,7 +1556,7 @@ async fn scoped_comments_gate_approval_and_record_override() {
 }
 
 #[tokio::test]
-async fn context_changes_require_passkey_and_check_dirty_tree() {
+async fn context_changes_require_owner_or_explicit_confirmation_and_check_dirty_tree() {
     let h = harness();
     let (_, created) = call(
         &h.app,
@@ -1631,20 +1589,6 @@ async fn context_changes_require_passkey_and_check_dirty_tree() {
         Some(json!({"base":"HEAD","confirm":true})),
         false,
         "127.0.0.1",
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::FORBIDDEN,
-        "confirm alone cannot authorize context changes: {changed}"
-    );
-    let (status, changed) = call(
-        &h.app,
-        "POST",
-        &path,
-        Some(json!({"base":"HEAD"})),
-        true,
-        "localhost:41300",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
@@ -1714,7 +1658,7 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
     .await;
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
-    let original = "# Plan\n\n## Summary\nPortable session\n\n### Phase 1\n- [ ] T1: Work\n";
+    let original = "# Plan\n\n## Summary\nPortable session\n\n### Phase 1\n- [ ] Work\n";
     std::fs::write(live.doc_path(plantool_core::DocKind::Plan), original).unwrap();
     live.capture_doc(plantool_core::DocKind::Plan).unwrap();
     live.set_stage(plantool_core::Stage::Approved, plantool_core::Actor::Human)
@@ -1741,17 +1685,13 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
     git(&other, &["init", "-q", "-b", "main"]);
     let request = Request::builder()
         .method("POST")
-        .uri(format!("/api/import?repo={}&confirm=true", other.display()))
+        .uri(format!("/api/import?repo={}", other.display()))
         .header(header::HOST, "127.0.0.1")
+        .header("x-plantool-actor", "tok")
         .header(header::CONTENT_TYPE, "application/zip")
         .body(Body::from(bytes))
         .unwrap();
-    let response = h
-        .app
-        .clone()
-        .oneshot(common::with_human(&h.app, request).await)
-        .await
-        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let imported: Value = serde_json::from_slice(&body).unwrap();
@@ -1764,7 +1704,7 @@ async fn archives_round_trip_with_new_paths_and_collision_names() {
     let reloaded = h.state.registry.get_key(imported_key).unwrap();
     assert_eq!(
         reloaded.doc(plantool_core::DocKind::Plan).unwrap().content,
-        original
+        updated
     );
 }
 
@@ -1883,7 +1823,7 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
     let plan = live.doc_path(plantool_core::DocKind::Plan);
     std::fs::write(
         &plan,
-        "# Plan\n\n## Tasks\n### Phase 1: First\n- [ ] T1: One\n### Phase 2: Second\n- [ ] T2: Two\n",
+        "# Plan\n\n## Tasks\n### Phase 1: First\n- [ ] One\n### Phase 2: Second\n- [ ] Two\n",
     )
     .unwrap();
     live.capture_doc(plantool_core::DocKind::Plan).unwrap();
@@ -1902,42 +1842,7 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
     .unwrap();
     let fake = h._tmp.path().join("phase-claude");
     let path = serde_json::to_string(&plan.to_string_lossy()).unwrap();
-    let script = format!(
-        r#"#!/usr/bin/env python3
-import sys,json,pathlib,time
-p=pathlib.Path({path})
-print(json.dumps({{'type':'system','subtype':'init','session_id':'phase-session'}}),flush=True)
-for raw in sys.stdin:
- msg=json.loads(raw)
- if msg.get('type')=='user':
-  n=2 if pathlib.Path('a.txt').read_text().startswith('completed 1') else 1
-  pathlib.Path('a.txt').write_text('completed '+str(n)+'\n')
-  p.with_suffix('.report').write_text(str(n))
-  while not p.with_suffix('.ack'+str(n)).exists(): time.sleep(0.01)
-  print(json.dumps({{'type':'result','subtype':'success'}}),flush=True)
-"#
-    );
-    let reported_plan = plan.clone();
-    let reported_session = live.clone();
-    let reports = tokio::spawn(async move {
-        for n in 1..=2 {
-            tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                while std::fs::read_to_string(reported_plan.with_extension("report"))
-                    .ok()
-                    .as_deref()
-                    != Some(&n.to_string())
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-            })
-            .await
-            .unwrap();
-            reported_session
-                .complete_task(&format!("T{n}"), None)
-                .unwrap();
-            std::fs::write(reported_plan.with_extension(format!("ack{n}")), "ok").unwrap();
-        }
-    });
+    let script = format!("#!/usr/bin/env python3\nimport sys,json,pathlib\np=pathlib.Path({path})\nprint(json.dumps({{'type':'system','subtype':'init','session_id':'phase-session'}}),flush=True)\nfor raw in sys.stdin:\n msg=json.loads(raw)\n if msg.get('type')=='user':\n  text=p.read_text().replace('- [ ]','- [x]',1)\n  p.write_text(text)\n  pathlib.Path('a.txt').write_text('completed '+str(text.count('[x]'))+'\\n')\n  print(json.dumps({{'type':'result','subtype':'success'}}),flush=True)\n");
     std::fs::write(&fake, script).unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("PLANTOOL_CLAUDE_PATH", &fake);
@@ -1970,7 +1875,7 @@ for raw in sys.stdin:
         assert!(tokio::time::Instant::now() < deadline);
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert_eq!(live.state().milestones[0].completed_tasks, vec!["T1: One"]);
+    assert_eq!(live.state().milestones[0].completed_tasks, vec!["One"]);
     assert_eq!(live.state().milestones[1].status, "pending");
     let path = format!("/api/sessions/{key}/runs/{}/milestone/approve", first.id);
     let (status, _) = call(
@@ -2029,7 +1934,6 @@ for raw in sys.stdin:
 
     assert_eq!(live.state().milestones[0].status, "approved");
     assert_eq!(live.state().milestones[1].status, "completed");
-    reports.await.unwrap();
 }
 
 #[tokio::test]
@@ -2048,12 +1952,12 @@ async fn revised_plan_requires_review_and_reapproval_clears_pending() {
     let key = created["session"]["key"].as_str().unwrap();
     let live = h.state.registry.get_key(key).unwrap();
     let path = live.doc_path(DocKind::Plan);
-    let plan = "# Plan\n### Phase 1\n- [ ] T1: First\n";
+    let plan = "# Plan\n### Phase 1\n- [ ] First\n";
     std::fs::write(&path, plan).unwrap();
     live.capture_doc(DocKind::Plan).unwrap();
     live.set_stage(Stage::Approved, Actor::Human).unwrap();
     let old_sha = live.state().approved.unwrap().sha;
-    std::fs::write(&path, format!("{plan}- [ ] T100: Added\n")).unwrap();
+    std::fs::write(&path, format!("{plan}- [ ] Added\n")).unwrap();
     live.capture_doc(DocKind::Plan).unwrap();
     assert!(live.state().plan_revision_pending);
     assert!(live.set_stage(Stage::Implementing, Actor::Agent).is_err());
@@ -2120,8 +2024,9 @@ async fn accepting_scope_changes_reopens_finished_phases() {
     use plantool_core::{Actor, DocKind, Stage};
     for status in ["approved", "completed"] {
         for changed in [
-            "- [x] T1: Done\n- [ ] T100: Added\n",
-            "- [ ] T1: Reworded\n",
+            "- [x] Done\n- [ ] Added\n",
+            "- [ ] Reworded\n",
+            "- [ ] Done\n",
         ] {
             let h = harness();
             let (_, created) = call(
@@ -2141,7 +2046,7 @@ async fn accepting_scope_changes_reopens_finished_phases() {
             let path = live.doc_path(DocKind::Plan);
             std::fs::write(
                 &path,
-                "# Plan\n### Phase 1\n- [x] T1: Done\n### Phase 2\n- [ ] T2: Later\n",
+                "# Plan\n### Phase 1\n- [x] Done\n### Phase 2\n- [ ] Later\n",
             )
             .unwrap();
             live.capture_doc(DocKind::Plan).unwrap();
@@ -2152,7 +2057,7 @@ async fn accepting_scope_changes_reopens_finished_phases() {
             live.milestone_status("Phase 1", status, &run).unwrap();
             std::fs::write(
                 &path,
-                format!("# Plan\n### Phase 1\n{changed}### Phase 2\n- [ ] T2: Later\n"),
+                format!("# Plan\n### Phase 1\n{changed}### Phase 2\n- [ ] Later\n"),
             )
             .unwrap();
             live.capture_doc(DocKind::Plan).unwrap();
@@ -2161,7 +2066,11 @@ async fn accepting_scope_changes_reopens_finished_phases() {
             live.set_stage(Stage::Approved, Actor::Human).unwrap();
             let first = live.state().milestones[0].clone();
             assert_eq!(first.status, "pending", "{status}: {changed}");
-            let expected: Vec<String> = vec![];
+            let expected = if changed.starts_with("- [x]") {
+                vec!["Done".to_string()]
+            } else {
+                vec![]
+            };
             assert_eq!(first.completed_tasks, expected);
             assert!(first.run_id.is_none());
             assert!(first.base.is_none());

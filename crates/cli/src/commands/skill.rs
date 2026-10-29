@@ -6,106 +6,22 @@ pub struct Shipped {
     pub content: &'static str,
 }
 
-pub const SKILLS: [Shipped; 25] = [
+pub const SKILLS: [Shipped; 4] = [
     Shipped {
         name: "plantool",
-        content: include_str!("../../../../agents/skills/plantool/SKILL.md"),
+        content: include_str!("../../../../skills/plantool/SKILL.md"),
     },
     Shipped {
         name: "research",
-        content: include_str!("../../../../agents/skills/research/SKILL.md"),
+        content: include_str!("../../../../skills/research/SKILL.md"),
     },
     Shipped {
         name: "plan",
-        content: include_str!("../../../../agents/skills/plan/SKILL.md"),
+        content: include_str!("../../../../skills/plan/SKILL.md"),
     },
     Shipped {
         name: "implement",
-        content: include_str!("../../../../agents/skills/implement/SKILL.md"),
-    },
-    Shipped {
-        name: "acceptance-check",
-        content: include_str!("../../../../agents/skills/acceptance-check/SKILL.md"),
-    },
-    Shipped {
-        name: "api-contract",
-        content: include_str!("../../../../agents/skills/api-contract/SKILL.md"),
-    },
-    Shipped {
-        name: "architecture",
-        content: include_str!("../../../../agents/skills/architecture/SKILL.md"),
-    },
-    Shipped {
-        name: "ci",
-        content: include_str!("../../../../agents/skills/ci/SKILL.md"),
-    },
-    Shipped {
-        name: "code-review",
-        content: include_str!("../../../../agents/skills/code-review/SKILL.md"),
-    },
-    Shipped {
-        name: "deps",
-        content: include_str!("../../../../agents/skills/deps/SKILL.md"),
-    },
-    Shipped {
-        name: "discuss",
-        content: include_str!("../../../../agents/skills/discuss/SKILL.md"),
-    },
-    Shipped {
-        name: "docs-update",
-        content: include_str!("../../../../agents/skills/docs-update/SKILL.md"),
-    },
-    Shipped {
-        name: "escalate",
-        content: include_str!("../../../../agents/skills/escalate/SKILL.md"),
-    },
-    Shipped {
-        name: "moderate",
-        content: include_str!("../../../../agents/skills/moderate/SKILL.md"),
-    },
-    Shipped {
-        name: "plan-review",
-        content: include_str!("../../../../agents/skills/plan-review/SKILL.md"),
-    },
-    Shipped {
-        name: "qa",
-        content: include_str!("../../../../agents/skills/qa/SKILL.md"),
-    },
-    Shipped {
-        name: "report-progress",
-        content: include_str!("../../../../agents/skills/report-progress/SKILL.md"),
-    },
-    Shipped {
-        name: "review-guide",
-        content: include_str!("../../../../agents/skills/review-guide/SKILL.md"),
-    },
-    Shipped {
-        name: "scan",
-        content: include_str!("../../../../agents/skills/scan/SKILL.md"),
-    },
-    Shipped {
-        name: "security-review",
-        content: include_str!("../../../../agents/skills/security-review/SKILL.md"),
-    },
-    Shipped {
-        name: "sprint-plan",
-        content: include_str!("../../../../agents/skills/sprint-plan/SKILL.md"),
-    },
-    Shipped {
-        name: "supervise",
-        content: include_str!("../../../../agents/skills/supervise/SKILL.md"),
-    },
-    Shipped {
-        name: "test-first",
-        content: include_str!("../../../../agents/skills/test-first/SKILL.md"),
-    },
-    Shipped {
-        name: "triage",
-        content: include_str!("../../../../agents/skills/triage/SKILL.md"),
-    },
-    Shipped {
-        name: "ui-check",
-        content: include_str!("../../../../agents/skills/ui-check/SKILL.md"),
+        content: include_str!("../../../../skills/implement/SKILL.md"),
     },
 ];
 

@@ -6,7 +6,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use plantool_core::{
     Actor, CommitScope, DocKind, ImplementationMode, PermissionMode, Provider, Stage,
 };
@@ -16,8 +16,6 @@ use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 pub struct StartBody {
-    #[serde(default)]
-    pub sandbox: Option<bool>,
     #[serde(default)]
     pub pause_rule: Option<plantool_core::PauseRule>,
     #[serde(default)]
@@ -51,15 +49,9 @@ fn parse_mode(s: &str) -> Result<PermissionMode, ApiError> {
 
 async fn start(
     State(state): State<AppState>,
-    approval: Option<Extension<crate::auth::ApprovedAction>>,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<StartBody>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let _ = state
-        .runs
-        .execution
-        .admit()
-        .map_err(|e| ApiError(StatusCode::CONFLICT, e.to_string()))?;
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let provider = Provider::parse(&body.provider)
         .ok_or_else(|| bad_request(format!("unknown provider {}", body.provider)))?;
@@ -138,16 +130,19 @@ async fn start(
         }
         s.select_milestone(key)?;
     }
-    let rule = if stage_name == "implement" {
+    if stage_name == "implement" {
         let rule = body.pause_rule.clone().or_else(|| {
             (body.implementation_mode == ImplementationMode::StepByStep
                 && s.session().pause_rule == plantool_core::PauseRule::NoPauses)
                 .then_some(plantool_core::PauseRule::EveryMilestone)
         });
-        rule
-    } else {
-        None
-    };
+        if let Some(rule) = rule {
+            s.apply_context(&super::where_context::Update {
+                pause_rule: Some(rule),
+                ..Default::default()
+            })?;
+        }
+    }
     let resume_from = body.resume_run.as_deref().and_then(|rid| s.run(rid));
     if body.resume_run.is_some() && resume_from.is_none() {
         return Err(bad_request("unknown run to resume"));
@@ -173,9 +168,6 @@ async fn start(
             ));
         }
     }
-    if let Some(Extension(approval)) = &approval {
-        approval.recheck(&state)?;
-    }
     if stage_name == "implement" && body.worktree.unwrap_or(true) {
         let ws = s.clone();
         tokio::task::spawn_blocking(move || ws.ensure_worktree(None))
@@ -186,10 +178,7 @@ async fn start(
     if target.index() > current.index() {
         s.set_stage(target, Actor::Agent)?;
     }
-    let mut sess = s.session();
-    if let Some(rule) = &rule {
-        sess.pause_rule = rule.clone();
-    }
+    let sess = s.session();
     let extra = body.prompt.as_deref().filter(|p| !p.trim().is_empty());
     let implementation_mode = if stage_name == "implement" {
         resume_from
@@ -258,7 +247,7 @@ async fn start(
     {
         return Err(bad_request("Ollama stage runs need Auto or Allow all permissions so OpenCode can use plantool commands"));
     }
-    let run = state.runs.start_with_security(
+    let run = state.runs.start(
         s.clone(),
         provider,
         target,
@@ -270,17 +259,7 @@ async fn start(
         mode,
         implementation_mode,
         previous_milestone.as_ref(),
-        rule.clone(),
-        body.sandbox
-            .or_else(|| resume_from.as_ref().map(|r| r.sandboxed)),
-        None,
     )?;
-    if let Some(rule) = rule {
-        s.apply_context(&super::where_context::Update {
-            pause_rule: Some(rule),
-            ..Default::default()
-        })?;
-    }
     Ok((
         StatusCode::CREATED,
         Json(json!({ "run": run, "prompt": prompt })),
@@ -434,7 +413,6 @@ async fn milestone(
 async fn approve_milestone(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Extension(approval): Extension<crate::auth::ApprovedAction>,
     Path((repo, slug, id)): Path<(String, String, String)>,
     body: Option<Json<ApproveBody>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -527,8 +505,6 @@ async fn approve_milestone(
                 cwd,
                 subject,
                 amend,
-                approval.clone(),
-                state.clone(),
             )
             .await
             .map_err(|e| {
@@ -541,10 +517,10 @@ async fn approve_milestone(
         None => None,
     };
     let (sha, committed) = match outcome {
-        None => {
-            approval.recheck(&state)?;
-            (approval.workspace()?.head.clone(), false)
-        }
+        None => (
+            crate::git::head_sha(&run.cwd).map_err(|e| anyhow::anyhow!(e))?,
+            false,
+        ),
         Some(crate::git::CommitOutcome::Committed(sha)) => (sha, true),
         Some(crate::git::CommitOutcome::HookRewrote { sha, files }) => {
             if sha.is_some() && run.milestone_commit != sha {
@@ -560,7 +536,6 @@ async fn approve_milestone(
             return Err(ApiError(StatusCode::CONFLICT, format!("git hooks rewrote {} file(s): {}{more}. The rewritten files are staged; review them in the Changes tab and approve again to include them in the milestone commit.", files.len(), shown.join(", "))));
         }
     };
-    approval.recheck_policy(&state)?;
     let previous = run.clone();
     run.milestone_pending = false;
     run.milestone_review = None;
@@ -708,12 +683,6 @@ async fn upload_attachment(
     } else {
         safe
     };
-    let root = crate::git::main_root(&s.session().repo.root);
-    let policy = crate::sandbox::NeverSent::new(&state.runs.execution.rules(&root))
-        .map_err(|e| bad_request(e.to_string()))?;
-    if policy.matches(std::path::Path::new(&safe)) {
-        return Err(bad_request("This upload is excluded by never-sent rules"));
-    }
     let name = format!(
         "{}-{}",
         uuid::Uuid::new_v4().simple(),
@@ -724,10 +693,6 @@ async fn upload_attachment(
         .await
         .map_err(anyhow::Error::from)?;
     let path = dir.join(name);
-    s.store.save_evidence(
-        &format!("attachment:{}", path.file_name().unwrap().to_string_lossy()),
-        &body,
-    )?;
     tokio::fs::write(&path, body)
         .await
         .map_err(anyhow::Error::from)?;

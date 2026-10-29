@@ -50,7 +50,6 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     }
   });
   const [preview, setPreview] = useState<string | null>(null);
-  const [sandbox, setSandbox] = useState(resumeTarget?.sandboxed ?? false);
   const [worktree, setWorktree] = useState(true);
   const [implementationMode, setImplementationMode] = useState<ImplementationMode>(resumeTarget?.implementation_mode ?? initialMode ?? "all-at-once");
   const [err, setErr] = useState<string | null>(null);
@@ -111,7 +110,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         const final = await api.session(sessionKey);
         if (!active.every((run) => final.runs.some((item) => item.id === run.id && ["stopped", "failed"].includes(item.status)))) throw new Error("The previous run has not ended. Nothing new was started.");
       }
-      const r = await api.startRun(sessionKey, { sandbox: sandbox || runs.find((r) => r.id === resume)?.sandboxed ? sandbox : undefined, milestone: milestone || undefined, pause_rule: stage === "implement" ? customPause !== null ? { mode: "plain-language", rule: customPause } : { mode: implementationMode === "step-by-step" ? "every-milestone" : "no-pauses" } : undefined, provider, stage, model: model || undefined, effort: effort || undefined, prompt: prompt || undefined, permission_mode: permission === "ask" && ["copilot", "ollama"].includes(provider) ? "accept-edits" : permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
+      const r = await api.startRun(sessionKey, { milestone: milestone || undefined, pause_rule: stage === "implement" ? customPause !== null ? { mode: "plain-language", rule: customPause } : { mode: implementationMode === "step-by-step" ? "every-milestone" : "no-pauses" } : undefined, provider, stage, model: model || undefined, effort: effort || undefined, prompt: prompt || undefined, permission_mode: permission === "ask" && ["copilot", "ollama"].includes(provider) ? "accept-edits" : permission, worktree: stage === "implement" ? worktree : undefined, resume_run: resume || undefined, implementation_mode: stage === "implement" ? implementationMode : undefined });
       onStarted(r.run.id);
       onClose();
     } catch (e) {
@@ -230,8 +229,6 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
             <pre className="prompt-text">{preview}</pre>
           </details>
         )}
-        <label className="check-row"><input type="checkbox" checked={sandbox} onChange={(e) => setSandbox(e.target.checked)} /> Isolate this run with the macOS sandbox</label>
-        <p className="muted small">Protects local secrets and limits writes. Requires macOS; an enabled sandbox never falls back to an unprotected run.</p>
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
           <span className="spacer" />

@@ -1,10 +1,11 @@
-export type SprintIssue={id:string;issue:number|null;title:string;step:string;membership:string;estimate:string;plan_hash:string;pr:number|null;frozen:boolean};
-export type SprintBoardData={project:string;repository:string;current_week:string;planning_queued:boolean;planning?:{state:string;message:string;scheduler:string};backlog_count:number;sprints:{id:string;week:string;state:string;issue:number|null;items:SprintIssue[]}[]};
-export type ProviderDiagnostic = {route:string;provider:string;model:string;checked_at:number;ok:boolean;redacted:boolean;stages:{stage:string;ok:boolean;message:string;next_step:string;http_status?:number|null;retry_at?:number|null}[]};
-import { authenticatedFetch } from "./auth";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
 export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "assist" | "draft-pr" | "next";
+
+export function token(): string {
+  const t = window.__PLANTOOL_TOKEN__ ?? "";
+  return t === "__PLANTOOL_TOKEN__" ? "" : t;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -15,9 +16,9 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { "x-plantool-author": authorName() };
+  const headers: Record<string, string> = { "x-plantool-actor": token(), "x-plantool-author": authorName() };
   if (body !== undefined) headers["content-type"] = "application/json";
-  const res = await authenticatedFetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }, body);
+  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
   if (!res.ok) {
     let msg = text;
@@ -48,44 +49,6 @@ export function setAuthorName(name: string) {
 }
 
 export const api = {
-  setupProgress: () => request<{step:string;project:string|null}>("GET","/api/engineering-os/setup"),
-  saveSetupProgress: (body:{step:string;project:string|null}) => request<{step:string;project:string|null}>("POST","/api/engineering-os/setup",body),
-  engineering: () => request<import("./engineering").EngineeringOverview>("GET","/api/engineering-os/projects"),
-  recovery: (item:string) => request<{eligible:boolean;review?:boolean;attempt_id:string;step:string;message:string;routing_error?:string|null}>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`),
-  retryEngineering: (item:string,attempt_id:string) => request<{queued:boolean}>("POST",`/api/engineering-os/items/${encodeURIComponent(item)}/recover`,{attempt_id}),
-  engineeringItem: (item:string) => request<import("./engineering").EngineeringDetail>("GET",`/api/engineering-os/items/${encodeURIComponent(item)}`),
-  loop: () => request<{projects:{id:string;name:string|null;version:number;scan_day:number;scan_time:string;nix_enabled:boolean}[];declines:{item:string;title:string;reason:string;reset_at:string;active:boolean}[];notifications:{id:string;body:string;created_at:string}[]}>("GET","/api/settings/loop"),
-  saveLoop: (body:{project:string;version:number;scan_day:number;scan_time:string;nix_enabled:boolean}) => request("POST","/api/settings/loop",body),
-  overrideDecline: (item:string) => request("POST","/api/settings/loop/override",{item}),
-  oversight: () => request<{projects:{id:string;name:string|null;version:number;preset:"minimal"|"standard"|"strict";day:number;time:string;timezone:string;review_globs:string[]}[];plans:{item:string;title:string;state:{preset:string;plan_sha:string;phases?:{name:string;tagged:boolean}[]}}[]}>("GET","/api/settings/oversight"),
-  saveOversight: (body:{project:string;version:number;preset:string;day:number;time:string;timezone:string;review_globs:string[]}) => request("POST","/api/settings/oversight",body),
-  saveReviewTags: (body:{item:string;hash:string;tags:boolean[]}) => request("POST","/api/settings/oversight/tags",body),
-  sprints: (project:string) => request<SprintBoardData>("GET",`/api/engineering-os/projects/${encodeURIComponent(project)}/sprints`),
-  planSprint: (project:string,key:string) => request<{queued:boolean;week:string;message:string}>("POST",`/api/engineering-os/projects/${encodeURIComponent(project)}/sprints/plan`,{idempotency_key:key}),
-  workspace: () => request<{projects:{id:string;name:string|null}[];threads:{id:string;project:string;item:string|null;channel:string|null;title:string;question?:{id:string;question:string;settling?:boolean};messages:{id:string;sender:string;body:string;mentions:string[];at:string}[]}[]}>("GET","/api/workspace"),
-  workspaceReply: (body:{thread:string;body:string;idempotency_key:string;question_id?:string}) => request<{id:string;authority:string}>("POST","/api/workspace/reply",body),
-  githubPlan: (id:string) => request<{gate:{number:number;hash:string;state:string};summary:string;plan:string;messages:{role:string;body:string}[]}>("GET",`/api/github/plans/${encodeURIComponent(id)}`),
-  githubSettings: () => request<{repositories:{project:string;repo_id:number;full_name:string;app_id?:number;installation_id?:number;visibility?:string|null;preflight?:{warnings:string[];advisories?:string[];checked_at?:string}|null}[];status?:{supported:boolean;worker:{available:boolean;message:string}};allowlist:{id:number;login:string}[];sync:{project:string;error:string|null;synced_at:string|null}[]}>("GET","/api/settings/github"),
-  configureGithub: (body:{app_id:number;installation_id:number;repo:string;checkout:string;private_key:string|null}) => request<{preflight:{warnings:string[];advisories?:string[]};project?:string}>("POST","/api/settings/github",body),
-  githubPreflight: (project:string) => request<{warnings:string[];advisories?:string[]}>("POST","/api/settings/github/preflight",{project}),
-  githubAllowlist: (login:string,remove:boolean) => request("POST","/api/settings/github/allowlist",{login,remove}),
-  modelSettings: () => request<{yaml:string;projects:{id:string;checkout:string;visibility?:string|null;allowed_providers:string[]}[];routes:{route:string;available:boolean;model:string|null;error:string|null;diagnostic?:ProviderDiagnostic|null}[]}>("GET","/api/settings/models"),
-  saveModels: (body:{yaml:string;project:string|null;allowed_providers:string[]|null}) => request("POST","/api/settings/models",body),
-  diagnoseModel: (route:string) => request<ProviderDiagnostic>("POST","/api/settings/models/diagnose",{route}),
-  verifyModels: () => request("POST","/api/settings/models/verify",{}),
-  workerStatus: () => request<{worker:{available:boolean;message:string};items?:{item:string;title:string;state:{step:string;frozen?:boolean};error:string|null;summary:string|null}[]}>("GET","/api/engineering-os/status"),
-  repairWorker: () => request<{worker:{available:boolean;message:string}}>("POST","/api/engineering-os/repair", {}),
-
-  retentionPolicy: () => request<{transcript_days:number;evidence_days:number;disk_cap_bytes:number}>("GET","/api/settings/retention"),
-  saveRetentionPolicy: (policy:{transcript_days:number;evidence_days:number;disk_cap_bytes:number}) => request<{ok:boolean}>("POST","/api/settings/retention",policy),
-  pinRun: (key:string,id:string,pinned:boolean) => request<{ok:boolean;pinned:boolean}>("POST",`/api/sessions/${key}/runs/${id}/pin`,{pinned}),
-  cleanBreakNotice: () => request<{backup:string|null}>("GET","/api/notices/clean-break"),
-  dismissCleanBreakNotice: () => request<{ok:boolean}>("POST","/api/notices/clean-break",{}),
-  executionStatus: () => request<{ execution: { stopped: boolean; generation: number }; sandbox_supported: boolean }>("GET", "/api/execution/status"),
-  stopAll: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/stop", {}),
-  resumeExecution: () => request<{ execution: { stopped: boolean } }>("POST", "/api/execution/resume", {}),
-  neverSent: (repo: string) => request<{ defaults: string[]; patterns: string[] }>("GET", `/api/settings/never-sent?repo=${encodeURIComponent(repo)}`),
-  setNeverSent: (repo: string, patterns: string[]) => request("POST", "/api/settings/never-sent", { repo, patterns }),
   setContext: (key: string, body: { base?: string; branch?: string; workspace?: string; difftool?: string; pause_rule?: { mode: string; rule?: string } }) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/where`, body),
   contextProposal: (key: string, id: string, dismiss: boolean) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/proposals`, { id, dismiss }),
   diffToolSetting: () => request<{ value: string | null; difftool: string | null }>("GET", "/api/settings/difftool"),
@@ -122,7 +85,7 @@ export const api = {
   changes: (key: string, scope?: ChangeScope) => request<ChangesResponse>("GET", `/api/sessions/${key}/changes${scope ? `?scope=${scope}` : ""}`),
   openChanges: (key: string, scope?: ChangeScope) => request<ChangesResponse>("POST", `/api/sessions/${key}/changes/open`, { scope: scope ?? null }),
   changesFile: (key: string, path: string, scope?: ChangeScope) => request<FileDiff>("GET", `/api/sessions/${key}/changes/file?path=${encodeURIComponent(path)}${scope ? `&scope=${scope}` : ""}`),
-  startRun: (key: string, body: { sandbox?: boolean; milestone?: string; pause_rule?: { mode: string; rule?: string }; provider: string; stage: string; model?: string; effort?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
+  startRun: (key: string, body: { milestone?: string; pause_rule?: { mode: string; rule?: string }; provider: string; stage: string; model?: string; effort?: string; prompt?: string; permission_mode?: string; worktree?: boolean; resume_run?: string; implementation_mode?: string }) => request<{ run: Run; prompt: string }>("POST", `/api/sessions/${key}/runs`, body),
   prompt: (key: string, stage: PromptStage, extra?: string, implementationMode?: string, resumeRun?: string) => {
     const query = new URLSearchParams();
     if (extra) query.set("extra", extra);
@@ -148,7 +111,7 @@ export const api = {
   uploadAttachment: async (key: string, file: File): Promise<{ name: string; path: string }> => {
     const res = await fetch(`/api/sessions/${key}/attachments`, {
       method: "POST",
-      headers: { "x-plantool-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
+      headers: { "x-plantool-actor": token(), "x-plantool-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
       body: file,
     });
     const data = await res.json();

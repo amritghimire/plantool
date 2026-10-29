@@ -107,10 +107,8 @@ pub enum RunInput {
     Stop,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RunOptions {
-    pub environment: Option<crate::identities::RunEnvironment>,
-    pub launch: Option<std::sync::Arc<crate::sandbox::launch::Launch>>,
     pub cwd: PathBuf,
     pub prompt: String,
     pub model: Option<String>,
@@ -119,67 +117,6 @@ pub struct RunOptions {
     pub executable: Option<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
     pub permission_mode: PermissionMode,
-}
-
-impl RunOptions {
-    pub fn command(&self, exe: &std::path::Path) -> anyhow::Result<tokio::process::Command> {
-        if let Some(launch) = &self.launch {
-            if let Some((home, attempt)) = &launch.attempt {
-                let db = crate::database::open(home)?;
-                let item: String =
-                    db.query_row("SELECT item_id FROM attempts WHERE id=?1", [attempt], |r| {
-                        r.get(0)
-                    })?;
-                if crate::loop_engine::nix_enabled(home, &item, &self.cwd)? {
-                    let nix=which::which("nix").map_err(|_|anyhow::anyhow!("Project opted into Nix, but nix is unavailable; disable the setting or install Nix"))?;
-                    let mut command = launch.command(&nix)?;
-                    command
-                        .args(["develop", "--no-write-lock-file", "-c"])
-                        .arg(exe);
-                    return Ok(command);
-                }
-            }
-            launch.command(exe)
-        } else {
-            Ok(tokio::process::Command::new(exe))
-        }
-    }
-    pub fn spawn(
-        &self,
-        command: &mut tokio::process::Command,
-    ) -> anyhow::Result<crate::execution::ManagedChild> {
-        let child = match &self.launch {
-            Some(launch) => launch.execution.spawn(launch.generation, command)?,
-            None => {
-                std::sync::Arc::new(crate::execution::Execution::default()).spawn(0, command)?
-            }
-        };
-        if let (Some(launch), Some(pid)) = (&self.launch, child.id()) {
-            launch.release(command, pid)?;
-        }
-        if let Some((home, id)) = self.launch.as_ref().and_then(|l| l.attempt.as_ref()) {
-            if let Some(pid) = child.id() {
-                let stamp = crate::dispatcher::process_stamp(pid).ok();
-                crate::database::open(home)?.execute(
-                    "UPDATE dispatches SET pid=?2,process_started=?3 WHERE attempt_id=?1",
-                    rusqlite::params![id, pid, stamp],
-                )?;
-            }
-        }
-        Ok(child)
-    }
-
-    pub fn apply_environment(&self, command: &mut tokio::process::Command, provider: Provider) {
-        crate::sandbox::environment::apply(command, Some(provider));
-        // Never inherit the caller's attempt credential in probes or direct tests.
-        command.env_remove("PLANTOOL_RUN_TOKEN");
-        if let Some(environment) = &self.environment {
-            environment.apply(command);
-        }
-        if let Some(launch) = &self.launch {
-            launch.apply_environment(command);
-        }
-    }
 }
 
 pub type EventSink = mpsc::Sender<ProviderEvent>;

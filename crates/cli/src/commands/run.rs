@@ -4,7 +4,10 @@ use clap::Args as ClapArgs;
 #[derive(ClapArgs)]
 pub struct Args {
     pub reference: String,
-    /// Agent provider: claude or codex (default: claude, or PLANTOOL_PROVIDER). Other providers require browser confirmation.
+    /// Build one named plan phase.
+    #[arg(long)]
+    pub milestone: Option<String>,
+    /// Agent provider: claude, codex, copilot, ollama or opencode (default: claude, or PLANTOOL_PROVIDER).
     #[arg(long)]
     pub provider: Option<String>,
     #[arg(long)]
@@ -12,9 +15,15 @@ pub struct Args {
     /// Extra instructions appended to the stage prompt.
     #[arg(long)]
     pub prompt: Option<String>,
+    /// Permission mode: ask (default), accept-edits, auto or allow-all. Also PLANTOOL_PERMISSION.
+    #[arg(long)]
+    pub permission: Option<String>,
     /// For implement: work in the current checkout instead of a git worktree.
     #[arg(long)]
     pub no_worktree: bool,
+    /// For implement: pause after each plan phase for review and a milestone commit.
+    #[arg(long)]
+    pub step_by_step: bool,
     /// Resume an earlier run's provider session (keeps its context): a run id, or `last`.
     #[arg(long)]
     pub resume: Option<String>,
@@ -48,12 +57,10 @@ pub fn run(a: Args, stage: &str) -> anyhow::Result<()> {
         }
         other => other.map(|s| s.to_string()),
     };
-    if !matches!(provider.as_str(), "claude" | "codex") {
-        anyhow::bail!(
-            "start {provider} in the browser; its permission policy requires passkey confirmation"
-        );
-    }
-    let body = serde_json::json!({ "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": "ask", "worktree": !a.no_worktree, "resume_run": resume, "implementation_mode": "all-at-once" });
+    let permission = a
+        .permission
+        .or_else(|| std::env::var("PLANTOOL_PERMISSION").ok());
+    let body = serde_json::json!({ "milestone": a.milestone, "provider": provider, "stage": stage, "model": a.model, "prompt": a.prompt, "permission_mode": permission, "worktree": !a.no_worktree, "resume_run": resume, "implementation_mode": if a.step_by_step { "step-by-step" } else { "all-at-once" } });
     let v: serde_json::Value = c.post(&format!("/api/sessions/{key}/runs"), &body)?;
     if a.json {
         return print_json(&v);

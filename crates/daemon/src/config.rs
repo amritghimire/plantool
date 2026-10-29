@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub home: PathBuf,
     pub port: u16,
+    pub token: String,
     pub version: String,
 }
 
@@ -37,6 +38,7 @@ impl Config {
         Config {
             home: default_home(),
             port: default_port(),
+            token: random_token(),
             version: version.to_string(),
         }
     }

@@ -67,7 +67,6 @@ fn with_context(
 async fn list(
     State(state): State<AppState>,
     Path((repo, slug)): Path<(String, String)>,
-    headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
@@ -75,18 +74,6 @@ async fn list(
         s.refresh_code_anchors()?;
     }
     let comments = s.comments(&q.filter());
-    if actor_from(&headers, &state) != Actor::Human {
-        for c in &comments {
-            if let Some(code) = &c.anchor.code {
-                crate::sandbox::read_guard::session_check(
-                    &state,
-                    &s,
-                    std::path::Path::new(&code.path),
-                )
-                .map_err(|e| ApiError(StatusCode::FORBIDDEN, e.to_string()))?;
-            }
-        }
-    }
     let seq = s.seq();
     Ok(Json(
         json!({ "seq": seq, "comments": with_context(&s, comments, q.context) }),
@@ -126,18 +113,6 @@ async fn add(
     };
     if items.is_empty() {
         return Err(bad_request("no comments given"));
-    }
-    if actor != Actor::Human {
-        for c in &items {
-            if let Some(code) = &c.code {
-                crate::sandbox::read_guard::session_check(
-                    &state,
-                    &s,
-                    std::path::Path::new(&code.path),
-                )
-                .map_err(|e| ApiError(StatusCode::FORBIDDEN, e.to_string()))?;
-            }
-        }
     }
     if dry_run {
         let anchors = s.dry_run(&items)?;
@@ -239,19 +214,12 @@ fn default_radius() -> u32 {
 async fn context(
     State(state): State<AppState>,
     Path((repo, slug, id)): Path<(String, String, String)>,
-    headers: HeaderMap,
     Query(q): Query<ContextQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let c = s
         .comment(&id)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown comment {id}")))?;
-    if actor_from(&headers, &state) != Actor::Human {
-        if let Some(code) = &c.anchor.code {
-            crate::sandbox::read_guard::session_check(&state, &s, std::path::Path::new(&code.path))
-                .map_err(|e| ApiError(StatusCode::FORBIDDEN, e.to_string()))?;
-        }
-    }
     let ctx: Vec<serde_json::Value> = s
         .context(&c, q.radius)
         .into_iter()
