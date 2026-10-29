@@ -53,6 +53,12 @@ export function Sidebar(p: SidebarProps) {
   const [commitMilestone, setCommitMilestone] = useState(true);
   const [commitMessage, setCommitMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(() => {
+    try { return localStorage.getItem(`plantool.actions.${p.view.key}`) !== "closed"; } catch { return true; }
+  });
+  useEffect(() => {
+    try { setActionsOpen(localStorage.getItem(`plantool.actions.${p.view.key}`) !== "closed"); } catch { setActionsOpen(true); }
+  }, [p.view.key]);
   const [showFinished, setShowFinished] = useState(() => {
     try { return localStorage.getItem(`plantool.finished.${p.view.key}`) === "open"; } catch { return false; }
   });
@@ -117,10 +123,14 @@ export function Sidebar(p: SidebarProps) {
   return (
     <aside className="sidebar">
       {p.view.handoff && <Handoff step={p.view.state.milestones?.length && p.view.handoff.step === "Build" ? `Build ${Math.min(p.view.state.milestones.filter((m) => m.status === "approved" || m.status === "completed").length + 1, p.view.state.milestones.length)} of ${p.view.state.milestones.length}` : p.view.handoff.step} label={p.view.handoff.label} action={p.view.handoff.action} onAction={p.onHandoff ?? (() => {})} />}
+      <nav className="side-block tabs" aria-label="Session documents">
+        <DocTab label="Research" doc={research} active={p.activeTab === "research"} onClick={() => p.onTab("research")} />
+        <DocTab label="Plan" doc={plan} active={p.activeTab === "plan"} onClick={() => p.onTab("plan")} />
+        <button className={`tab ${p.activeTab === "changes" ? "active" : ""}`} onClick={() => p.onTab("changes")} type="button">
+          Changes
+        </button>
+      </nav>
       {blockers.length > 0 && <div className="banner" role="status">{blockers.length} open blockers. Resolve them before approval.</div>}
-      {p.reviewPanel}
-      {p.activityPanel}
-      {p.contextPanel}
       <div className="side-block">
         <div className="side-title">{s.title}</div>
         <div className="muted small">{p.view.key}</div>
@@ -161,17 +171,19 @@ export function Sidebar(p: SidebarProps) {
           <label>Override reason <input value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label>
           <button className="btn ghost" type="button" disabled={p.busy || !plan?.exists || !overrideReason.trim()} onClick={() => void p.onStage("approved", overrideReason)}>Approve with recorded override</button>
         </div>}
-      <details className="side-block actions disclosure">
-        <summary>More actions</summary>
+      <details className="side-block actions disclosure" open={actionsOpen} onToggle={(event) => {
+        const open = event.currentTarget.open;
+        setActionsOpen(open);
+        try { localStorage.setItem(`plantool.actions.${p.view.key}`, open ? "open" : "closed"); } catch { /* optional preference */ }
+      }}>
+        <summary>Actions</summary>
         {stage === "new" && !s.brief && <div className="muted small">Add a brief below so the agent knows what success looks like.</div>}
         {liveRun && <div className="run-handoff"><span className={`run-status ${liveRun.status}`} /><span>{liveRun.status === "waiting" ? "The agent needs your answer." : liveRun.status === "idle" ? "The agent finished its turn. Review its work or send a follow-up." : "The agent is working. Follow its progress here."}</span><button className="btn small" type="button" onClick={() => p.onSelectRun(liveRun.id)}>Open run</button></div>}
-        <button className="btn ghost" onClick={p.onAskAgent} disabled={p.busy} type="button">Ask agent…</button>
-        {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
         {stage === "new" && (
           <>
-            {p.view.handoff?.action !== "Start research" && (<button className="btn" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
+            <button className="btn primary" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
               Start research
-            </button>)}
+            </button>
             <div className="skip-row muted small">
               skip:
               <button className="link" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
@@ -185,9 +197,9 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "researching" || stage === "research-review") && (
           <>
-            {p.view.handoff?.action !== "Plan it" && (<button className="btn" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+            <button className="btn primary" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
               Plan it
-            </button>)}
+            </button>
             <div className="skip-row muted small">
               skip:
               <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
@@ -198,14 +210,14 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "planning" || stage === "plan-review") && (
           <>
-            {p.view.handoff?.action !== "Approve plan" && (<button
-              className="btn"
+            <button
+              className="btn primary"
               disabled={p.busy || !plan?.exists || blockers.length > 0}
               onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}
               type="button"
             >
               Approve plan
-            </button>)}
+            </button>
             <button className="btn ghost" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
               {plan?.exists ? "Revise with agent" : "Start planning"}
             </button>
@@ -213,9 +225,9 @@ export function Sidebar(p: SidebarProps) {
         )}
         {stage === "approved" && (
           <>
-            {p.view.handoff?.action !== "Start implementation" && (<button className="btn" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
+            <button className="btn primary" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
               Start implementation
-            </button>)}
+            </button>
             {!plan?.exists && <div className="muted small">No plan: the agent writes the tasks to plan.md first, then works through them.</div>}
           </>
         )}
@@ -246,7 +258,7 @@ export function Sidebar(p: SidebarProps) {
                         placeholder="Commit message"
                       />
                     )}
-                    <button className="btn" onClick={() => p.onApproveMilestone(latestImplementation, commitMilestone, commitMessage)} disabled={p.busy || p.view.state.plan_revision_pending || (commitMilestone && commitMessage.trim() === "")} type="button">
+                    <button className="btn primary" onClick={() => p.onApproveMilestone(latestImplementation, commitMilestone, commitMessage)} disabled={p.busy || p.view.state.plan_revision_pending || (commitMilestone && commitMessage.trim() === "")} type="button">
                       Approve milestone and continue
                     </button>
                   </>
@@ -257,8 +269,8 @@ export function Sidebar(p: SidebarProps) {
                 ) : null}
               </>
             )}
-            {stage === "implementation-review" && p.view.handoff?.action !== "Accept implementation" && (<button
-              className="btn"
+            {stage === "implementation-review" && (<button
+              className="btn primary"
               disabled={p.busy}
               onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}
               type="button"
@@ -272,6 +284,9 @@ export function Sidebar(p: SidebarProps) {
             Review {activeDoc.kind} with agent
           </button>
         )}
+        <button className="btn ghost" onClick={p.onAskAgent} disabled={p.busy} type="button">Ask agent…</button>
+        {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
+        <details className="advanced-controls disclosure"><summary>Advanced controls</summary>
         <div className="skip-row muted small">
           <button className="link" onClick={() => p.onStartRun(stage === "new" || stage === "researching" || stage === "research-review" ? "research" : stage === "approved" || stage === "implementing" || stage === "implementation-review" ? "implement" : "plan")} disabled={p.busy} type="button">
             run any stage…
@@ -287,7 +302,12 @@ export function Sidebar(p: SidebarProps) {
             ))}
           </select>
         </label>
+        </details>
       </details>
+
+      {p.reviewPanel}
+      {p.activityPanel}
+      {p.contextPanel}
 
       <details><summary>Session brief</summary><Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} /></details>
 
@@ -302,13 +322,7 @@ export function Sidebar(p: SidebarProps) {
         </ol>
       </details>
 
-      <nav className="side-block tabs">
-        <DocTab label="Research" doc={research} active={p.activeTab === "research"} onClick={() => p.onTab("research")} />
-        <DocTab label="Plan" doc={plan} active={p.activeTab === "plan"} onClick={() => p.onTab("plan")} />
-        <button className={`tab ${p.activeTab === "changes" ? "active" : ""}`} onClick={() => p.onTab("changes")} type="button">
-          Changes
-        </button>
-      </nav>
+
 
       {plan?.exists && plan.progress.length > 0 && (
         <div className="side-block">

@@ -7,7 +7,7 @@ import type { ChangeScope, ChangesResponse, FileDiff } from "../types";
 
 type DiffState = { kind: "loading" } | { kind: "error"; message: string } | { kind: "ready"; diff: FileDiff };
 
-export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded, highlightComment }: { sessionKey: string; nonce: number; comments?: Comment[]; actions?: ThreadActions; onAdded?: () => void; highlightComment?: string | null }) {
+export function ChangesTab({ sessionKey, nonce, workspace, comments = [], actions, onAdded, highlightComment }: { sessionKey: string; nonce: number; workspace?: string; comments?: Comment[]; actions?: ThreadActions; onAdded?: () => void; highlightComment?: string | null }) {
   const [data, setData] = useState<ChangesResponse | null>(null);
   const [scope, setScope] = useState<ChangeScope | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -80,14 +80,17 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
           <span className="deleted"> −{total.deleted}</span>
         </div>
         <span className="spacer" />
-        <span className="muted small">
-          {data.tool === "difftool" ? "difftool found" : data.tool === "git-difftool" ? "using git difftool" : "no diff tool found"}
-        </span>
+        <span className="review-tool">{data.tool === "difftool" ? "difftool" : data.tool === "git-difftool" ? "git difftool" : "Built-in diff"}</span>
         <button className="btn primary" onClick={() => void openReview()} disabled={busy} type="button">
           {data.tool === "difftool" ? "Review in difftool" : data.tool === "none" ? "Use built-in diff" : "Open in git difftool"}
         </button>
       </div>
-      {data.difftool_open_comments !== undefined && <p className="muted">Difftool comments (read only): {data.difftool_open_comments === null ? "not available" : `${data.difftool_open_comments} open`}. Resolve them in difftool.</p>}
+      <dl className="review-context" aria-label="Comparison context">
+        {workspace && <div><dt>Workspace</dt><dd title={workspace}>{workspace}</dd></div>}
+        <div><dt>Comparing</dt><dd><code title={data.base}>{data.base}</code><span aria-hidden="true"> → </span>working tree</dd></div>
+        <div><dt>Scope</dt><dd>{data.scope === "step" ? "Current milestone" : "Whole implementation"}</dd></div>
+      </dl>
+      {data.review?.tool === "difftool" && data.difftool_open_comments !== undefined && <p className="muted">Difftool comments (read only): {data.difftool_open_comments === null ? "not available" : `${data.difftool_open_comments} open`}. Resolve them in difftool.</p>}
       {data.step_available && (
         <div className="changes-scope button-row">
           <span className="muted small">show</span>
@@ -103,8 +106,8 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
       )}
       {data.review?.tool === "difftool" && (
         <p className="banner">
-          difftool review: <a href={data.review.url} target="_blank" rel="noreferrer noopener">{data.review.url}</a>
-          <span className="muted small"> · the daemon opens it; if the tab did not appear, use the link</span>
+          <a href={data.review.url} target="_blank" rel="noreferrer noopener">Open this review in difftool ↗</a>
+          <span className="muted small"> · includes new files</span>
         </p>
       )}
       {data.review?.tool === "git-difftool" && <p className="banner">git difftool was launched on this machine.</p>}
@@ -121,7 +124,7 @@ export function ChangesTab({ sessionKey, nonce, comments = [], actions, onAdded,
         <p className="muted">These signals help find drift. They do not prove a task is complete.</p>
       </details>}
       {data.milestones && <details className="disclosure"><summary>Planned milestones and completed tasks</summary>{data.milestones.map((m) => <section key={m.key}><strong>{m.key} · {m.status}</strong><ul>{m.completed_tasks.map((task) => <li key={task}>{task}</li>)}</ul></section>)}</details>}
-      <table className="stat">
+      <table className="stat" aria-label="Changed files">
         <tbody>
           {data.stat.map((f) => {
             const isOpen = open.has(f.path);

@@ -296,10 +296,10 @@ export function SessionPage() {
   const onHandoff = () => {
           if (!view) return;
           const active = [...view.runs].sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
-          if (view.handoff?.label === "Recovery needed" && active) setDialog({ stage: active.task === "research" ? "research" : active.task === "implement" ? "implement" : "plan", resumeId: active.id });
+          if (view.handoff?.label === "Recovery needed" && active) setDialog({ stage: active.task === "assist" ? "assist" : active.task === "draft-pr" ? "draft-pr" : active.task === "critique" ? "critique" : active.task === "research" ? "research" : active.task === "implement" ? "implement" : "plan", resumeId: active.id });
           else if (active && ["Agent working", "Agent needs an answer"].includes(view.handoff?.label ?? "")) setSelectedRun(active.id);
           else if (view.handoff?.label === "Owner choosing next step") setDialog({ stage: ["new", "researching"].includes(view.state.stage) ? "research" : ["approved", "implementing"].includes(view.state.stage) ? "implement" : "plan" });
-          else setTab(view.state.stage === "implementation-review" ? "changes" : view.state.stage === "research-review" ? "research" : "plan");
+          else setTab(tabForStage(view.state.stage));
         };
 
   const onBrief = async (brief: string | null) => {
@@ -426,7 +426,7 @@ export function SessionPage() {
         <span className="muted">/</span>
         <span className="crumb">{view.session.repo_slug}</span>
         <span className="muted">/</span>
-        <span className="crumb">{view.session.slug}</span>
+        <span className="crumb session-crumb" title={view.session.slug}>{view.session.title}</span>
         <span className="spacer" />
         <label className="muted small author">
           as
@@ -486,7 +486,11 @@ export function SessionPage() {
         selectedRun={selectedRun}
         busy={busy}
       />
-      <main className="content">
+      <main className="content" id="session-content">
+        <header className="document-heading">
+          <div><span className="eyebrow">{view.session.repo_slug}</span><h1>{tab === "changes" ? "Review changes" : tab === "research" ? "Research" : "Implementation plan"}</h1></div>
+          <span className="document-state">{view.step ?? view.state.stage.replaceAll("-", " ")}</span>
+        </header>
       <div className={`document-notices mode-${mode}`}>
         {!connected && <p className="banner">Disconnected. This view may be stale. Reconnecting to the local daemon…</p>}
         {view.state.pause_reason && <p className="banner">Checkpoint: {view.state.pause_reason}</p>}
@@ -510,7 +514,7 @@ export function SessionPage() {
           />
           </>
         ) : (
-          <ChangesTab highlightComment={highlight} sessionKey={key} nonce={changesNonce} comments={comments} actions={actions} onAdded={() => void api.comments(key).then((r) => setComments(r.comments))} />
+          <ChangesTab workspace={view.session.worktree ?? view.session.repo.root} highlightComment={highlight} sessionKey={key} nonce={changesNonce} comments={comments} actions={actions} onAdded={() => void api.comments(key).then((r) => setComments(r.comments))} />
         )}
       </main>
       {run && (
