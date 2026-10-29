@@ -44,9 +44,9 @@ After writing the plan, post blocking questions as comments on their own lines. 
 pub const IMPLEMENT: &str = r#"Implement plantool session `{key}`: {title}
 
 Run `plantool skill` and then `plantool skill implement`, and follow both. The human approved building this.
-The plan lives at `{plan_path}`; if that file does not exist, planning was skipped: write a task list with unique T<n> keys there first and wait for the owner to approve it in the browser, as the skill says.
+The plan lives at `{plan_path}`; if that file does not exist, planning was skipped: write the task list there first, as the skill says.
 Set the stage with `plantool session stage --session {key} --set implementing`, work in `{checkout}`,
-and report each completed stable task key with `plantool task done {key} T1` (replace T1 with the actual key). Do not edit plan checkboxes. When every task is done, run the project's checks,
+and tick the plan's checkboxes as you finish each task. When every task is done, run the project's checks,
 set the stage to `implementation-review`, and summarise what changed and what you skipped.
 {brief}
 {extra}"#;
@@ -85,27 +85,10 @@ Run `plantool skill` if it is no longer in your context. Check the current stage
 
 pub fn template(home: &Path, stage: &str) -> String {
     let override_path = home.join("prompts").join(format!("{stage}.md"));
-    let input = std::fs::read_to_string(&override_path)
-        .ok()
-        .filter(|s| !s.trim().is_empty());
-    // The owner-editable file remains a live input; SQLite stores its snapshot.
-    if crate::database::path(home).is_file() {
-        if let Ok(db) = crate::database::open(home) {
-            let key = format!("prompt_override:{stage}");
-            if crate::database::get::<Option<String>>(&db, &key)
-                .ok()
-                .flatten()
-                .flatten()
-                != input
-            {
-                if let Err(error) = crate::database::set(&db, &key, &input) {
-                    tracing::warn!("prompt override snapshot: {error}");
-                }
-            }
+    if let Ok(s) = std::fs::read_to_string(&override_path) {
+        if !s.trim().is_empty() {
+            return s;
         }
-    }
-    if let Some(input) = input {
-        return input;
     }
     match stage {
         "research" => RESEARCH.to_string(),
@@ -185,14 +168,10 @@ pub fn render_at(
             .replace("{repo_slug}", &session.repo_slug)
             .replace("{checkout}", &session.cwd().display().to_string())
             .replace("{base}", &session.base)
-            .replace(
-                "{session_dir}",
-                &session_dir.join("docs").display().to_string(),
-            )
+            .replace("{session_dir}", &session_dir.display().to_string())
             .replace(
                 "{research_path}",
                 &session_dir
-                    .join("docs")
                     .join(DocKind::Research.file_name())
                     .display()
                     .to_string(),
@@ -200,7 +179,6 @@ pub fn render_at(
             .replace(
                 "{plan_path}",
                 &session_dir
-                    .join("docs")
                     .join(DocKind::Plan.file_name())
                     .display()
                     .to_string(),
@@ -250,7 +228,7 @@ pub fn render_milestone_review(
         }) => format!("The difftool review is `{id}`."),
         _ => "Open the current changes with `plantool changes` if the review is missing.".into(),
     };
-    let mut prompt = format!("Continue reviewing the current implementation milestone for plantool session `{}`.\n\nRun `plantool skill` and `plantool skill implement`. The plan is at `{}` and the checkout is `{}`. {reference} Read the open human comments with `difftool review comment list --review <ref> --kind human --unresolved --context --json` when difftool is available. Fix the current milestone, refresh the review, and reply to comments. Remain at stage `implementing`. Plantool forwards new human comments to this run, so finish your turn without starting a blocking difftool watch. Wait for the human to approve this milestone in plantool. Do not start another plan task yet.", session.key(), session_dir.join("docs").join(DocKind::Plan.file_name()).display(), session.cwd().display());
+    let mut prompt = format!("Continue reviewing the current implementation milestone for plantool session `{}`.\n\nRun `plantool skill` and `plantool skill implement`. The plan is at `{}` and the checkout is `{}`. {reference} Read the open human comments with `difftool review comment list --review <ref> --kind human --unresolved --context --json` when difftool is available. Fix the current milestone, refresh the review, and reply to comments. Remain at stage `implementing`. Plantool forwards new human comments to this run, so finish your turn without starting a blocking difftool watch. Wait for the human to approve this milestone in plantool. Do not start another plan task yet.", session.key(), session_dir.join(DocKind::Plan.file_name()).display(), session.cwd().display());
     if let Some(extra) = extra.map(str::trim).filter(|e| !e.is_empty()) {
         prompt.push_str(&format!(
             "\n\nAdditional instructions from the user:\n{extra}"
@@ -318,7 +296,7 @@ mod tests {
         assert!(p.contains("plantool skill research"));
         assert!(p.contains("What the user wants:\nToken scopes are confusing"));
         assert!(p.contains("Additional instructions from the user:\ncheck issue 1"));
-        assert!(p.contains("/home/.plantool/sessions/repo/fix-it/docs/research.md"));
+        assert!(p.contains("/home/.plantool/sessions/repo/fix-it/research.md"));
         assert!(!p.contains("\n\n\n"));
     }
 

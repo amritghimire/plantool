@@ -5,6 +5,8 @@ import { relTime, shortPath, workspacePath } from "../lib/format";
 import { STAGE_LABEL, type SessionView } from "../types";
 import { DropSessionDialog } from "./DropSessionDialog";
 import { NewSessionDialog } from "./NewSessionDialog";
+import { SettingsDialog } from "./SettingsDialog";
+import { ThemeToggle } from "./ThemeToggle";
 
 type Filter = "all" | "needs-you" | "working" | "done";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -42,6 +44,7 @@ export function SessionList() {
   const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [settings, setSettings] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [dropping, setDropping] = useState<SessionView | null>(null);
@@ -75,11 +78,12 @@ export function SessionList() {
     finally { setBusy(false); }
   };
   return <div className="page">
-    <header className="topbar"><div><h1>Personal sessions</h1><p className="muted">Research, plan and implement with your agent.</p></div><div className="spacer" />
+    <header className="topbar"><h1 className="brand">plantool</h1><div className="spacer" />
       <button className="btn primary" onClick={() => setCreating(true)} type="button">New session</button>
-
+      <button className="btn" onClick={() => setSettings(true)} type="button">Settings</button><ThemeToggle />
     </header>
     {creating && <NewSessionDialog onClose={() => setCreating(false)} />}
+    {settings && <SettingsDialog onClose={() => setSettings(false)} />}
     {dropping && <DropSessionDialog view={dropping} busy={busy} onClose={() => setDropping(null)} onDelete={drop} />}
     <main className="list">
       {error && <p className="error" role="alert">{error}</p>}

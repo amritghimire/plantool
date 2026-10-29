@@ -198,21 +198,8 @@ pub enum PlanChange {
 }
 
 pub fn classify_plan_change(old: &str, new: &str) -> PlanChange {
-    if crate::tasks::normalize(old) == crate::tasks::normalize(new) {
+    if old == new {
         return PlanChange::Unchanged;
-    }
-    if headings(old)
-        .iter()
-        .filter(|h| h.level == 3)
-        .map(|h| &h.text)
-        .collect::<Vec<_>>()
-        != headings(new)
-            .iter()
-            .filter(|h| h.level == 3)
-            .map(|h| &h.text)
-            .collect::<Vec<_>>()
-    {
-        return PlanChange::ScopeChange;
     }
     let previous = task_set(old);
     let current = task_set(new);
@@ -220,12 +207,10 @@ pub fn classify_plan_change(old: &str, new: &str) -> PlanChange {
         return PlanChange::ScopeChange;
     }
     let mut consumed = vec![false; current.len()];
-    for (phase, text, _checked) in previous {
-        let Some(i) = current
-            .iter()
-            .enumerate()
-            .position(|(i, (p, t, _done))| !consumed[i] && p == &phase && t == &text)
-        else {
+    for (phase, text, checked) in previous {
+        let Some(i) = current.iter().enumerate().position(|(i, (p, t, done))| {
+            !consumed[i] && p == &phase && t == &text && (!checked || *done)
+        }) else {
             return PlanChange::ScopeChange;
         };
         consumed[i] = true;
@@ -249,6 +234,7 @@ mod revision_tests {
         );
         for changed in [
             "### Phase 1\n- [ ] A\n",
+            "### Phase 1\n- [ ] A\n- [ ] B\n",
             "### Phase 1\n- [ ] Revised A\n- [x] B\n",
             "### Renamed\n- [ ] A\n- [x] B\n",
             "### Phase 1\n- [ ] A\n- [x] B\n- [ ] C\n",

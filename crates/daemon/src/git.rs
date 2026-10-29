@@ -511,44 +511,11 @@ pub async fn commit_streaming(
     message: &str,
     amend: bool,
     cancel: std::sync::Arc<tokio::sync::Notify>,
-    on_step: impl FnMut(CommitStep) + Send,
-) -> Result<CommitOutcome, CommitError> {
-    commit_streaming_inner(cwd, message, amend, cancel, on_step, None, || Ok(())).await
-}
-
-pub async fn commit_streaming_bound(
-    cwd: &Path,
-    message: &str,
-    amend: bool,
-    cancel: std::sync::Arc<tokio::sync::Notify>,
-    on_step: impl FnMut(CommitStep) + Send,
-    expected: WorkspaceSnapshot,
-    before_publish: impl Fn() -> Result<(), GitError> + Send,
-) -> Result<CommitOutcome, CommitError> {
-    commit_streaming_inner(
-        cwd,
-        message,
-        amend,
-        cancel,
-        on_step,
-        Some(expected),
-        before_publish,
-    )
-    .await
-}
-async fn commit_streaming_inner(
-    cwd: &Path,
-    message: &str,
-    amend: bool,
-    cancel: std::sync::Arc<tokio::sync::Notify>,
     mut on_step: impl FnMut(CommitStep) + Send,
-    expected: Option<WorkspaceSnapshot>,
-    before_publish: impl Fn() -> Result<(), GitError> + Send,
 ) -> Result<CommitOutcome, CommitError> {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
-    let transaction = expected.map(|e| BoundCommit::prepare(cwd, e)).transpose()?;
     let dir = cwd.to_path_buf();
     blocking(move || git(&dir, &["add", "-A"])).await?;
     on_step(CommitStep::Committing);
@@ -562,9 +529,6 @@ async fn commit_streaming_inner(
         .kill_on_drop(true);
     if let Some(path) = commit_hook_path(cwd) {
         command.env("PATH", path);
-    }
-    if let Some(t) = &transaction {
-        t.configure(&mut command);
     }
     #[cfg(unix)]
     command.process_group(0);
@@ -615,12 +579,6 @@ async fn commit_streaming_inner(
             stderr: errors.join("\n").trim().to_string(),
         })
     };
-    if let Some(t) = transaction {
-        if result.is_ok() {
-            before_publish()?;
-        }
-        return Ok(t.finish(result, amend)?);
-    }
     let dir = cwd.to_path_buf();
     Ok(blocking(move || classify_commit(&dir, result)).await?)
 }
@@ -1209,115 +1167,6 @@ mod tests {
         assert!(!index.exists());
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn bound_commit_publishes_only_the_approved_tree() {
-        let (_tmp, root) = hook_repo("#!/bin/sh\nexit 0\n");
-        let expected = workspace_snapshot(&root).unwrap();
-        let tree = expected.tree.clone();
-        let result = commit_streaming_bound(
-            &root,
-            "approved",
-            false,
-            std::sync::Arc::new(tokio::sync::Notify::new()),
-            |step| {
-                if matches!(step, CommitStep::Committing) {
-                    std::fs::write(root.join("a.txt"), "later edit\n").unwrap();
-                    std::fs::write(root.join("later.txt"), "unreviewed\n").unwrap();
-                }
-            },
-            expected,
-            || Ok(()),
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            result,
-            CommitOutcome::HookRewrote { sha: Some(_), .. }
-        ));
-        assert_eq!(git(&root, &["rev-parse", "HEAD^{tree}"]).unwrap(), tree);
-        assert_eq!(
-            std::fs::read_to_string(root.join("a.txt")).unwrap(),
-            "later edit\n"
-        );
-        assert!(git(&root, &["show", "HEAD:later.txt"]).is_err());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn bound_commit_preserves_a_concurrent_head() {
-        let (_tmp, root) = hook_repo("#!/bin/sh\nexit 0\n");
-        let expected = workspace_snapshot(&root).unwrap();
-        let mut concurrent = String::new();
-        let result = commit_streaming_bound(
-            &root,
-            "approved",
-            false,
-            std::sync::Arc::new(tokio::sync::Notify::new()),
-            |step| {
-                if matches!(step, CommitStep::Committing) {
-                    git(
-                        &root,
-                        &[
-                            "-c",
-                            "core.hooksPath=/dev/null",
-                            "commit",
-                            "-qm",
-                            "concurrent",
-                        ],
-                    )
-                    .unwrap();
-                    concurrent = head_sha(&root).unwrap();
-                }
-            },
-            expected,
-            || Ok(()),
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(head_sha(&root).unwrap(), concurrent);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn bound_commit_rejects_hook_staging_and_changed_policy() {
-        for hook_changes_tree in [true, false] {
-            let hook = if hook_changes_tree {
-                "#!/bin/sh\nprintf 'unapproved\\n' >> a.txt\ngit add a.txt\n"
-            } else {
-                "#!/bin/sh\nexit 0\n"
-            };
-            let (_tmp, root) = hook_repo(hook);
-            let expected = workspace_snapshot(&root).unwrap();
-            let head = expected.head.clone();
-            let result = commit_streaming_bound(
-                &root,
-                "approved",
-                false,
-                std::sync::Arc::new(tokio::sync::Notify::new()),
-                |_| {},
-                expected,
-                || {
-                    if hook_changes_tree {
-                        Ok(())
-                    } else {
-                        Err(stale_workspace())
-                    }
-                },
-            )
-            .await;
-            if hook_changes_tree {
-                assert!(matches!(
-                    result.unwrap(),
-                    CommitOutcome::HookRewrote { sha: None, .. }
-                ));
-            } else {
-                assert!(result.is_err());
-            }
-            assert_eq!(head_sha(&root).unwrap(), head);
-        }
-    }
-
     #[test]
     fn not_a_repo() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1325,149 +1174,5 @@ mod tests {
             detect_checkout(tmp.path()),
             Err(GitError::NotARepo(_))
         ));
-    }
-}
-
-/// An immutable Git tree, including file modes and symlink targets, without touching the owner's index.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct WorkspaceSnapshot {
-    pub cwd: PathBuf,
-    pub head: String,
-    pub tree: String,
-    pub reference: Option<String>,
-}
-pub fn workspace_snapshot(cwd: &Path) -> Result<WorkspaceSnapshot, GitError> {
-    let head = head_sha(cwd)?;
-    let reference = git(cwd, &["symbolic-ref", "-q", "HEAD"]).ok();
-    let temp = tempfile::tempdir()?;
-    let tree = snapshot_tree(cwd, &temp.path().join("index"))?;
-    if head_sha(cwd)? != head || git(cwd, &["symbolic-ref", "-q", "HEAD"]).ok() != reference {
-        return Err(GitError::Failed {
-            args: "snapshot".into(),
-            stderr: "HEAD changed while capturing the workspace".into(),
-        });
-    }
-    Ok(WorkspaceSnapshot {
-        cwd: cwd.into(),
-        head,
-        tree,
-        reference,
-    })
-}
-
-// Hooks run against the original working tree, but a private index and detached
-// HEAD. Only the approved tree can be published to the original, pinned branch.
-struct BoundCommit {
-    temp: tempfile::TempDir,
-    expected: WorkspaceSnapshot,
-    common: PathBuf,
-}
-impl BoundCommit {
-    fn prepare(cwd: &Path, expected: WorkspaceSnapshot) -> Result<Self, GitError> {
-        if expected.cwd != cwd
-            || workspace_snapshot(cwd)? != expected
-            || expected.reference.is_none()
-        {
-            return Err(stale_workspace());
-        }
-        let temp = tempfile::tempdir()?;
-        let common = cwd
-            .join(git(cwd, &["rev-parse", "--git-common-dir"])?)
-            .canonicalize()?;
-        let original = PathBuf::from(git(cwd, &["rev-parse", "--absolute-git-dir"])?);
-        std::fs::write(temp.path().join("HEAD"), format!("{}\n", expected.head))?;
-        std::fs::write(
-            temp.path().join("commondir"),
-            format!("{}\n", common.display()),
-        )?;
-        if original.join("config.worktree").exists() {
-            std::fs::copy(
-                original.join("config.worktree"),
-                temp.path().join("config.worktree"),
-            )?;
-        }
-        let value = Self {
-            temp,
-            expected,
-            common,
-        };
-        value.private_git(&["read-tree", &value.expected.tree])?;
-        Ok(value)
-    }
-    fn private_git(&self, args: &[&str]) -> Result<String, GitError> {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&self.expected.cwd)
-            .env("GIT_DIR", self.temp.path())
-            .env("GIT_COMMON_DIR", &self.common)
-            .env("GIT_WORK_TREE", &self.expected.cwd)
-            .env("GIT_INDEX_FILE", self.temp.path().join("index"))
-            .output()?;
-        if !output.status.success() {
-            return Err(GitError::Failed {
-                args: args.join(" "),
-                stderr: String::from_utf8_lossy(&output.stderr).into(),
-            });
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().into())
-    }
-    fn configure(&self, command: &mut tokio::process::Command) {
-        command
-            .env("GIT_DIR", self.temp.path())
-            .env("GIT_COMMON_DIR", &self.common)
-            .env("GIT_WORK_TREE", &self.expected.cwd)
-            .env("GIT_INDEX_FILE", self.temp.path().join("index"));
-    }
-    fn finish(self, result: Result<(), GitError>, amend: bool) -> Result<CommitOutcome, GitError> {
-        let cwd = &self.expected.cwd;
-        if result.is_err() {
-            return classify_commit(cwd, result);
-        }
-        let sha = self.private_git(&["rev-parse", "HEAD"])?;
-        let tree = git(cwd, &["rev-parse", &format!("{sha}^{{tree}}")])?;
-        let expected_parents = if amend {
-            git(cwd, &["show", "-s", "--format=%P", &self.expected.head])?
-        } else {
-            self.expected.head.clone()
-        };
-        if tree != self.expected.tree
-            || git(cwd, &["show", "-s", "--format=%P", &sha])? != expected_parents
-        {
-            let files = git(cwd, &["diff", "--name-only", &self.expected.tree, &tree])?
-                .lines()
-                .map(str::to_owned)
-                .collect();
-            git(cwd, &["add", "-A"])?;
-            return Ok(CommitOutcome::HookRewrote { sha: None, files });
-        }
-        if git(cwd, &["symbolic-ref", "-q", "HEAD"]).ok() != self.expected.reference {
-            return Err(stale_workspace());
-        }
-        // Compare-and-swap rejects a concurrent commit; never reset an advanced branch.
-        git(
-            cwd,
-            &[
-                "update-ref",
-                self.expected.reference.as_deref().unwrap(),
-                &sha,
-                &self.expected.head,
-            ],
-        )?;
-        let files = unstaged_paths(cwd)?;
-        if files.is_empty() {
-            Ok(CommitOutcome::Committed(sha))
-        } else {
-            git(cwd, &["add", "-A"])?;
-            Ok(CommitOutcome::HookRewrote {
-                sha: Some(sha),
-                files,
-            })
-        }
-    }
-}
-fn stale_workspace() -> GitError {
-    GitError::Failed {
-        args: "authorized commit".into(),
-        stderr: "The approved workspace changed; review and confirm again".into(),
     }
 }

@@ -4,7 +4,7 @@ use crate::{git, AppState};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use plantool_core::{Actor, CommitScope, PullRequest, RunStatus, Session, Stage};
 use serde::{Deserialize, Serialize};
 use std::path::Path as FsPath;
@@ -218,7 +218,7 @@ async fn preview(
 }
 
 fn draft_path(s: &crate::registry::LiveSession) -> std::path::PathBuf {
-    s.store.dir.join("docs/pr-draft.md")
+    s.store.dir.join("pr-draft.md")
 }
 
 fn parse_draft(content: &str) -> (String, String) {
@@ -272,7 +272,7 @@ async fn save_draft(
 }
 
 fn commit_draft_path(s: &crate::registry::LiveSession) -> std::path::PathBuf {
-    s.store.dir.join("docs/commit-draft.md")
+    s.store.dir.join("commit-draft.md")
 }
 
 async fn get_commit_draft(
@@ -303,7 +303,6 @@ struct CommitBody {
 async fn commit(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Extension(approval): Extension<crate::auth::ApprovedAction>,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<CommitBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -323,17 +322,9 @@ async fn commit(
         ));
     }
     let cwd = session.cwd().clone();
-    let outcome = crate::commits::run_commit(
-        s.clone(),
-        CommitScope::Pr,
-        cwd,
-        message,
-        false,
-        approval,
-        state.clone(),
-    )
-    .await
-    .map_err(|e| ApiError(StatusCode::CONFLICT, e.message("could not commit")))?;
+    let outcome = crate::commits::run_commit(s.clone(), CommitScope::Pr, cwd, message, false)
+        .await
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e.message("could not commit")))?;
     let (sha, rewritten) = match outcome {
         git::CommitOutcome::Committed(sha) => (sha, Vec::new()),
         git::CommitOutcome::HookRewrote {
@@ -375,7 +366,6 @@ struct CreateBody {
 async fn create(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Extension(approval): Extension<crate::auth::ApprovedAction>,
     Path((repo, slug)): Path<(String, String)>,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -398,26 +388,13 @@ async fn create(
             "there are no commits ahead of base; uncommitted changes cannot appear in a PR",
         ));
     }
-    approval.recheck(&state)?;
     let pr = if let Some(existing) = info.existing {
         existing
     } else {
         let cwd = session.cwd();
-        approval.recheck(&state)?;
-        let refspec = format!("{}:refs/heads/{}", approval.workspace()?.head, info.head);
-        let push_intent = crate::database::record_intent(
-            s.store.home(),
-            &s.key,
-            "personal.push",
-            &serde_json::json!({"refspec":refspec,"remote":info.push_remote,"cwd":cwd}),
-        )?;
+        let refspec = format!("HEAD:refs/heads/{}", info.head);
         git::git(cwd, &["push", "-u", &info.push_remote, &refspec])
             .map_err(|e| bad_request(format!("push failed: {e}")))?;
-        crate::database::finish_intent(
-            s.store.home(),
-            &push_intent,
-            &serde_json::json!({"head":approval.workspace()?.head}),
-        )?;
         let body_path = s.store.dir.join("pr-body.md");
         crate::store::write_atomic(&body_path, body.body.trim().as_bytes())
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -439,13 +416,7 @@ async fn create(
         if body.draft {
             args.push("--draft");
         }
-        let intent = crate::database::record_intent(
-            s.store.home(),
-            &s.key,
-            "personal.pr.create",
-            &serde_json::json!({"repository":info.repository,"head":info.head,"base":info.base,"title":body.title,"body":body.body,"draft":body.draft}),
-        )?;
-        let published = if let Err(error) = gh(cwd, &args).await {
+        if let Err(error) = gh(cwd, &args).await {
             if let Some(found) = lookup(cwd, &info.repository, &info.head, &info.base).await? {
                 found
             } else {
@@ -460,22 +431,9 @@ async fn create(
                         "PR was created but could not be read back; refresh before retrying".into(),
                     )
                 })?
-        };
-        crate::database::finish_intent(
-            s.store.home(),
-            &intent,
-            &serde_json::to_value(&published).map_err(anyhow::Error::from)?,
-        )?;
-        published
+        }
     };
     let session = s.set_pull_request(pr.clone())?;
-    crate::database::reconcile_pr_intents(
-        s.store.home(),
-        &s.key,
-        &info.repository,
-        &info.head,
-        &serde_json::to_value(&pr).map_err(anyhow::Error::from)?,
-    )?;
     Ok(Json(
         serde_json::json!({ "pull_request": pr, "session": session }),
     ))

@@ -5,7 +5,7 @@ import type { RepoInfo, WorktreeDirSetting } from "../types";
 
 const GLOBAL = "";
 
-export function SettingsDialog({ onClose, embedded=false }: { onClose: () => void; embedded?:boolean }) {
+export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [scope, setScope] = useState<string>(GLOBAL);
   const [setting, setSetting] = useState<WorktreeDirSetting | null>(null);
@@ -72,9 +72,9 @@ export function SettingsDialog({ onClose, embedded=false }: { onClose: () => voi
   };
 
   return (
-    <div className={embedded?"settings-editor":"modal-backdrop"} onClick={embedded?undefined:onClose}>
-      <div className={embedded?"form-stack":"modal form-stack"} role={embedded?undefined:"dialog"} aria-modal={embedded?undefined:true} aria-label="Settings" onClick={(e) => e.stopPropagation()}>
-        <h2>Personal and worktrees</h2>
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
+        <h3>Settings</h3>
         <DiffToolSettings />
         <label>
           Worktree location <span className="muted small">(where session worktrees are created)</span>
@@ -104,7 +104,9 @@ export function SettingsDialog({ onClose, embedded=false }: { onClose: () => voi
         <div className="composer-actions button-row dialog-actions">
           {saved && <span className="muted small" role="status">Saved</span>}
           <span className="spacer" />
-          {!embedded&&<button className="btn ghost" onClick={onClose} type="button">Close</button>}
+          <button className="btn ghost" onClick={onClose} type="button">
+            Close
+          </button>
           <button className="btn" disabled={busy || !setting || !(scope ? setting.repo?.value : setting.global)} onClick={() => void save(null)} type="button">
             Reset
           </button>

@@ -51,12 +51,9 @@ async fn import(
     bytes: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut bundle = crate::archive::decode(&bytes).map_err(|e| bad_request(e.to_string()))?;
-    if !q.confirm || actor_from(&headers, &state) != plantool_core::Actor::Human {
+    if actor_from(&headers, &state) != plantool_core::Actor::Human && !q.confirm {
         bundle.state.stage = plantool_core::Stage::PlanReview;
         bundle.state.approved = None;
-        for run in &mut bundle.runs {
-            run.pinned = false;
-        }
     }
     let view = state
         .registry

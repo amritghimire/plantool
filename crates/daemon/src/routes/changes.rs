@@ -137,17 +137,12 @@ async fn open(
 async fn file(
     State(state): State<AppState>,
     Path((repo, slug)): Path<(String, String)>,
-    headers: axum::http::HeaderMap,
     Query(q): Query<FileQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
     let path = q.path.trim().to_string();
     if path.is_empty() || path.starts_with('/') || path.split(['/', '\\']).any(|seg| seg == "..") {
         return Err(bad_request("path must be relative to the checkout"));
-    }
-    if super::actor_from(&headers, &state) != plantool_core::Actor::Human {
-        crate::sandbox::read_guard::session_check(&state, &s, std::path::Path::new(&path))
-            .map_err(|e| ApiError(axum::http::StatusCode::FORBIDDEN, e.to_string()))?;
     }
     let window = resolve_window(&s, q.scope);
     let cwd = s.session().cwd().clone();

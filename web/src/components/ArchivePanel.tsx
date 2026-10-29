@@ -1,17 +1,16 @@
 import { useState } from "react";
-import { authenticatedFetch } from "../auth";
+import { token } from "../api";
 export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: string }) {
   const [transcripts, setTranscripts] = useState(false);
   const [revisions, setRevisions] = useState(false);
   const [repository, setRepository] = useState(repo);
-  const [restoreApprovals, setRestoreApprovals] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const download = async () => {
     setBusy(true); setError(null);
     try {
-      const response = await authenticatedFetch(`/api/sessions/${sessionKey}/export?transcripts=${transcripts}&revisions=${revisions}`);
+      const response = await fetch(`/api/sessions/${sessionKey}/export?transcripts=${transcripts}&revisions=${revisions}`, { headers: { "x-plantool-actor": token() } });
       if (!response.ok) throw new Error(await response.text());
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a"); link.href = url; link.download = `${sessionKey.split("/").pop()}.zip`; link.click();
@@ -21,8 +20,8 @@ export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: s
   const upload = async (file: File) => {
     setBusy(true); setError(null);
     try {
-      const query = new URLSearchParams({ repo: repository, confirm: String(restoreApprovals) }); if (workspace) query.set("workspace", workspace);
-      const response = await authenticatedFetch(`/api/import?${query}`, { method: "POST", headers: { "content-type": "application/zip" }, body: file });
+      const query = new URLSearchParams({ repo: repository }); if (workspace) query.set("workspace", workspace);
+      const response = await fetch(`/api/import?${query}`, { method: "POST", headers: { "x-plantool-actor": token(), "content-type": "application/zip" }, body: file });
       if (!response.ok) throw new Error(await response.text());
       const result = await response.json() as { session: { url_path: string } }; window.location.assign(result.session.url_path);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -34,7 +33,6 @@ export function ArchivePanel({ sessionKey, repo }: { sessionKey: string; repo: s
     <button className="btn" type="button" disabled={busy} onClick={() => void download()}>Download zip</button>
     <label>Import repository <input value={repository} onChange={(e) => setRepository(e.target.value)} /></label>
     <label>Import workspace (optional) <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} /></label>
-    <label className="check-row"><input type="checkbox" checked={restoreApprovals} onChange={(e) => setRestoreApprovals(e.target.checked)} /> Restore recorded approvals with passkey confirmation</label>
     <label>Import zip <input type="file" accept=".zip" disabled={busy || !repository.trim()} onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); }} /></label>
     <p className="muted">An existing session keeps its files. The import gets a new name.</p>
     {error && <p role="alert">{error}</p>}

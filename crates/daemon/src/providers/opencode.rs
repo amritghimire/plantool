@@ -4,6 +4,7 @@ use plantool_core::PermissionMode;
 use serde_json::{json, Map, Value};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
@@ -33,7 +34,7 @@ fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
     };
     let mut models = Map::new();
     models.insert(model.into(), json!({ "name": model }));
-    let mut value = json!({
+    json!({
         "share": "disabled",
         "provider": { "ollama": {
             "npm": "@ai-sdk/openai-compatible",
@@ -42,11 +43,7 @@ fn config(opts: &RunOptions, model: &str, mode: PermissionMode) -> Value {
             "models": models
         } },
         "permission": permission
-    });
-    if let Some(options) = opts.environment.as_ref().and_then(|e| e.proxy_options()) {
-        value["provider"] = json!({"plantool":{"npm":"@ai-sdk/openai-compatible","name":"PlanTool daemon","options":options,"models":{model:{"name":model}}}});
-    }
-    value
+    })
 }
 
 pub async fn run(
@@ -92,26 +89,13 @@ pub async fn run(
         )
         .await;
         let exe = opts.executable.clone().unwrap_or_else(|| "opencode".into());
-        let mut cmd = opts.command(&exe)?;
-        opts.apply_environment(&mut cmd, plantool_core::Provider::Ollama);
+        let mut cmd = Command::new(&exe);
         cmd.arg("run")
             .arg("--format")
             .arg("json")
             .arg("--auto")
             .arg("--model")
-            .arg(format!(
-                "{}/{model}",
-                if opts
-                    .environment
-                    .as_ref()
-                    .and_then(|e| e.proxy_options())
-                    .is_some()
-                {
-                    "plantool"
-                } else {
-                    "ollama"
-                }
-            ));
+            .arg(format!("ollama/{model}"));
         if let Some(id) = &session_id {
             cmd.arg("--session").arg(id);
         }
@@ -135,8 +119,8 @@ pub async fn run(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = opts
-            .spawn(&mut cmd)
+        let mut child = cmd
+            .spawn()
             .with_context(|| format!("failed to start {}", exe.display()))?;
         let stdout = child.stdout.take().context("OpenCode has no stdout")?;
         let stderr = child.stderr.take().context("OpenCode has no stderr")?;
@@ -241,8 +225,6 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"step_start\",\"sessionID\":\"ses_test\"}' '{\"type\":\"text\",\"sessionID\":\"ses_test\",\"part\":{\"text\":\"Done\"}}'\n").unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let opts = RunOptions {
-            environment: None,
-            launch: None,
             cwd: dir.path().into(),
             prompt: "hello".into(),
             model: Some("qwen3:8b".into()),

@@ -4,7 +4,7 @@ use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use plantool_core::Actor;
 use plantool_core::{DocKind, Stage};
 use serde::Deserialize;
@@ -72,7 +72,7 @@ async fn create(
     Ok((
         status,
         Json(
-            json!({ "created": created, "session": view, "url": format!("http://localhost:{}{}", state.config.port, view.url_path) }),
+            json!({ "created": created, "session": view, "url": format!("http://127.0.0.1:{}{}", state.config.port, view.url_path) }),
         ),
     ))
 }
@@ -108,7 +108,6 @@ pub struct RemoveQuery {
 
 async fn remove(
     State(state): State<AppState>,
-    Extension(approval): Extension<crate::auth::ApprovedAction>,
     headers: HeaderMap,
     Path((repo, slug)): Path<(String, String)>,
     Query(q): Query<RemoveQuery>,
@@ -128,12 +127,9 @@ async fn remove(
     }
     let key = s.key.clone();
     let reg = state.registry.clone();
-    let session = tokio::task::spawn_blocking(move || {
-        approval.recheck(&state)?;
-        reg.remove(&key, q.worktree).map_err(ApiError::from)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!(e))??;
+    let session = tokio::task::spawn_blocking(move || reg.remove(&key, q.worktree))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
     Ok(Json(
         json!({ "removed": session.key(), "worktree_removed": q.worktree && session.worktree.is_some() }),
     ))
@@ -214,37 +210,17 @@ async fn get_doc(
     let kind = parse_kind(&kind)?;
     let rev = match &q.sha {
         Some(sha) => s.doc_revision(kind, sha)?,
-        None => {
-            let saved = s.state();
-            if kind == DocKind::Plan && !saved.plan_revision_pending {
-                if let Some(approved) = saved.approved {
-                    s.doc_revision(kind, &approved.sha)?
-                } else {
-                    s.doc(kind)
-                }
-            } else {
-                s.doc(kind)
-            }
-        }
+        None => s.doc(kind),
     };
     let path = s.doc_path(kind);
     match rev {
-        Some(r) => {
-            let displayed = if kind == DocKind::Plan
-                && s.state().approved.as_ref().is_some_and(|a| a.sha == r.sha)
-            {
-                s.progress_content(&r.content)?
-            } else {
-                r.content.clone()
-            };
-            Ok(Json(json!({
-                "kind": r.kind, "sha": r.sha, "content": r.content, "display_content": displayed, "captured_at": r.captured_at, "path": path,
-                "lines": plantool_core::anchor::line_count(&r.content),
-                "headings": plantool_core::markdown::headings(&r.content),
-                "checkboxes": plantool_core::markdown::checkboxes(&r.content),
-                "progress": plantool_core::markdown::progress(&displayed),
-            })))
-        }
+        Some(r) => Ok(Json(json!({
+            "kind": r.kind, "sha": r.sha, "content": r.content, "captured_at": r.captured_at, "path": path,
+            "lines": plantool_core::anchor::line_count(&r.content),
+            "headings": plantool_core::markdown::headings(&r.content),
+            "checkboxes": plantool_core::markdown::checkboxes(&r.content),
+            "progress": plantool_core::markdown::progress(&r.content),
+        }))),
         None => Err(ApiError(
             StatusCode::NOT_FOUND,
             format!("no {kind} document yet; write it to {}", path.display()),

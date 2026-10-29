@@ -7,13 +7,16 @@ use rust_embed::RustEmbed;
 #[folder = "$CARGO_MANIFEST_DIR/../../web/dist"]
 pub struct Assets;
 
-pub fn serve(uri: &Uri) -> Response {
+pub const TOKEN_PLACEHOLDER: &str = "\"__PLANTOOL_TOKEN__\"";
+
+pub fn serve(uri: &Uri, token: &str) -> Response {
     let path = uri.path().trim_start_matches('/');
     let candidate = if path.is_empty() { "index.html" } else { path };
     if let Some(file) = Assets::get(candidate) {
         let mime = mime_for(candidate);
         if candidate.ends_with(".html") {
-            let html = String::from_utf8_lossy(&file.data).into_owned();
+            let html = String::from_utf8_lossy(&file.data)
+                .replace(TOKEN_PLACEHOLDER, &format!("{token:?}"));
             return html_response(html);
         }
         return (
@@ -26,7 +29,9 @@ pub fn serve(uri: &Uri) -> Response {
             .into_response();
     }
     match Assets::get("index.html") {
-        Some(index) => html_response(String::from_utf8_lossy(&index.data).into_owned()),
+        Some(index) => html_response(
+            String::from_utf8_lossy(&index.data).replace(TOKEN_PLACEHOLDER, &format!("{token:?}")),
+        ),
         None => (
             StatusCode::NOT_FOUND,
             "web assets are not built; run `npm run build` in web/",

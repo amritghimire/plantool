@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -49,8 +50,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let exe = opts.executable.clone().unwrap_or_else(|| "claude".into());
     let mut mode = opts.permission_mode;
-    let mut cmd = opts.command(&exe)?;
-    opts.apply_environment(&mut cmd, plantool_core::Provider::Claude);
+    let mut cmd = Command::new(&exe);
     cmd.arg("-p")
         .arg("--input-format")
         .arg("stream-json")
@@ -77,8 +77,8 @@ pub async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = opts
-        .spawn(&mut cmd)
+    let mut child = cmd
+        .spawn()
         .with_context(|| format!("failed to start {}", exe.display()))?;
     let mut stdin = child.stdin.take().context("no stdin")?;
     let stdout = child.stdout.take().context("no stdout")?;

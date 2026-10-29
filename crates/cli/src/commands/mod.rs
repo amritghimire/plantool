@@ -10,7 +10,3 @@ pub mod settings;
 pub mod skill;
 pub mod status;
 pub mod update;
-
-pub mod task;
-
-pub mod attempt;

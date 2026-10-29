@@ -9,20 +9,13 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 struct Handle {
-    cancelled: tokio::sync::watch::Sender<bool>,
     activity: std::time::Instant,
     input: mpsc::Sender<RunInput>,
-    policy: crate::sandbox::NeverSent,
-    roots: Vec<std::path::PathBuf>,
-    generation: u64,
 }
 
 #[derive(Default)]
 pub struct RunManager {
-    pub worker: Arc<crate::worker::WorkerManager>,
     handles: Mutex<HashMap<String, Handle>>,
-    pub tokens: Arc<crate::identities::RunTokens>,
-    pub execution: Arc<crate::execution::Execution>,
 }
 
 fn short_id() -> String {
@@ -46,34 +39,6 @@ pub fn next_milestone_context(run: &Run) -> Run {
 }
 
 impl RunManager {
-    pub fn load(home: &std::path::Path) -> anyhow::Result<Self> {
-        Ok(Self {
-            worker: Arc::new(crate::worker::WorkerManager::for_home(home)),
-            execution: Arc::new(crate::execution::Execution::load(home)?),
-            ..Default::default()
-        })
-    }
-    pub async fn stop_inputs(&self) {
-        for handle in self
-            .handles
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-        {
-            handle.cancelled.send_replace(true);
-        }
-        let inputs: Vec<_> = self
-            .handles
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .map(|h| h.input.clone())
-            .collect();
-        for input in inputs {
-            let _ = input.try_send(RunInput::Stop);
-        }
-    }
-
     pub fn is_live(&self, id: &str) -> bool {
         self.handles
             .lock()
@@ -96,92 +61,12 @@ impl RunManager {
         implementation_mode: ImplementationMode,
         previous_run: Option<&Run>,
     ) -> anyhow::Result<Run> {
-        self.start_with_pause(
-            session,
-            provider,
-            stage,
-            stage_name,
-            prompt,
-            model,
-            effort,
-            resume,
-            permission_mode,
-            implementation_mode,
-            previous_run,
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn start_with_pause(
-        self: &Arc<Self>,
-        session: Arc<LiveSession>,
-        provider: Provider,
-        stage: Stage,
-        stage_name: &str,
-        prompt: String,
-        model: Option<String>,
-        effort: Option<String>,
-        resume: Option<String>,
-        permission_mode: PermissionMode,
-        implementation_mode: ImplementationMode,
-        previous_run: Option<&Run>,
-        pause_rule: Option<plantool_core::PauseRule>,
-    ) -> anyhow::Result<Run> {
-        self.start_with_security(
-            session,
-            provider,
-            stage,
-            stage_name,
-            prompt,
-            model,
-            effort,
-            resume,
-            permission_mode,
-            implementation_mode,
-            previous_run,
-            pause_rule,
-            None,
-            previous_run.map(|r| r.execution_generation),
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub fn start_with_security(
-        self: &Arc<Self>,
-        session: Arc<LiveSession>,
-        provider: Provider,
-        stage: Stage,
-        stage_name: &str,
-        prompt: String,
-        model: Option<String>,
-        effort: Option<String>,
-        resume: Option<String>,
-        permission_mode: PermissionMode,
-        implementation_mode: ImplementationMode,
-        previous_run: Option<&Run>,
-        pause_rule: Option<plantool_core::PauseRule>,
-        sandbox: Option<bool>,
-        expected_generation: Option<u64>,
-    ) -> anyhow::Result<Run> {
-        let version = self.execution.status();
-        anyhow::ensure!(
-            expected_generation.is_none_or(|g| g == version.generation),
-            "Stop All invalidated this continuation; start a new run explicitly"
-        );
-        anyhow::ensure!(
-            !version.stopped,
-            "Stop All is active. Resume execution in the browser."
-        );
-
         if session.state().plan_revision_pending
             && (stage_name == "implement" || previous_run.is_some_and(implementation_run))
         {
             anyhow::bail!("accept the plan revision before continuing implementation");
         }
-        let mut sess = session.session();
-        if let Some(rule) = pause_rule {
-            sess.pause_rule = rule;
-        }
+        let sess = session.session();
         let prompt = if prompt.contains("Current session context:") {
             prompt
         } else {
@@ -217,14 +102,10 @@ impl RunManager {
             let tasks = plan
                 .as_ref()
                 .and_then(|p| {
-                    plantool_core::markdown::phases(
-                        &session
-                            .progress_content(&p.content)
-                            .unwrap_or_else(|_| p.content.clone()),
-                    )
-                    .into_iter()
-                    .find(|p| &p.name == key)
-                    .map(|p| p.tasks)
+                    plantool_core::markdown::phases(&p.content)
+                        .into_iter()
+                        .find(|p| &p.name == key)
+                        .map(|p| p.tasks)
                 })
                 .unwrap_or_default();
             let scope = tasks
@@ -247,11 +128,7 @@ impl RunManager {
         } else {
             None
         };
-        let sandboxed = sandbox.unwrap_or_else(|| previous_run.is_some_and(|r| r.sandboxed));
         let run = Run {
-            pinned: false,
-            sandboxed,
-            execution_generation: version.generation,
             milestone_key,
             plan_sha: plan.as_ref().map(|p| p.sha.clone()),
             idle_stopped: false,
@@ -280,69 +157,11 @@ impl RunManager {
             error: None,
             seq: 0,
         };
-        let daemon_home = session
-            .store
-            .dir
-            .ancestors()
-            .nth(3)
-            .ok_or_else(|| anyhow::anyhow!("invalid session directory"))?
-            .canonicalize()?;
-        let repo = crate::git::main_root(&sess.repo.root);
-        let policy = crate::sandbox::NeverSent::new(&self.execution.rules(&repo))?;
-        crate::providers::attachments::check_policy(
-            &prompt,
-            &[session.store.dir.clone()],
-            &policy,
-        )?;
-        let isolation = if sandboxed {
-            Some(crate::sandbox::Sandbox::required(
-                crate::sandbox::Paths {
-                    owner_home: std::env::var_os("HOME")
-                        .or_else(|| std::env::var_os("USERPROFILE"))
-                        .map(std::path::PathBuf::from)
-                        .ok_or_else(|| anyhow::anyhow!("owner home is unavailable"))?,
-                    daemon_home: daemon_home.clone(),
-                    worktree: sess.cwd().clone(),
-                    docs: session.store.dir.join("docs"),
-                },
-                if stage_name == "critique" {
-                    crate::sandbox::Role::Reviewer
-                } else {
-                    crate::sandbox::Role::Agent
-                },
-                policy.clone(),
-            )?)
-        } else {
-            None
-        };
-        let mut launch = crate::sandbox::launch::Launch::new(
-            self.execution.clone(),
-            version.generation,
-            isolation,
-            policy.clone(),
-        )?;
-        Arc::get_mut(&mut launch).unwrap().attempt = Some((daemon_home.clone(), run.id.clone()));
-        let admission = self.execution.admit_version(&version)?;
-        let credential = self.tokens.issue(crate::identities::RunScope {
-            session: session.key.clone(),
-            attempt: run.id.clone(),
-        });
-        let home = session
-            .store
-            .dir
-            .ancestors()
-            .nth(3)
-            .ok_or_else(|| anyhow::anyhow!("invalid session directory"))?
-            .canonicalize()?;
-        let port = crate::store::read_daemon_info(&home)?
-            .map(|info| info.port)
-            .unwrap_or_else(crate::config::default_port);
         session.upsert_run(run.clone(), |r| LiveEvent::RunStarted { run: r })?;
         if let Some(key) = &run.milestone_key {
             session.milestone_status(key, "building", &run)?;
         }
         let (in_tx, in_rx) = mpsc::channel::<RunInput>(64);
-        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
         let (ev_tx, mut ev_rx) = mpsc::channel::<ProviderEvent>(1024);
         self.handles
             .lock()
@@ -350,23 +169,11 @@ impl RunManager {
             .insert(
                 run.id.clone(),
                 Handle {
-                    cancelled: cancel_tx,
                     input: in_tx,
-                    generation: version.generation,
-                    policy: policy.clone(),
-                    roots: vec![session.store.dir.clone()],
                     activity: std::time::Instant::now(),
                 },
             );
         let opts = RunOptions {
-            launch: Some(launch),
-            environment: Some(if provider == Provider::Ollama {
-                credential
-                    .environment(home, port)
-                    .with_proxy(format!("http://localhost:{port}/v1"))
-            } else {
-                credential.environment(home, port)
-            }),
             cwd: run.cwd.clone(),
             prompt,
             model,
@@ -445,14 +252,10 @@ impl RunManager {
                             let complete = consumer_session
                                 .doc(plantool_core::DocKind::Plan)
                                 .is_some_and(|p| {
-                                    plantool_core::markdown::phases(
-                                        &consumer_session
-                                            .progress_content(&p.content)
-                                            .unwrap_or_else(|_| p.content.clone()),
-                                    )
-                                    .iter()
-                                    .find(|p| &p.name == key)
-                                    .is_some_and(|p| p.tasks.iter().all(|t| t.checked))
+                                    plantool_core::markdown::phases(&p.content)
+                                        .iter()
+                                        .find(|p| &p.name == key)
+                                        .is_some_and(|p| p.tasks.iter().all(|t| t.checked))
                                 });
                             if !complete {
                                 continue;
@@ -528,55 +331,7 @@ impl RunManager {
         }
 
         tokio::spawn(async move {
-            let mut work = Box::pin(async {
-                // Personal uses the same local Ollama service. Preserve its cloud
-                // model support while recording the actual provider for policy and lease.
-                let model_provider = if provider == Provider::Ollama {
-                    crate::models::gateway::ollama_provider(
-                        opts.model
-                            .as_deref()
-                            .ok_or_else(|| anyhow::anyhow!("Select an installed Ollama model"))?,
-                    )
-                    .await?
-                } else {
-                    provider.as_str()
-                };
-                if provider == Provider::Ollama {
-                    crate::database::open(&daemon_home)?.execute(
-                        "UPDATE runs_summary SET provider=?2 WHERE attempt_id=?1",
-                        rusqlite::params![run_id, model_provider],
-                    )?;
-                }
-                let _lease = crate::models::lease::acquire(
-                    &daemon_home,
-                    &format!("attempt:{run_id}"),
-                    Some(&run_id),
-                    crate::models::lease::Model {
-                        route: format!("personal:{}", provider.as_str()),
-                        provider: model_provider.into(),
-                        model: opts
-                            .model
-                            .clone()
-                            .unwrap_or_else(|| provider.as_str().into()),
-                    },
-                    false,
-                    i64::MAX,
-                    manager.execution.clone(),
-                    &crate::models::lease::Ollama,
-                )
-                .await?;
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(2700),
-                    providers::run_provider(provider, opts, in_rx, ev_tx),
-                )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("45 minute run limit reached; resume from the saved context")
-                })?
-            });
-            let result = tokio::select! {result=&mut work=>result,_=cancel_rx.changed()=>Ok(())};
-            drop(work);
-            drop(credential);
+            let result = providers::run_provider(provider, opts, in_rx, ev_tx).await;
             let _ = consumer.await;
             manager
                 .handles
@@ -623,7 +378,6 @@ impl RunManager {
             }
             tracing::info!("{stage_label} run {run_id} ended");
         });
-        drop(admission);
         Ok(run)
     }
 
@@ -699,42 +453,6 @@ impl RunManager {
     }
 
     pub async fn send(&self, id: &str, input: RunInput) -> anyhow::Result<()> {
-        let generation = self.execution.status().generation;
-        if !matches!(input, RunInput::Stop) {
-            let _ = self.execution.admit()?;
-        }
-        if !matches!(input, RunInput::Stop) {
-            if let Some(handle) = self
-                .handles
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(id)
-            {
-                anyhow::ensure!(
-                    handle.generation == generation,
-                    "Stop All invalidated this run"
-                );
-            }
-        }
-        if let RunInput::Text(text) = &input {
-            if let Some(handle) = self
-                .handles
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(id)
-            {
-                crate::providers::attachments::check_policy(text, &handle.roots, &handle.policy)?;
-            }
-        }
-        if matches!(input, RunInput::Stop) {
-            let handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
-            let handle = handles
-                .get(id)
-                .ok_or_else(|| anyhow::anyhow!("run {id} is not running"))?;
-            handle.cancelled.send_replace(true);
-            let _ = handle.input.try_send(RunInput::Stop);
-            return Ok(());
-        }
         let tx = self
             .handles
             .lock()

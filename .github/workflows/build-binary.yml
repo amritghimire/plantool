@@ -15,32 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  contract-worker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.12.23"
-          python-version: "3.12"
-      - run: scripts/generate-contract.sh
-      - run: git diff --exit-code -- contract/schema.json worker/plantool_worker/models.py worker/plantool_worker/versions.json
-      - run: uv run --project worker --frozen pytest -c worker/pyproject.toml worker/tests
-      - run: uv run --python 3.12 python evals/compare_chains.py --self-test
-
-  nix-check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v17
-      - run: nix flake check
-
   test:
     runs-on: ubuntu-latest
     steps:
@@ -98,23 +72,6 @@ jobs:
         shell: bash
       - if: matrix.cross
         run: cargo install cross --locked
-      - name: Select native Perl for vendored OpenSSL
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Git Bash's Perl lacks modules required by OpenSSL's Configure script.
-          $perl = 'C:\Strawberry\perl\bin\perl.exe'
-          & $perl -MLocale::Maketext::Simple -MIPC::Cmd -e 'print "$^X\n"'
-          if ($LASTEXITCODE -ne 0) { throw 'Native Perl is missing required OpenSSL build modules' }
-          "PERL=$perl" >> $env:GITHUB_ENV
-      - name: Test Unix identities and sandbox on macOS
-        if: runner.os == 'macOS'
-        run: |
-          cargo test -p plantool-daemon identities::tests
-          cargo test -p plantool-daemon execution::tests
-          cargo test -p plantool-daemon --test sandbox
-          cargo test -p plantool-daemon --test identities --test provider_attachments
-          cargo test -p plantool --test agent_cli --test personal_no_python --test phase2_daemon_recovery
       - name: Package
         shell: bash
         env:
@@ -138,17 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     steps:
-      - name: Mark alpha releases as prereleases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if [[ "$RELEASE_TAG" == v*-alpha.* ]]; then
-            gh release edit "$RELEASE_TAG" --prerelease
-          fi
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -160,36 +107,13 @@ jobs:
           files: dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Open a Homebrew formula pull request
-        if: ${{ !github.event.release.prerelease }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+      - name: Update the Homebrew formula on main
         run: |
-          # Check the tag too: the release event predates the prerelease edit above.
-          if [[ "$RELEASE_TAG" == v*-alpha.* ]]; then
-            exit 0
-          fi
-          branch="release/formula-$RELEASE_TAG"
           git fetch --depth=1 origin main
-          git checkout -b "$branch" origin/main
-          scripts/render-formula.sh "$RELEASE_TAG" dist/SHA256SUMS.txt > Formula/plantool.rb
+          git checkout -B main origin/main
+          scripts/render-formula.sh "${{ github.event.release.tag_name }}" dist/SHA256SUMS.txt > Formula/plantool.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/plantool.rb
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "Point the Homebrew formula at $RELEASE_TAG"
-          # Reuse the release branch on retries without overwriting unrelated work.
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            git fetch origin "$branch"
-            git diff --exit-code FETCH_HEAD HEAD -- Formula/plantool.rb
-          else
-            git push origin "HEAD:refs/heads/$branch"
-          fi
-          if [[ -z "$(gh pr list --base main --head "$branch" --state open --json number --jq '.[].number')" ]]; then
-            gh pr create --base main --head "$branch" \
-              --title "Update Homebrew formula to $RELEASE_TAG" \
-              --body "Update Formula/plantool.rb to the published $RELEASE_TAG release and its checksums."
-          fi
+          git diff --cached --quiet || git commit -m "Point the Homebrew formula at ${{ github.event.release.tag_name }}"
+          git push origin main

@@ -1,5 +1,6 @@
 use crate::client::{print_json, Client};
 use clap::{Args as ClapArgs, Subcommand};
+use serde_json::{json, Value};
 #[derive(ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
@@ -7,14 +8,29 @@ pub struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Read the default diff tool. Change it in browser Settings.
-    Difftool,
+    Difftool {
+        value: Option<String>,
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 pub fn run(args: Args) -> anyhow::Result<()> {
     let client = Client::connect()?;
     match args.cmd {
-        Command::Difftool => {
-            print_json(&client.get::<serde_json::Value>("/api/settings/difftool")?)
+        Command::Difftool { value, confirm } => {
+            let result: Value = match value {
+                Some(value) => {
+                    if !confirm {
+                        anyhow::bail!("changing the global default requires --confirm");
+                    }
+                    client.post(
+                        "/api/settings/difftool",
+                        &json!({"value":value,"confirm":true}),
+                    )?
+                }
+                None => client.get("/api/settings/difftool")?,
+            };
+            print_json(&result)
         }
     }
 }
