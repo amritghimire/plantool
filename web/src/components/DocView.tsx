@@ -304,7 +304,7 @@ export function DocView(p: Props) {
       }
       return wrap("pre", node, <pre>{children}</pre>);
     },
-    input: ({ node: _node, ...rest }) => <input {...rest} disabled className="task" />,
+    input: ({ node: _node, ...rest }) => <input {...rest} disabled aria-label={rest.checked ? "Task completed" : "Task not completed"} className="task" />,
   };
 
   const orphans = attachments.orphans.threads.length > 0 && (

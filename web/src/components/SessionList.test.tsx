@@ -49,7 +49,7 @@ it("filters by attention and keeps PR and drop actions separate", async () => {
   expect(screen.getByRole("link", { name: "Open Review" })).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "Open Done" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Drop Review" }));
-  const dialog = screen.getByRole("dialog", { name: "Drop repo/review?" });
+  const dialog = screen.getByRole("alertdialog", { name: "Drop repo/review?" });
   expect(dialog).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
   fireEvent.keyDown(dialog, { key: "Escape" });
@@ -77,5 +77,5 @@ it("puts sessions that need attention before recently updated work", async () =>
   vi.spyOn(api, "sessions").mockResolvedValue([recent, review]);
   render(<MemoryRouter><SessionList /></MemoryRouter>);
   await screen.findByRole("link", { name: "Open Needs review" });
-  expect(screen.getAllByRole("link", { name: /^Open (Needs review|Recent)$/ }).map((link) => link.getAttribute("aria-label"))).toEqual(["Open Needs review", "Open Recent"]);
+  expect(screen.getAllByRole("link", { name: /^Open (Needs review|Recent)$/ }).map((link) => link.getAttribute("href"))).toEqual(["/s/repo/review", "/s/repo/recent"]);
 });

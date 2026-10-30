@@ -1,11 +1,32 @@
+import { useConfirmation } from "../lib/confirmation";
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { STAGES, STAGE_LABEL, type Comment, type DocKind, type DocSummary, type Run, type SessionView, type Stage } from "../types";
+import {
+  STAGES,
+  STAGE_LABEL,
+  type Comment,
+  type DocKind,
+  type Run,
+  type SessionView,
+  type Stage,
+} from "../types";
 import { relTime, shortPath, workspacePath } from "../lib/format";
 import { CopyButton } from "./CopyButton";
 import { Thread, type ThreadActions } from "./Thread";
 import { DropSessionDialog } from "./DropSessionDialog";
 import { Handoff } from "./Handoff";
+import {
+  ArrowLeft,
+  FolderSimple,
+  GitBranch,
+  Check,
+  ArrowClockwise,
+  CaretDown,
+  CaretRight,
+  ArrowBendUpLeft,
+  Question,
+  X,
+} from "@phosphor-icons/react";
 import { CommitProgress } from "./CommitProgress";
 
 export interface SidebarProps {
@@ -21,7 +42,11 @@ export interface SidebarProps {
   onBrief: (brief: string | null) => Promise<void>;
   onDelete: (removeWorktree: boolean) => Promise<void>;
   onJump: (c: Comment) => void;
-  onStartRun: (stage: "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr", resumeId?: string) => void;
+  onStartRun: (
+    stage:
+      "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr",
+    resumeId?: string,
+  ) => void;
   onAskAgent: () => void;
   onPr: () => void;
   onRefreshPr: () => void;
@@ -40,26 +65,81 @@ export interface SidebarProps {
 }
 
 export function Sidebar(p: SidebarProps) {
+  const { confirm: confirmAction, dialog: confirmation } = useConfirmation();
   const stage = p.view.state.stage;
-  const step = p.view.step ?? (stage === "done" ? "Done" : stage === "implementation-review" ? "Review" : stage === "approved" || stage === "implementing" ? "Build" : stage === "planning" || stage === "plan-review" ? "Plan" : "Research");
+  const step =
+    p.view.step ??
+    (stage === "done"
+      ? "Done"
+      : stage === "implementation-review"
+        ? "Review"
+        : stage === "approved" || stage === "implementing"
+          ? "Build"
+          : stage === "planning" || stage === "plan-review"
+            ? "Plan"
+            : "Research");
   const steps = ["Research", "Plan", "Build", "Review", "Done"];
   const idx = steps.indexOf(step);
-  const blockers = p.comments.filter((c) => !c.parent && !c.resolved && c.kind === "human" && c.type === "blocker");
+  const blockers = p.comments.filter(
+    (c) =>
+      !c.parent && !c.resolved && c.kind === "human" && c.type === "blocker",
+  );
   const [overrideReason, setOverrideReason] = useState("");
-  const openThreads = p.comments.filter((c) => !c.parent && !c.resolved).sort((a, b) => a.doc.localeCompare(b.doc) || a.anchor.line - b.anchor.line);
-  const resolvedThreads = p.comments.filter((c) => !c.parent && c.resolved).sort((a, b) => b.seq - a.seq);
-  const repliesOf = (root: Comment) => p.comments.filter((c) => c.parent === root.id).sort((a, b) => a.seq - b.seq);
+  const openThreads = p.comments
+    .filter((c) => !c.parent && !c.resolved)
+    .sort(
+      (a, b) => a.doc.localeCompare(b.doc) || a.anchor.line - b.anchor.line,
+    );
+  const resolvedThreads = p.comments
+    .filter((c) => !c.parent && c.resolved)
+    .sort((a, b) => b.seq - a.seq);
+  const repliesOf = (root: Comment) =>
+    p.comments
+      .filter((c) => c.parent === root.id)
+      .sort((a, b) => a.seq - b.seq);
   const [showResolvedList, setShowResolvedList] = useState(false);
   const [commitMilestone, setCommitMilestone] = useState(true);
   const [commitMessage, setCommitMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
-  const [showFinished, setShowFinished] = useState(() => {
-    try { return localStorage.getItem(`plantool.finished.${p.view.key}`) === "open"; } catch { return false; }
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(() => {
+    try {
+      return (
+        localStorage.getItem(`plantool.actions.${p.view.key}`) !== "closed"
+      );
+    } catch {
+      return true;
+    }
   });
   useEffect(() => {
-    try { setShowFinished(localStorage.getItem(`plantool.finished.${p.view.key}`) === "open"); } catch { setShowFinished(false); }
+    try {
+      setActionsOpen(
+        localStorage.getItem(`plantool.actions.${p.view.key}`) !== "closed",
+      );
+    } catch {
+      setActionsOpen(true);
+    }
   }, [p.view.key]);
-  const [workspaceCheck, setWorkspaceCheck] = useState<{ missing: boolean; candidates: { root: string; branch: string }[] } | null>(null);
+  const [showFinished, setShowFinished] = useState(() => {
+    try {
+      return localStorage.getItem(`plantool.finished.${p.view.key}`) === "open";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      setShowFinished(
+        localStorage.getItem(`plantool.finished.${p.view.key}`) === "open",
+      );
+    } catch {
+      setShowFinished(false);
+    }
+  }, [p.view.key]);
+  const [workspaceCheck, setWorkspaceCheck] = useState<{
+    missing: boolean;
+    candidates: { root: string; branch: string }[];
+  } | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const activeDoc = p.view.docs.find((d) => d.kind === p.activeTab);
   const askAgent = (c: Comment) =>
@@ -68,32 +148,113 @@ export function Sidebar(p: SidebarProps) {
     );
   const openHuman = openThreads.filter((c) => c.kind === "human").length;
   const plan = p.view.docs.find((d) => d.kind === "plan");
-  const research = p.view.docs.find((d) => d.kind === "research");
   const s = p.view.session;
 
   const finished = p.view.runs.filter((r) => !isLive(r));
   const activeRuns = p.view.runs.filter(isLive);
   useEffect(() => {
-    if (p.selectedRun && finished.some((r) => r.id === p.selectedRun)) setShowFinished(true);
+    if (p.selectedRun && finished.some((r) => r.id === p.selectedRun))
+      setShowFinished(true);
   }, [p.selectedRun, p.view.runs]);
   const toggleFinished = () => {
     setShowFinished((open) => {
-      try { localStorage.setItem(`plantool.finished.${p.view.key}`, open ? "closed" : "open"); } catch { /* ignore */ }
+      try {
+        localStorage.setItem(
+          `plantool.finished.${p.view.key}`,
+          open ? "closed" : "open",
+        );
+      } catch {
+        /* ignore */
+      }
       return !open;
     });
   };
-  const runRow = (r: Run) => <li key={r.id} className={p.selectedRun === r.id ? "active" : ""}>
-    <button className="run-select" onClick={() => p.onSelectRun(r.id)} type="button" aria-label={`Open ${r.provider} ${r.task ?? r.stage} run, ${RUN_WORD[r.status]}`}><span className={`run-status ${r.status}`} /><span>{r.provider} · {r.task ?? r.stage}</span><span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span><span className="spacer" /><span className="muted small">{relTime(r.started_at)}</span></button>
-    {!isLive(r) && r.provider_session_id && <button className="run-remove" title="Resume this run: the agent keeps its context and picks up where it stopped" onClick={() => p.onStartRun(r.task === "assist" ? "assist" : r.task === "draft-pr" ? "draft-pr" : r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", r.id)} type="button">↻</button>}
-    {!isLive(r) && <button className="run-remove" title="Clear this run and its transcript" onClick={() => window.confirm("Clear this run and its transcript?") && void p.onRemoveRun(r.id)} type="button">×</button>}
-  </li>;
+  const runRow = (r: Run) => (
+    <li key={r.id} className={p.selectedRun === r.id ? "active" : ""}>
+      <button
+        className="run-select"
+        onClick={() => p.onSelectRun(r.id)}
+        type="button"
+      >
+        <span className="sr-only">Open </span>
+        <span className={`run-status ${r.status}`} />
+        <span>
+          {r.provider} <span aria-hidden="true">· </span>
+          {r.task ?? r.stage}
+        </span>
+        <span className="sr-only"> run, </span>
+        <span className={`run-word ${r.status}`}>{RUN_WORD[r.status]}</span>
+        <span className="spacer" />
+        <span className="muted small" aria-hidden="true">
+          {relTime(r.started_at)}
+        </span>
+      </button>
+      {!isLive(r) && r.provider_session_id && (
+        <button
+          className="run-remove"
+          title="Resume this run: the agent keeps its context and picks up where it stopped"
+          onClick={() =>
+            p.onStartRun(
+              r.task === "assist"
+                ? "assist"
+                : r.task === "draft-pr"
+                  ? "draft-pr"
+                  : r.stage === "researching"
+                    ? "research"
+                    : r.stage === "implementing" ||
+                        r.stage === "implementation-review"
+                      ? "implement"
+                      : "plan",
+              r.id,
+            )
+          }
+          type="button"
+          aria-label="Resume run"
+        >
+          <ArrowClockwise size={15} aria-hidden="true" />
+        </button>
+      )}
+      {!isLive(r) && (
+        <button
+          className="run-remove"
+          title="Clear this run and its transcript"
+          onClick={async () => {
+            if (
+              await confirmAction(
+                "Clear this run and its transcript? This cannot be undone.",
+                true,
+              )
+            )
+              await p.onRemoveRun(r.id);
+          }}
+          type="button"
+          aria-label="Clear run transcript"
+        >
+          <X size={15} aria-hidden="true" />
+        </button>
+      )}
+    </li>
+  );
   const liveRun = p.view.runs.find(isLive) ?? null;
-  const latestImplementation = p.view.runs.filter((r) => r.task === "implement").sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
-  const stepMode = latestImplementation?.implementation_mode === "step-by-step" || !!latestImplementation?.milestone_key;
-  const reviewable = latestImplementation?.status === "idle" || (!!latestImplementation?.milestone_key && latestImplementation.status === "stopped");
-  const awaitingApproval = stage === "implementing" && stepMode && latestImplementation?.milestone_pending && reviewable;
+  const latestImplementation = p.view.runs
+    .filter((r) => r.task === "implement")
+    .sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
+  const stepMode =
+    latestImplementation?.implementation_mode === "step-by-step" ||
+    !!latestImplementation?.milestone_key;
+  const reviewable =
+    latestImplementation?.status === "idle" ||
+    (!!latestImplementation?.milestone_key &&
+      latestImplementation.status === "stopped");
+  const awaitingApproval =
+    stage === "implementing" &&
+    stepMode &&
+    latestImplementation?.milestone_pending &&
+    reviewable;
   const approvalRun = awaitingApproval ? latestImplementation.id : null;
-  const approvalCount = awaitingApproval ? (latestImplementation.milestones_approved ?? 0) : 0;
+  const approvalCount = awaitingApproval
+    ? (latestImplementation.milestones_approved ?? 0)
+    : 0;
   const planSha = plan?.sha ?? null;
   useEffect(() => {
     if (!approvalRun) return;
@@ -111,73 +272,157 @@ export function Sidebar(p: SidebarProps) {
       cancelled = true;
     };
   }, [p.view.key, approvalRun, approvalCount, planSha]);
-  const confirm = (msg: string) => openHuman === 0 || window.confirm(msg);
-  const skipToBuild = () => window.confirm("Skip planning? The stage becomes approved. The agent will write a short task list to plan.md from the brief, then implement phase by phase.");
+  const confirm = async (msg: string) =>
+    openHuman === 0 || (await confirmAction(msg));
+  const skipToBuild = () =>
+    confirmAction(
+      "Skip planning? The stage becomes approved. The agent will write a short task list to plan.md from the brief, then implement phase by phase.",
+    );
 
   return (
     <aside className="sidebar">
-      {p.view.handoff && <Handoff step={p.view.state.milestones?.length && p.view.handoff.step === "Build" ? `Build ${Math.min(p.view.state.milestones.filter((m) => m.status === "approved" || m.status === "completed").length + 1, p.view.state.milestones.length)} of ${p.view.state.milestones.length}` : p.view.handoff.step} label={p.view.handoff.label} action={p.view.handoff.action} onAction={p.onHandoff ?? (() => {})} />}
-      {blockers.length > 0 && <div className="banner" role="status">{blockers.length} open blockers. Resolve them before approval.</div>}
-      {p.reviewPanel}
-      {p.activityPanel}
-      {p.contextPanel}
-      <div className="side-block">
-        <div className="side-title">{s.title}</div>
-        <div className="muted small">{p.view.key}</div>
-        {s.worktree && p.view.workspace_branch === null && <div className="error small">Workspace missing, detached, or no longer in this repository. Open workspace details to choose a valid worktree.</div>}
-        {s.pull_request && <div className="small">PR <a href={s.pull_request.url} target="_blank" rel="noreferrer">#{s.pull_request.number}</a> · {s.pull_request.state.toLowerCase()}{s.pull_request.draft ? " draft" : ""} <button className="link" type="button" onClick={p.onRefreshPr}>Refresh</button><span className="muted">checked {relTime(s.pull_request.updated_at)}</span></div>}
-        <details className="session-context disclosure"><summary>Workspace details</summary>
-        <div className="workspace-detail" title={workspacePath(s)}>
-          <span className="muted small">Workspace <button className="link" type="button" onClick={() => {
-            setWorkspaceError(null);
-            void api.workspaceCandidates(p.view.key).then(setWorkspaceCheck).catch((e: Error) => setWorkspaceError(e.message));
-          }}>Refresh</button></span>
-          <span className="workspace-line">
-            <span className="workspace-path">{workspacePath(s)}</span>
-            <CopyButton text={workspacePath(s)} label="Copy" className="btn ghost small workspace-copy" />
+      <header className="sidebar-header">
+        <a href="/" className="back-link">
+          <ArrowLeft size={16} aria-hidden="true" /> All sessions
+        </a>
+        <h2>{s.title}</h2>
+        <span className="repo-chip">
+          <FolderSimple size={15} aria-hidden="true" />
+          {s.repo_slug}
+          <span className="repo-branch">
+            <GitBranch size={13} aria-hidden="true" />
+            {p.view.workspace_branch || s.repo.branch}
           </span>
-        </div>
-        {workspaceCheck?.missing && <div className="error small">Recorded workspace is missing or no longer belongs to this repository. New runs are blocked until you choose a valid workspace.</div>}
-        {workspaceCheck?.candidates.filter((candidate) => candidate.root !== s.worktree).map((candidate) => (
-          <button key={candidate.root} className="link small" type="button" onClick={() => {
-            if (!window.confirm(`Use ${candidate.root} on branch ${candidate.branch} for this session?`)) return;
-            void api.adoptWorkspace(p.view.key, candidate.root).then((result) => { p.onWorkspace(result.session); setWorkspaceCheck(null); }).catch((e: Error) => setWorkspaceError(e.message));
-          }}>Use {shortPath(candidate.root)} · {candidate.branch}</button>
-        ))}
-        {workspaceCheck && !workspaceCheck.missing && workspaceCheck.candidates.length === 0 && <div className="muted small">No matching worktree found.</div>}
-        {workspaceError && <div className="error small">{workspaceError}</div>}
-        <div className="muted small" title={`repository: ${s.repo.root}`}>
-          {shortPath(s.repo.root)} · {s.repo.branch} → {s.base}
-        </div>
-        <div className="muted small" title={`${s.created_at}${s.created_in ? ` in ${s.created_in}` : ""}`}>
-          created {relTime(s.created_at)}
-          {s.created_in && s.created_in !== s.repo.root ? ` from ${shortPath(s.created_in)}` : ""}
-        </div>
-        </details>
-      </div>
+        </span>
+      </header>
+      <section className="workflow-timeline">
+        <h3>Workflow</h3>
+        <ol className="stepper">
+          {steps.map((st, i) => (
+            <li
+              key={st}
+              className={i < idx ? "done" : i === idx ? "current" : ""}
+            >
+              <span className="dot">
+                {i < idx ? <Check size={12} aria-hidden="true" /> : i + 1}
+              </span>
+              <span>{st}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
 
-        {(stage === "planning" || stage === "plan-review") && blockers.length > 0 && <div className="banner">
-          <p>{blockers.length} open blockers. Resolve them or record why you are overriding them.</p>
-          <label>Override reason <input value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label>
-          <button className="btn ghost" type="button" disabled={p.busy || !plan?.exists || !overrideReason.trim()} onClick={() => void p.onStage("approved", overrideReason)}>Approve with recorded override</button>
-        </div>}
-      <details className="side-block actions disclosure">
-        <summary>More actions</summary>
-        {stage === "new" && !s.brief && <div className="muted small">Add a brief below so the agent knows what success looks like.</div>}
-        {liveRun && <div className="run-handoff"><span className={`run-status ${liveRun.status}`} /><span>{liveRun.status === "waiting" ? "The agent needs your answer." : liveRun.status === "idle" ? "The agent finished its turn. Review its work or send a follow-up." : "The agent is working. Follow its progress here."}</span><button className="btn small" type="button" onClick={() => p.onSelectRun(liveRun.id)}>Open run</button></div>}
-        <button className="btn ghost" onClick={p.onAskAgent} disabled={p.busy} type="button">Ask agent…</button>
-        {(stage === "implementation-review" || stage === "done") && !s.pull_request && <button className="btn ghost" onClick={p.onPr} disabled={p.busy} type="button">Create a PR…</button>}
+      {p.view.handoff && (
+        <Handoff
+          step={
+            p.view.state.milestones?.length && p.view.handoff.step === "Build"
+              ? `Build ${Math.min(p.view.state.milestones.filter((m) => m.status === "approved" || m.status === "completed").length + 1, p.view.state.milestones.length)} of ${p.view.state.milestones.length}`
+              : p.view.handoff.step
+          }
+          label={p.view.handoff.label}
+          action={p.view.handoff.action}
+          onAction={p.onHandoff ?? (() => {})}
+        />
+      )}
+
+      {blockers.length > 0 && (
+        <div className="banner" role="status">
+          {blockers.length} open blockers. Resolve them before approval.
+        </div>
+      )}
+      {(stage === "planning" || stage === "plan-review") &&
+        blockers.length > 0 && (
+          <div className="banner">
+            <p>
+              {blockers.length} open blockers. Resolve them or record why you
+              are overriding them.
+            </p>
+            <label>
+              Override reason{" "}
+              <input
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+              />
+            </label>
+            <button
+              className="btn ghost"
+              type="button"
+              disabled={p.busy || !plan?.exists || !overrideReason.trim()}
+              onClick={() => void p.onStage("approved", overrideReason)}
+            >
+              Approve with recorded override
+            </button>
+          </div>
+        )}
+      <details
+        className="side-block actions disclosure"
+        open={actionsOpen}
+        onToggle={(event) => {
+          const open = event.currentTarget.open;
+          setActionsOpen(open);
+          try {
+            localStorage.setItem(
+              `plantool.actions.${p.view.key}`,
+              open ? "open" : "closed",
+            );
+          } catch {
+            /* optional preference */
+          }
+        }}
+      >
+        <summary>Actions</summary>
+        {stage === "new" && !s.brief && (
+          <div className="muted small">
+            Add a brief below so the agent knows what success looks like.
+          </div>
+        )}
+        {liveRun && (
+          <div className="run-handoff">
+            <span className={`run-status ${liveRun.status}`} />
+            <span>
+              {liveRun.status === "waiting"
+                ? "The agent needs your answer."
+                : liveRun.status === "idle"
+                  ? "The agent finished its turn. Review its work or send a follow-up."
+                  : "The agent is working. Follow its progress here."}
+            </span>
+            <button
+              className="btn small"
+              type="button"
+              onClick={() => p.onSelectRun(liveRun.id)}
+            >
+              Open run
+            </button>
+          </div>
+        )}
         {stage === "new" && (
           <>
-            {p.view.handoff?.action !== "Start research" && (<button className="btn" onClick={() => p.onStartRun("research")} disabled={p.busy} type="button">
+            <button
+              className="btn primary"
+              onClick={() => p.onStartRun("research")}
+              disabled={p.busy}
+              type="button"
+            >
               Start research
-            </button>)}
+            </button>
             <div className="skip-row muted small">
               skip:
-              <button className="link" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+              <button
+                className="link"
+                onClick={() => p.onStartRun("plan")}
+                disabled={p.busy}
+                type="button"
+              >
                 research → plan
               </button>
-              <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
+              <button
+                className="link"
+                onClick={async () => {
+                  if (await skipToBuild()) await p.onStage("approved");
+                }}
+                disabled={p.busy}
+                type="button"
+              >
                 planning → build
               </button>
             </div>
@@ -185,12 +430,26 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "researching" || stage === "research-review") && (
           <>
-            {p.view.handoff?.action !== "Plan it" && (<button className="btn" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
-              Plan it
-            </button>)}
+            {p.view.handoff?.action !== "Plan it" && (
+              <button
+                className="btn primary"
+                onClick={() => p.onStartRun("plan")}
+                disabled={p.busy}
+                type="button"
+              >
+                Plan it
+              </button>
+            )}
             <div className="skip-row muted small">
               skip:
-              <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
+              <button
+                className="link"
+                onClick={async () => {
+                  if (await skipToBuild()) await p.onStage("approved");
+                }}
+                disabled={p.busy}
+                type="button"
+              >
                 planning → build
               </button>
             </div>
@@ -198,208 +457,518 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "planning" || stage === "plan-review") && (
           <>
-            {p.view.handoff?.action !== "Approve plan" && (<button
-              className="btn"
+            <button
+              className="btn primary"
               disabled={p.busy || !plan?.exists || blockers.length > 0}
-              onClick={() => confirm(`${openHuman} of your comments are still open. Approve anyway?`) && void p.onStage("approved")}
+              onClick={async () => {
+                if (
+                  await confirm(
+                    `${openHuman} of your comments are still open. Approve anyway?`,
+                  )
+                )
+                  await p.onStage("approved");
+              }}
               type="button"
             >
               Approve plan
-            </button>)}
-            <button className="btn ghost" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => p.onStartRun("plan")}
+              disabled={p.busy}
+              type="button"
+            >
               {plan?.exists ? "Revise with agent" : "Start planning"}
             </button>
           </>
         )}
         {stage === "approved" && (
           <>
-            {p.view.handoff?.action !== "Start implementation" && (<button className="btn" onClick={() => p.onStartRun("implement")} disabled={p.busy} type="button">
+            <button
+              className="btn primary"
+              onClick={() => p.onStartRun("implement")}
+              disabled={p.busy}
+              type="button"
+            >
               Start implementation
-            </button>)}
-            {!plan?.exists && <div className="muted small">No plan: the agent writes the tasks to plan.md first, then works through them.</div>}
+            </button>
+            {!plan?.exists && (
+              <div className="muted small">
+                No plan: the agent writes the tasks to plan.md first, then works
+                through them.
+              </div>
+            )}
           </>
         )}
         {(stage === "implementing" || stage === "implementation-review") && (
           <>
-            <button className="btn ghost" onClick={p.onOpenChanges} disabled={p.busy} type="button">
-              Review changes
-            </button>
-            {stage === "implementing" && stepMode && latestImplementation?.milestone_pending && (
-              <>
-                <div className="muted small">Review this milestone. With difftool, the agent handles new comments in this run. Approving commits the milestone on the session branch and the agent starts the next phase.</div>
-                {p.view.commit?.scope.kind === "milestone" && p.view.commit.scope.run_id === latestImplementation.id ? (
-                  <CommitProgress job={p.view.commit} label="Committing milestone…" onCancel={p.onCancelCommit} />
-                ) : reviewable ? (
-                  <>
-                    <label className="muted small check-row">
-                      <input type="checkbox" checked={commitMilestone} onChange={(e) => setCommitMilestone(e.target.checked)} disabled={p.busy} />
-                      commit this milestone
-                    </label>
-                    {commitMilestone && (
-                      <textarea
-                        className="commit-message"
-                        aria-label="Commit message"
-                        rows={2}
-                        value={commitMessage}
-                        onChange={(e) => setCommitMessage(e.target.value)}
-                        disabled={p.busy}
-                        placeholder="Commit message"
-                      />
-                    )}
-                    <button className="btn" onClick={() => p.onApproveMilestone(latestImplementation, commitMilestone, commitMessage)} disabled={p.busy || p.view.state.plan_revision_pending || (commitMilestone && commitMessage.trim() === "")} type="button">
-                      Approve milestone and continue
-                    </button>
-                  </>
-                ) : !isLive(latestImplementation) ? (
-                  <button className="btn" onClick={() => p.onContinueMilestone(latestImplementation)} disabled={p.busy} type="button">
-                    Resume milestone review
-                  </button>
-                ) : null}
-              </>
-            )}
-            {stage === "implementation-review" && p.view.handoff?.action !== "Accept implementation" && (<button
-              className="btn"
+            <button
+              className="btn ghost"
+              onClick={p.onOpenChanges}
               disabled={p.busy}
-              onClick={() => confirm(`${openHuman} of your comments are still open. Accept anyway?`) && void p.onStage("done")}
               type="button"
             >
-              Accept implementation
-            </button>)}
-          </>
-        )}
-        {activeDoc?.exists && (activeDoc.kind === "research" || activeDoc.kind === "plan") && (
-          <button className="btn ghost" onClick={() => p.onStartRun("critique")} disabled={p.busy} type="button" title="An agent reads the document against the code and posts findings as comments; it does not edit the document">
-            Review {activeDoc.kind} with agent
-          </button>
-        )}
-        <div className="skip-row muted small">
-          <button className="link" onClick={() => p.onStartRun(stage === "new" || stage === "researching" || stage === "research-review" ? "research" : stage === "approved" || stage === "implementing" || stage === "implementation-review" ? "implement" : "plan")} disabled={p.busy} type="button">
-            run any stage…
-          </button>
-        </div>
-        <label className="muted small stage-select">
-          set stage
-          <select value={stage} onChange={(e) => void p.onStage(e.target.value as Stage)} disabled={p.busy}>
-            {STAGES.map((st) => (
-              <option key={st} value={st}>
-                {STAGE_LABEL[st]}
-              </option>
-            ))}
-          </select>
-        </label>
-      </details>
-
-      <details><summary>Session brief</summary><Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} /></details>
-
-      <details className="workflow-details"><summary>Workflow · {STAGE_LABEL[stage]}</summary>
-        <ol className="stepper">
-          {steps.map((st, i) => (
-            <li key={st} className={i < idx ? "done" : i === idx ? "current" : ""}>
-              <span className="dot" />
-              <span>{st}</span>
-            </li>
-          ))}
-        </ol>
-      </details>
-
-      <nav className="side-block tabs">
-        <DocTab label="Research" doc={research} active={p.activeTab === "research"} onClick={() => p.onTab("research")} />
-        <DocTab label="Plan" doc={plan} active={p.activeTab === "plan"} onClick={() => p.onTab("plan")} />
-        <button className={`tab ${p.activeTab === "changes" ? "active" : ""}`} onClick={() => p.onTab("changes")} type="button">
-          Changes
-        </button>
-      </nav>
-
-      {plan?.exists && plan.progress.length > 0 && (
-        <div className="side-block">
-          <div className="side-heading">Progress</div>
-          {plan.progress.map((ph) => (
-            <div key={ph.name} className="progress">
-              <div className="progress-label">
-                <span>{ph.name}</span>
-                <span className="muted">
-                  {ph.done}/{ph.total}
-                </span>
-              </div>
-              <div className="bar">
-                <div className="fill" style={{ width: `${ph.total ? (100 * ph.done) / ph.total : 0}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="side-block">
-        <div className="side-heading">
-          Open comments <span className="badge">{openThreads.length}</span>
-        </div>
-        {openThreads.length === 0 && <div className="muted small">Click + next to any block to comment.</div>}
-        {openThreads.length > 0 && p.reviewPrompt && (
-          <div className="comment-tools">
-            {liveRun ? (
-              <button className="btn small" disabled={p.busy} onClick={() => void p.onSendToRun(p.reviewPrompt ?? "")} title="Tells the running agent to read the open comments, act on them, reply and resolve" type="button">
-                Send comments to the running agent
-              </button>
-            ) : (
-              <span className="muted small">No run is live. Paste this into your agent:</span>
-            )}
-            <CopyButton text={p.reviewPrompt} label="Copy prompt to act on comments" />
-          </div>
-        )}
-        <ul className="comment-list">
-          {openThreads.map((c) => (
-            <CommentRow key={c.id} c={c} replies={repliesOf(c)} onJump={() => p.onJump(c)} actions={p.actions} onAsk={liveRun ? () => askAgent(c) : undefined} busy={p.busy} />
-          ))}
-        </ul>
-        {resolvedThreads.length > 0 && (
-          <>
-            <button className="link resolved-toggle" onClick={() => setShowResolvedList((s) => !s)} type="button">
-              {showResolvedList ? "▾" : "▸"} Resolved conversations <span className="badge">{resolvedThreads.length}</span>
+              Review changes
             </button>
-            {showResolvedList && (
-              <ul className="comment-list resolved-list">
-                {resolvedThreads.map((c) => (
-                  <CommentRow key={c.id} c={c} replies={repliesOf(c)} onJump={() => p.onJump(c)} actions={p.actions} busy={p.busy} />
-                ))}
-              </ul>
+            {stage === "implementing" &&
+              stepMode &&
+              latestImplementation?.milestone_pending && (
+                <>
+                  <div className="muted small">
+                    Review this milestone. With difftool, the agent handles new
+                    comments in this run. Approving commits the milestone on the
+                    session branch and the agent starts the next phase.
+                  </div>
+                  {p.view.commit?.scope.kind === "milestone" &&
+                  p.view.commit.scope.run_id === latestImplementation.id ? (
+                    <CommitProgress
+                      job={p.view.commit}
+                      label="Committing milestone…"
+                      onCancel={p.onCancelCommit}
+                    />
+                  ) : reviewable ? (
+                    <>
+                      <label className="muted small check-row">
+                        <input
+                          type="checkbox"
+                          checked={commitMilestone}
+                          onChange={(e) => setCommitMilestone(e.target.checked)}
+                          disabled={p.busy}
+                        />
+                        commit this milestone
+                      </label>
+                      {commitMilestone && (
+                        <textarea
+                          className="commit-message"
+                          aria-label="Commit message"
+                          rows={2}
+                          value={commitMessage}
+                          onChange={(e) => setCommitMessage(e.target.value)}
+                          disabled={p.busy}
+                          placeholder="Commit message"
+                        />
+                      )}
+                      <button
+                        className="btn primary"
+                        onClick={() =>
+                          p.onApproveMilestone(
+                            latestImplementation,
+                            commitMilestone,
+                            commitMessage,
+                          )
+                        }
+                        disabled={
+                          p.busy ||
+                          p.view.state.plan_revision_pending ||
+                          (commitMilestone && commitMessage.trim() === "")
+                        }
+                        type="button"
+                      >
+                        Approve milestone and continue
+                      </button>
+                    </>
+                  ) : !isLive(latestImplementation) ? (
+                    <button
+                      className="btn"
+                      onClick={() =>
+                        p.onContinueMilestone(latestImplementation)
+                      }
+                      disabled={p.busy}
+                      type="button"
+                    >
+                      Resume milestone review
+                    </button>
+                  ) : null}
+                </>
+              )}
+            {stage === "implementation-review" && (
+              <button
+                className="btn primary"
+                disabled={p.busy}
+                onClick={async () => {
+                  if (
+                    await confirm(
+                      `${openHuman} of your comments are still open. Accept anyway?`,
+                    )
+                  )
+                    await p.onStage("done");
+                }}
+                type="button"
+              >
+                Accept implementation
+              </button>
             )}
           </>
         )}
-      </div>
-
-      <div className="side-block">
-        <div className="side-heading">
-          Runs
-          {finished.length > 1 && (
-            <button className="link" onClick={() => window.confirm(`Clear ${finished.length} finished runs and their transcripts?`) && finished.forEach((r) => void p.onRemoveRun(r.id))} type="button">
-              clear finished
+        {activeDoc?.exists &&
+          (activeDoc.kind === "research" || activeDoc.kind === "plan") && (
+            <button
+              className="btn ghost"
+              onClick={() => p.onStartRun("critique")}
+              disabled={p.busy}
+              type="button"
+              title="An agent reads the document against the code and posts findings as comments; it does not edit the document"
+            >
+              Review {activeDoc.kind} with agent
             </button>
           )}
-        </div>
-        {p.view.runs.length === 0 && <div className="muted small">No hosted runs yet.</div>}
-        <ul className="run-list">{[...activeRuns].reverse().map(runRow)}</ul>
-        {finished.length > 0 && <>
-          <button className="link finished-toggle" type="button" aria-expanded={showFinished} onClick={toggleFinished}>{showFinished ? "▾" : "▸"} Finished runs <span className="badge">{finished.length}</span>{finished.some((r) => r.status === "failed") && <span className="run-word failed">{finished.filter((r) => r.status === "failed").length} failed</span>}</button>
-          {showFinished && <ul className="run-list">{[...finished].reverse().map(runRow)}</ul>}
-        </>}
-      </div>
-
-      <div className="side-block danger-zone">
         <button
-          className="link danger"
+          className="btn ghost"
+          onClick={p.onAskAgent}
           disabled={p.busy}
-          onClick={() => setDeleting(true)}
           type="button"
         >
-          {stage === "done" ? "Drop this finished session" : "Drop session"}
+          Ask agent…
         </button>
+        {(stage === "implementation-review" || stage === "done") &&
+          !s.pull_request && (
+            <button
+              className="btn ghost"
+              onClick={p.onPr}
+              disabled={p.busy}
+              type="button"
+            >
+              Create a PR…
+            </button>
+          )}
+        <details className="advanced-controls disclosure">
+          <summary>Advanced controls</summary>
+          <div className="skip-row muted small">
+            <button
+              className="link"
+              onClick={() =>
+                p.onStartRun(
+                  stage === "new" ||
+                    stage === "researching" ||
+                    stage === "research-review"
+                    ? "research"
+                    : stage === "approved" ||
+                        stage === "implementing" ||
+                        stage === "implementation-review"
+                      ? "implement"
+                      : "plan",
+                )
+              }
+              disabled={p.busy}
+              type="button"
+            >
+              run any stage…
+            </button>
+          </div>
+          <label className="muted small stage-select">
+            set stage
+            <select
+              value={stage}
+              onChange={(e) => void p.onStage(e.target.value as Stage)}
+              disabled={p.busy}
+            >
+              {STAGES.map((st) => (
+                <option key={st} value={st}>
+                  {STAGE_LABEL[st]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </details>
+      </details>
+
+      <button
+        className="btn sidebar-details-toggle"
+        type="button"
+        aria-expanded={supportOpen}
+        aria-controls="session-details"
+        onClick={() => setSupportOpen((open) => !open)}
+      >
+        {supportOpen ? "Hide session details" : "Session details and history"}
+      </button>
+      <div
+        className="sidebar-support"
+        id="session-details"
+        data-open={supportOpen}
+      >
+        <div className="side-block">
+          <div className="muted small">{p.view.key}</div>
+          {s.worktree && p.view.workspace_branch === null && (
+            <div className="error small">
+              Workspace missing, detached, or no longer in this repository. Open
+              workspace details to choose a valid worktree.
+            </div>
+          )}
+          {s.pull_request && (
+            <div className="small">
+              PR{" "}
+              <a href={s.pull_request.url} target="_blank" rel="noreferrer">
+                #{s.pull_request.number}
+              </a>{" "}
+              · {s.pull_request.state.toLowerCase()}
+              {s.pull_request.draft ? " draft" : ""}{" "}
+              <button className="link" type="button" onClick={p.onRefreshPr}>
+                Refresh
+              </button>
+              <span className="muted">
+                checked {relTime(s.pull_request.updated_at)}
+              </span>
+            </div>
+          )}
+          <details className="session-context disclosure">
+            <summary>Workspace details</summary>
+            <div className="workspace-detail" title={workspacePath(s)}>
+              <span className="muted small">
+                Workspace{" "}
+                <button
+                  className="link"
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceError(null);
+                    void api
+                      .workspaceCandidates(p.view.key)
+                      .then(setWorkspaceCheck)
+                      .catch((e: Error) => setWorkspaceError(e.message));
+                  }}
+                >
+                  Refresh
+                </button>
+              </span>
+              <span className="workspace-line">
+                <span className="workspace-path">{workspacePath(s)}</span>
+                <CopyButton
+                  text={workspacePath(s)}
+                  label="Copy"
+                  className="btn ghost small workspace-copy"
+                />
+              </span>
+            </div>
+            {workspaceCheck?.missing && (
+              <div className="error small">
+                Recorded workspace is missing or no longer belongs to this
+                repository. New runs are blocked until you choose a valid
+                workspace.
+              </div>
+            )}
+            {workspaceCheck?.candidates
+              .filter((candidate) => candidate.root !== s.worktree)
+              .map((candidate) => (
+                <button
+                  key={candidate.root}
+                  className="link small"
+                  type="button"
+                  onClick={async () => {
+                    if (
+                      !(await confirmAction(
+                        `Use ${candidate.root} on branch ${candidate.branch} for this session?`,
+                      ))
+                    )
+                      return;
+                    void api
+                      .adoptWorkspace(p.view.key, candidate.root)
+                      .then((result) => {
+                        p.onWorkspace(result.session);
+                        setWorkspaceCheck(null);
+                      })
+                      .catch((e: Error) => setWorkspaceError(e.message));
+                  }}
+                >
+                  Use {shortPath(candidate.root)} · {candidate.branch}
+                </button>
+              ))}
+            {workspaceCheck &&
+              !workspaceCheck.missing &&
+              workspaceCheck.candidates.length === 0 && (
+                <div className="muted small">No matching worktree found.</div>
+              )}
+            {workspaceError && (
+              <div className="error small">{workspaceError}</div>
+            )}
+            <div className="muted small" title={`repository: ${s.repo.root}`}>
+              {shortPath(s.repo.root)} · {s.repo.branch} → {s.base}
+            </div>
+            <div
+              className="muted small"
+              title={`${s.created_at}${s.created_in ? ` in ${s.created_in}` : ""}`}
+            >
+              created {relTime(s.created_at)}
+              {s.created_in && s.created_in !== s.repo.root
+                ? ` from ${shortPath(s.created_in)}`
+                : ""}
+            </div>
+          </details>
+        </div>
+
+        {p.reviewPanel}
+        {p.activityPanel}
+        {p.contextPanel}
+
+        <details>
+          <summary>Session brief</summary>
+          <Brief brief={s.brief ?? null} onSave={p.onBrief} busy={p.busy} />
+        </details>
+
+        <div className="side-block">
+          <div className="side-heading">
+            Open comments <span className="badge">{openThreads.length}</span>
+          </div>
+          {openThreads.length === 0 && (
+            <div className="muted small">
+              Click + next to any block to comment.
+            </div>
+          )}
+          {openThreads.length > 0 && p.reviewPrompt && (
+            <div className="comment-tools">
+              {liveRun ? (
+                <button
+                  className="btn small"
+                  disabled={p.busy}
+                  onClick={() => void p.onSendToRun(p.reviewPrompt ?? "")}
+                  title="Tells the running agent to read the open comments, act on them, reply and resolve"
+                  type="button"
+                >
+                  Send comments to the running agent
+                </button>
+              ) : (
+                <span className="muted small">
+                  No run is live. Paste this into your agent:
+                </span>
+              )}
+              <CopyButton
+                text={p.reviewPrompt}
+                label="Copy prompt to act on comments"
+              />
+            </div>
+          )}
+          <ul className="comment-list">
+            {openThreads.map((c) => (
+              <CommentRow
+                key={c.id}
+                c={c}
+                replies={repliesOf(c)}
+                onJump={() => p.onJump(c)}
+                actions={p.actions}
+                onAsk={liveRun ? () => askAgent(c) : undefined}
+                busy={p.busy}
+              />
+            ))}
+          </ul>
+          {resolvedThreads.length > 0 && (
+            <>
+              <button
+                className="link resolved-toggle"
+                onClick={() => setShowResolvedList((s) => !s)}
+                type="button"
+              >
+                {showResolvedList ? (
+                  <CaretDown size={14} aria-hidden="true" />
+                ) : (
+                  <CaretRight size={14} aria-hidden="true" />
+                )}{" "}
+                Resolved conversations{" "}
+                <span className="badge">{resolvedThreads.length}</span>
+              </button>
+              {showResolvedList && (
+                <ul className="comment-list resolved-list">
+                  {resolvedThreads.map((c) => (
+                    <CommentRow
+                      key={c.id}
+                      c={c}
+                      replies={repliesOf(c)}
+                      onJump={() => p.onJump(c)}
+                      actions={p.actions}
+                      busy={p.busy}
+                    />
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="side-block">
+          <div className="side-heading">
+            Runs
+            {finished.length > 1 && (
+              <button
+                className="link"
+                onClick={async () => {
+                  if (
+                    await confirmAction(
+                      `Clear ${finished.length} finished runs and their transcripts? This cannot be undone.`,
+                      true,
+                    )
+                  )
+                    await Promise.all(finished.map((r) => p.onRemoveRun(r.id)));
+                }}
+                type="button"
+              >
+                clear finished
+              </button>
+            )}
+          </div>
+          {p.view.runs.length === 0 && (
+            <div className="muted small">No hosted runs yet.</div>
+          )}
+          <ul className="run-list">{[...activeRuns].reverse().map(runRow)}</ul>
+          {finished.length > 0 && (
+            <>
+              <button
+                className="link finished-toggle"
+                type="button"
+                aria-expanded={showFinished}
+                onClick={toggleFinished}
+              >
+                {showFinished ? (
+                  <CaretDown size={14} aria-hidden="true" />
+                ) : (
+                  <CaretRight size={14} aria-hidden="true" />
+                )}{" "}
+                Finished runs <span className="badge">{finished.length}</span>
+                {finished.some((r) => r.status === "failed") && (
+                  <span className="run-word failed">
+                    {finished.filter((r) => r.status === "failed").length}{" "}
+                    failed
+                  </span>
+                )}
+              </button>
+              {showFinished && (
+                <ul className="run-list">
+                  {[...finished].reverse().map(runRow)}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="side-block danger-zone">
+          <button
+            className="link danger"
+            disabled={p.busy}
+            onClick={() => setDeleting(true)}
+            type="button"
+          >
+            {stage === "done" ? "Drop this finished session" : "Drop session"}
+          </button>
+        </div>
       </div>
-      {deleting && <DropSessionDialog view={p.view} busy={p.busy} onClose={() => setDeleting(false)} onDelete={p.onDelete} />}
+      {confirmation}
+      {deleting && (
+        <DropSessionDialog
+          view={p.view}
+          busy={p.busy}
+          onClose={() => setDeleting(false)}
+          onDelete={p.onDelete}
+        />
+      )}
     </aside>
   );
 }
 
-function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: string | null) => Promise<void>; busy: boolean }) {
+function Brief({
+  brief,
+  onSave,
+  busy,
+}: {
+  brief: string | null;
+  onSave: (b: string | null) => Promise<void>;
+  busy: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(brief ?? "");
   useEffect(() => {
@@ -418,7 +987,11 @@ function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: stri
       <div className="side-heading">
         Brief
         {!editing && (
-          <button className="link" onClick={() => setEditing(true)} type="button">
+          <button
+            className="link"
+            onClick={() => setEditing(true)}
+            type="button"
+          >
             {brief ? "edit" : "add"}
           </button>
         )}
@@ -438,10 +1011,19 @@ function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: stri
           />
           <div className="composer-actions">
             <span className="spacer" />
-            <button className="btn ghost small" onClick={() => setEditing(false)} type="button">
+            <button
+              className="btn ghost small"
+              onClick={() => setEditing(false)}
+              type="button"
+            >
               Cancel
             </button>
-            <button className="btn small" disabled={busy} onClick={() => void save()} type="button">
+            <button
+              className="btn small"
+              disabled={busy}
+              onClick={() => void save()}
+              type="button"
+            >
               Save
             </button>
           </div>
@@ -449,15 +1031,36 @@ function Brief({ brief, onSave, busy }: { brief: string | null; onSave: (b: stri
       ) : brief ? (
         <div className="brief-text">{brief}</div>
       ) : (
-        <div className="muted small">Nothing yet. Tell the agent what to research or build; it goes into every stage prompt.</div>
+        <div className="muted small">
+          Nothing yet. Tell the agent what to research or build; it goes into
+          every stage prompt.
+        </div>
       )}
     </div>
   );
 }
 
-const QUICK_REPLIES = ["Agreed, go ahead.", "No, keep it as it is.", "Not now; note it as a follow-up."];
+const QUICK_REPLIES = [
+  "Agreed, go ahead.",
+  "No, keep it as it is.",
+  "Not now; note it as a follow-up.",
+];
 
-function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c: Comment; replies: Comment[]; onJump: () => void; actions: ThreadActions; onAsk?: () => void; busy: boolean }) {
+function CommentRow({
+  c,
+  replies,
+  onJump,
+  actions,
+  onAsk,
+  busy: outerBusy,
+}: {
+  c: Comment;
+  replies: Comment[];
+  onJump: () => void;
+  actions: ThreadActions;
+  onAsk?: () => void;
+  busy: boolean;
+}) {
   const [replying, setReplying] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [text, setText] = useState("");
@@ -485,33 +1088,100 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
     }
   };
   return (
-    <li className={`${replying || expanded ? "replying" : ""} ${c.resolved ? "resolved" : ""}`}>
+    <li
+      className={`${replying || expanded ? "replying" : ""} ${c.resolved ? "resolved" : ""}`}
+    >
       <div className="comment-row">
-        <button className="comment-jump" onClick={onJump} type="button" aria-label={`Jump to ${c.doc} line ${c.anchor.line}`}>
+        <button
+          className="comment-jump"
+          onClick={onJump}
+          type="button"
+          aria-label={`Jump to ${c.doc} line ${c.anchor.line}`}
+        >
           <span className={`kind kind-${c.kind}`}>{c.kind}</span>
-          <span className="muted small">{c.doc}:{c.anchor.line}</span>
+          <span className="muted small">
+            {c.doc}:{c.anchor.line}
+          </span>
           {count > 1 && (
-            <span className="muted small" title={last ? `last reply by ${last.author}` : ""}>
+            <span
+              className="muted small"
+              title={last ? `last reply by ${last.author}` : ""}
+            >
               · {count} {last?.kind === "agent" ? "· agent replied" : ""}
             </span>
           )}
         </button>
-        <button className="row-action" title={expanded ? "Collapse the conversation" : "Read the conversation"} onClick={(e) => { e.stopPropagation(); setExpanded((x) => !x); }} type="button">
-          {expanded ? "▾" : "▸"}
+        <button
+          className="row-action"
+          aria-label={
+            expanded ? "Collapse the conversation" : "Read the conversation"
+          }
+          title={
+            expanded ? "Collapse the conversation" : "Read the conversation"
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((x) => !x);
+          }}
+          type="button"
+        >
+          {expanded ? (
+            <CaretDown size={14} aria-hidden="true" />
+          ) : (
+            <CaretRight size={14} aria-hidden="true" />
+          )}
         </button>
         {onAsk && !c.resolved && (
-          <button className="row-action" title="Ask the running agent to answer this thread" disabled={busy} onClick={(e) => { e.stopPropagation(); onAsk(); }} type="button">
-            ?
+          <button
+            className="row-action"
+            title="Ask the running agent to answer this thread"
+            aria-label="Ask the running agent to answer this thread"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAsk();
+            }}
+            type="button"
+          >
+            <Question size={14} aria-hidden="true" />
           </button>
         )}
-        <button className="row-action" title="Reply" disabled={busy} onClick={(e) => { e.stopPropagation(); setReplying((r) => !r); }} type="button">
-          ↩
+        <button
+          className="row-action"
+          title="Reply"
+          aria-label="Reply"
+          disabled={busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            setReplying((r) => !r);
+          }}
+          type="button"
+        >
+          <ArrowBendUpLeft size={14} aria-hidden="true" />
         </button>
-        <button className="row-action" title={c.resolved ? "Reopen" : "Resolve"} disabled={busy} onClick={(e) => { e.stopPropagation(); void resolve(); }} type="button">
-          {c.resolved ? "↺" : "✓"}
+        <button
+          className="row-action"
+          title={c.resolved ? "Reopen" : "Resolve"}
+          aria-label={c.resolved ? "Reopen" : "Resolve"}
+          disabled={busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            void resolve();
+          }}
+          type="button"
+        >
+          {c.resolved ? (
+            <ArrowClockwise size={14} aria-hidden="true" />
+          ) : (
+            <Check size={14} aria-hidden="true" />
+          )}
         </button>
       </div>
-      {!expanded && <button className="preview" onClick={onJump} type="button">{(last ?? c).body.split("\n")[0]}</button>}
+      {!expanded && (
+        <button className="preview" onClick={onJump} type="button">
+          {(last ?? c).body.split("\n")[0]}
+        </button>
+      )}
       {expanded && (
         <div className="side-thread" onClick={(e) => e.stopPropagation()}>
           <Thread root={c} replies={replies} actions={actions} />
@@ -521,7 +1191,13 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
         <div className="quick-reply" onClick={(e) => e.stopPropagation()}>
           <div className="chips">
             {QUICK_REPLIES.map((q) => (
-              <button key={q} className="chip" disabled={busy} onClick={() => void send(q)} type="button">
+              <button
+                key={q}
+                className="chip"
+                disabled={busy}
+                onClick={() => void send(q)}
+                type="button"
+              >
                 {q}
               </button>
             ))}
@@ -533,16 +1209,26 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
             placeholder="Reply… (⌘↩ to send)"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void send(text);
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter")
+                void send(text);
               if (e.key === "Escape") setReplying(false);
             }}
           />
           <div className="composer-actions">
             <span className="spacer" />
-            <button className="btn ghost small" onClick={() => setReplying(false)} type="button">
+            <button
+              className="btn ghost small"
+              onClick={() => setReplying(false)}
+              type="button"
+            >
               Cancel
             </button>
-            <button className="btn small" disabled={busy || !text.trim()} onClick={() => void send(text)} type="button">
+            <button
+              className="btn small"
+              disabled={busy || !text.trim()}
+              onClick={() => void send(text)}
+              type="button"
+            >
               Reply
             </button>
           </div>
@@ -552,18 +1238,21 @@ function CommentRow({ c, replies, onJump, actions, onAsk, busy: outerBusy }: { c
   );
 }
 
-const RUN_WORD: Record<Run["status"], string> = { starting: "starting", running: "working", waiting: "needs input", idle: "your move", stopped: "stopped", failed: "failed" };
+const RUN_WORD: Record<Run["status"], string> = {
+  starting: "starting",
+  running: "working",
+  waiting: "needs input",
+  idle: "your move",
+  stopped: "stopped",
+  failed: "failed",
+};
 
 function isLive(r: Run): boolean {
-  return r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle";
-}
-
-function DocTab({ label, doc, active, onClick }: { label: string; doc: DocSummary | undefined; active: boolean; onClick: () => void }) {
   return (
-    <button className={`tab ${active ? "active" : ""}`} onClick={onClick} type="button">
-      {label}
-      {doc && !doc.exists && <span className="muted small"> · waiting</span>}
-    </button>
+    r.status === "starting" ||
+    r.status === "running" ||
+    r.status === "waiting" ||
+    r.status === "idle"
   );
 }
 

@@ -170,7 +170,8 @@ async fn file(
 /// Pick the diff window for a scope. Step scope is only available during a step-by-step
 /// implementation; asking for it elsewhere falls back to the whole implementation.
 pub fn resolve_window(s: &LiveSession, requested: Option<ChangeScope>) -> Window {
-    let step_run = latest_step_run(s).filter(|r| {
+    let implementation_run = latest_step_run(s);
+    let step_run = implementation_run.clone().filter(|r| {
         (r.implementation_mode == ImplementationMode::StepByStep || r.milestone_key.is_some())
             && matches!(s.stage(), Stage::Implementing | Stage::ImplementationReview)
     });
@@ -196,7 +197,11 @@ pub fn resolve_window(s: &LiveSession, requested: Option<ChangeScope>) -> Window
                 review: run.milestone_review,
             }
         }
-        (_, Some(run)) if run.implementation_base.is_some() => {
+        _ if implementation_run
+            .as_ref()
+            .is_some_and(|run| run.implementation_base.is_some()) =>
+        {
+            let run = implementation_run.unwrap();
             let base = run.implementation_base.unwrap_or_default();
             Window {
                 scope: ChangeScope::All,

@@ -4,6 +4,7 @@ import { PERMISSION_MODES, type ImplementationMode, type PermissionMode, type Ru
 import { relTime } from "../lib/format";
 import { providerLabel, savedAgentSetting, saveAgentSettings } from "../lib/agents";
 import { ProviderSetup } from "./ProviderSetup";
+import { Modal } from "./Modal";
 
 export type RunStage = "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr";
 const STAGE_TEXT: Record<RunStage, { label: string; hint: string }> = {
@@ -57,11 +58,6 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   const [handoff, setHandoff] = useState<"stop" | "keep" | null>(null);
   const [liveRuns, setLiveRuns] = useState<Run[]>(runs.filter(isLive));
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onClose]);
-  useEffect(() => {
     api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message));
   }, []);
   useEffect(() => {
@@ -80,6 +76,11 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   const [customPause, setCustomPause] = useState<string | null>(null);
   useEffect(() => { if (stage !== "implement") return; void api.session(sessionKey).then((v) => { setMilestones(v.state?.milestones ?? []); if (v.session.pause_rule?.mode === "plain-language") setCustomPause(v.session.pause_rule.rule ?? ""); }).catch(() => {}); }, [sessionKey, stage]);
   const current = providers?.find((p) => p.id === provider);
+  useEffect(() => {
+    if (!providers || resumeTarget || providers.some((p) => p.id === provider && p.available)) return;
+    const ready = providers.find((p) => p.available);
+    if (ready) { setProvider(ready.id); setModel(savedAgentSetting(ready.id, "model")); setEffort(savedAgentSetting(ready.id, "effort")); }
+  }, [providers, provider, resumeTarget]);
   useEffect(() => { if (provider === "ollama" && current && !current.models.some((item) => item.id === model)) setModel(current.models[0]?.id ?? ""); }, [provider, current, model]);
   const start = async () => {
     setBusy(true);
@@ -120,16 +121,10 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     }
   };
   return (
-    <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label={resume ? "Resume run" : STAGE_TEXT[stage].label} onClick={(e) => e.stopPropagation()}>
+    <Modal title={resume ? "Resume run" : STAGE_TEXT[stage].label} onClose={onClose} busy={busy}>
+
         <h3>{resume ? "Resume run" : STAGE_TEXT[stage].label}</h3>
         <p className="muted small">{STAGE_TEXT[stage].hint}</p>
-        <label>
-          Stage
-          <select value={stage} disabled={!!resumeTarget} onChange={(e) => setStage(e.target.value as RunStage)}>
-            {(Object.entries(STAGE_TEXT) as [RunStage, { label: string; hint: string }][]).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}
-          </select>
-        </label>
         <label>
           Provider
           <select value={provider} disabled={!!resumeTarget} onChange={(e) => { setProvider(e.target.value); setModel(savedAgentSetting(e.target.value, "model")); setEffort(savedAgentSetting(e.target.value, "effort")); }}>
@@ -142,27 +137,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
             ))}
           </select>
         </label>
-        {providers && <ProviderSetup providers={providers} onRecheck={() => void api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message))} />}
-        {current?.error && <div className="error" role="alert">{current.error}</div>}
-        {resumable.length > 0 && (
-          <label>
-            Continue from
-            <select value={resume} disabled={!!resumeTarget} onChange={(e) => {
-              const id = e.target.value;
-              setResume(id);
-              const previous = runs.find((r) => r.id === id);
-              if (previous?.implementation_mode) setImplementationMode(previous.implementation_mode);
-            }}>
-              <option value="">a fresh session (full stage prompt)</option>
-              {resumable.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.provider} · {r.stage} · {relTime(r.started_at)} · {r.status}
-                </option>
-              ))}
-            </select>
-            <span className="muted small">Resuming keeps everything that run already read and wrote; the agent is told to pick up where it left off and act on new comments.</span>
-          </label>
-        )}
+        {provider === "ollama" && <>
         <label>
           Model
           {current && current.models.length > 0 ? (
@@ -178,9 +153,9 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
             <input value={model} placeholder={provider === "ollama" ? "No installed model found" : "default"} disabled={provider === "ollama"} onChange={(e) => setModel(e.target.value)} />
           )}
         </label>
-        {(provider === "claude" || provider === "codex") && <fieldset className="effort-picker"><legend>Reasoning effort</legend><div className="seg effort-options">
-          {(provider === "claude" ? ["", "low", "medium", "high", "max"] : ["", "low", "medium", "high", "xhigh"]).map((value) => <button key={value} type="button" className={effort === value ? "active" : ""} onClick={() => setEffort(value)}>{value === "" ? "Auto" : value === "xhigh" ? "X-high" : value[0].toUpperCase() + value.slice(1)}</button>)}
-        </div></fieldset>}
+</>}
+        {providers && <ProviderSetup providers={providers} onRecheck={() => void api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message))} />}
+        {current?.error && <div className="error" role="alert">{current.error}</div>}
         <label>
           Permissions
           <select value={permission === "ask" && ["copilot", "ollama"].includes(provider) ? "accept-edits" : permission} onChange={(e) => setPermission(e.target.value as PermissionMode)}>
@@ -221,27 +196,72 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
           <label><input type="radio" name="handoff" checked={handoff === "stop"} onChange={() => setHandoff("stop")} /> Stop and start</label>
           <label><input type="radio" name="handoff" checked={handoff === "keep"} onChange={() => setHandoff("keep")} /> Keep running and start</label>
         </fieldset>}
+        <details className="run-advanced disclosure" open={!!resumeTarget}><summary>Agent settings</summary>
+        <label>
+          Stage
+          <select value={stage} disabled={!!resumeTarget} onChange={(e) => setStage(e.target.value as RunStage)}>
+            {(Object.entries(STAGE_TEXT) as [RunStage, { label: string; hint: string }][]).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}
+          </select>
+        </label>
+        {resumable.length > 0 && (
+          <label>
+            Continue from
+            <select value={resume} disabled={!!resumeTarget} onChange={(e) => {
+              const id = e.target.value;
+              setResume(id);
+              const previous = runs.find((r) => r.id === id);
+              if (previous?.implementation_mode) setImplementationMode(previous.implementation_mode);
+            }}>
+              <option value="">a fresh session (full stage prompt)</option>
+              {resumable.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.provider} · {r.stage} · {relTime(r.started_at)} · {r.status}
+                </option>
+              ))}
+            </select>
+            <span className="muted small">Resuming keeps everything that run already read and wrote; the agent is told to pick up where it left off and act on new comments.</span>
+          </label>
+        )}
+{provider !== "ollama" && <>
+        <label>
+          Model
+          {current && current.models.length > 0 ? (
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              {provider !== "ollama" && <option value="">default</option>}
+              {current.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input value={model} placeholder={provider === "ollama" ? "No installed model found" : "default"} disabled={provider === "ollama"} onChange={(e) => setModel(e.target.value)} />
+          )}
+        </label>
+</>}
+        {(provider === "claude" || provider === "codex") && <fieldset className="effort-picker"><legend>Reasoning effort</legend><div className="seg effort-options">
+          {(provider === "claude" ? ["", "low", "medium", "high", "max"] : ["", "low", "medium", "high", "xhigh"]).map((value) => <button key={value} type="button" className={effort === value ? "active" : ""} onClick={() => setEffort(value)}>{value === "" ? "Auto" : value === "xhigh" ? "X-high" : value[0].toUpperCase() + value.slice(1)}</button>)}
+        </div></fieldset>}
+        </details>
         {preview && (
           <details className="prompt-preview disclosure">
-            <summary>
-              The prompt the agent gets <CopyButton text={preview} label="copy" className="link" />
-            </summary>
+            <summary>The prompt the agent gets</summary>
+            <CopyButton text={preview} label="Copy prompt" className="link" />
             <pre className="prompt-text">{preview}</pre>
           </details>
         )}
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
           <span className="spacer" />
-          <button className="btn ghost" onClick={onClose} type="button">
+          <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Cancel
           </button>
           {providers && !providers.some((p) => p.available) && preview && <CopyButton text={preview} label="Copy prompt for your terminal agent" className="btn primary" />}
-          <button className="btn primary" disabled={busy || (stage === "assist" && !prompt.trim()) || (liveRuns.length > 0 && !handoff) || (current ? !current.available : false) || (provider === "ollama" && (!model || (stage !== "assist" && permission !== "auto" && permission !== "allow-all")))} onClick={() => void start()} type="button">
+          <button className="btn primary" disabled={busy || !providers || !current?.available || (stage === "assist" && !prompt.trim()) || (liveRuns.length > 0 && !handoff) || (current ? !current.available : false) || (provider === "ollama" && (!model || (stage !== "assist" && permission !== "auto" && permission !== "allow-all")))} onClick={() => void start()} type="button">
             {busy ? "Starting…" : resume ? "Resume run" : `Start ${STAGE_TEXT[stage].label.toLowerCase()}`}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

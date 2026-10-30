@@ -291,12 +291,21 @@ pub struct DocState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewTarget {
+    pub workspace: PathBuf,
+    pub base: String,
+    pub executable: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "kebab-case")]
 pub enum ChangeReview {
     Difftool {
         url: String,
         review: Option<String>,
         opened_at: String,
+        #[serde(default)]
+        target: Option<ReviewTarget>,
     },
     GitDifftool {
         opened_at: String,

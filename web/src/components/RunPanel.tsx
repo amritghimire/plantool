@@ -1,3 +1,4 @@
+import { X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -255,7 +256,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
           </button>
         )}
         <button className="btn ghost" onClick={onClose} type="button" title="Hide" aria-label="Hide run">
-          ×
+          <X size={16} aria-hidden="true" />
         </button>
       </header>
       {phase && (
@@ -328,7 +329,7 @@ function ActivityView({ a }: { a: Activity }) {
 function ItemView({ item }: { item: Item }) {
   if (item.t === "msg") return <div className={`run-msg ${item.m.role}`}>{item.m.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.m.content}</ReactMarkdown> : <pre>{item.m.content}</pre>}</div>;
   if (item.t === "act") return <ActivityView a={item.a} />;
-  return <div className="run-status-line muted small">{item.label}{item.detail ? ` — ${item.detail}` : ""}</div>;
+  return <div className="run-status-line muted small">{item.label}{item.detail ? `: ${item.detail}` : ""}</div>;
 }
 
 function ItemList({ items }: { items: Item[] }) {

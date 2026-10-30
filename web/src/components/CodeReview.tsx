@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus } from "@phosphor-icons/react";
 import { api } from "../api";
 import type { Comment, CommentType } from "../types";
 import { Composer } from "./Composer";
@@ -12,7 +13,7 @@ export function CodeReview({ sessionKey, path, line, context, comments, onAdded 
     setOpen(false); onAdded();
   };
   return <div className="code-review button-row">
-    <button type="button" className="link" aria-expanded={open} aria-label={`Comment on ${path}:${line}`} onClick={() => setOpen(!open)}>Comment on line {line}</button>
+    <button type="button" className="link" aria-expanded={open} aria-label={`Comment on ${path}:${line}`} title={`Comment on line ${line}`} onClick={() => setOpen(!open)}><Plus size={14} aria-hidden="true" /></button>
     {open && <Composer showType draftKey={`code:${sessionKey}:${path}:${line}`} placeholder={`Comment on ${path}:${line}…`} onSubmit={add} onCancel={() => setOpen(false)} />}
     {count > 0 && <span className="muted small">{count} comment{count === 1 ? "" : "s"} · see Code review comments above</span>}
   </div>;

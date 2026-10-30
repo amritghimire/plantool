@@ -118,17 +118,38 @@ impl RunManager {
         } else {
             prompt
         };
-        let head = if milestone_key.is_some() {
+        let head = if stage_name == "implement" {
             Some(crate::git::snapshot_tree(
                 sess.cwd(),
                 &session.store.dir.join(format!(".index-{}", short_id())),
             )?)
-        } else if implementation_mode == ImplementationMode::StepByStep {
-            crate::git::head_sha(sess.cwd()).ok()
         } else {
             None
         };
-        let run = Run {
+        let implementation_base = if stage_name == "implement" {
+            previous_run
+                .and_then(|run| run.implementation_base.clone())
+                .or_else(|| {
+                    session
+                        .runs()
+                        .into_iter()
+                        .filter(|run| implementation_run(run) && run.cwd == *sess.cwd())
+                        .max_by(|a, b| a.started_at.cmp(&b.started_at))
+                        .and_then(|run| run.implementation_base)
+                })
+                .or(Some(crate::git::git(
+                    sess.cwd(),
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--end-of-options",
+                        &format!("{}^{{commit}}", sess.base),
+                    ],
+                )?))
+        } else {
+            None
+        };
+        let mut run = Run {
             milestone_key,
             plan_sha: plan.as_ref().map(|p| p.sha.clone()),
             idle_stopped: false,
@@ -144,9 +165,7 @@ impl RunManager {
                 .or_else(|| head.clone()),
             milestones_approved: previous_run.map_or(0, |r| r.milestones_approved),
             milestone_commit: previous_run.and_then(|r| r.milestone_commit.clone()),
-            implementation_base: previous_run
-                .and_then(|r| r.implementation_base.clone())
-                .or(head),
+            implementation_base,
             task: Some(stage_name.to_string()),
             cwd: sess.cwd().clone(),
             status: RunStatus::Starting,
@@ -157,6 +176,43 @@ impl RunManager {
             error: None,
             seq: 0,
         };
+        // Bind the review before the provider can write. Keep startup usable when an
+        // optional external tool is absent; Changes still exposes the built-in diff.
+        if stage_name == "implement"
+            && matches!(
+                crate::changes::resolve_tool(&sess),
+                Some(crate::changes::ChangeTool::Difftool { .. })
+            )
+        {
+            let step = run.milestone_key.is_some()
+                || implementation_mode == ImplementationMode::StepByStep;
+            let base = if step {
+                run.milestone_base.as_deref()
+            } else {
+                run.implementation_base.as_deref()
+            }
+            .unwrap_or("HEAD");
+            let existing = if step {
+                run.milestone_review.clone()
+            } else {
+                session.state().review
+            };
+            match crate::changes::open_review(
+                &sess,
+                base,
+                Some(session.doc_path(plantool_core::DocKind::Plan)),
+                existing.as_ref(),
+            ) {
+                Ok((review, _)) if step => {
+                    run.milestone_review = Some(review.clone());
+                    session.announce_review(review);
+                }
+                Ok((review, _)) => {
+                    session.set_review(review)?;
+                }
+                Err(error) => tracing::warn!("could not prepare implementation review: {error}"),
+            }
+        }
         session.upsert_run(run.clone(), |r| LiveEvent::RunStarted { run: r })?;
         if let Some(key) = &run.milestone_key {
             session.milestone_status(key, "building", &run)?;
@@ -499,7 +555,10 @@ pub(crate) async fn watch_review(
     run_id: String,
     reference: String,
 ) {
-    let crate::changes::ChangeTool::Difftool { path } = crate::changes::detect_change_tool() else {
+    let Some(review) = session.run(&run_id).and_then(|run| run.milestone_review) else {
+        return;
+    };
+    let Ok(path) = crate::changes::review_executable(&review) else {
         return;
     };
     let mut cursor = "2000-01-01T00:00:00Z".to_string();

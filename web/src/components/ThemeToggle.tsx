@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Sun, Moon, Monitor } from "@phosphor-icons/react";
 
 type Theme = "system" | "light" | "dark";
 
@@ -29,8 +30,8 @@ export function ThemeToggle() {
   }, [theme]);
   const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
   return (
-    <button className="btn ghost" title="Theme" onClick={() => setTheme(next[theme])}>
-      {theme === "system" ? "auto" : theme}
+    <button className="rail-button theme-toggle" type="button" aria-label={`Theme: ${theme}. Switch to ${next[theme]}`} title={`Theme: ${theme}`} onClick={() => setTheme(next[theme])}>
+      {theme === "system" ? <Monitor size={21} aria-hidden="true" /> : theme === "light" ? <Sun size={21} aria-hidden="true" /> : <Moon size={21} aria-hidden="true" />}
     </button>
   );
 }
