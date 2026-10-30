@@ -3,11 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import type { RepoInfo } from "../types";
 import { relTime } from "../lib/format";
+import { useDialogFocus } from "../lib/dialog";
 
 const OTHER = "__other__";
 const slugFromTitle = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
 
 export function NewSessionDialog({ onClose }: { onClose: () => void }) {
+  const dialogRef = useDialogFocus();
   const nav = useNavigate();
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [choice, setChoice] = useState<string>(OTHER);
@@ -51,7 +53,7 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   };
   return (
     <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="New session" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} tabIndex={-1} className="modal form-stack" role="dialog" aria-modal="true" aria-label="New session" onClick={(e) => e.stopPropagation()}>
         <h3>What would you like to build?</h3>
         <p className="dialog-intro">Start with a goal. Research and review the plan before the agent changes your code.</p>
         <label>

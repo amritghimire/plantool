@@ -20,6 +20,7 @@ it("waits for an idle run to end before starting the next run", async () => {
   const onStarted = vi.fn();
   render(<StartRunDialog stage="plan" sessionKey="repo/x" runs={[idle]} onClose={() => {}} onStarted={onStarted} />);
   expect(screen.getByRole("button", { name: "Start plan" })).toBeDisabled();
+  await screen.findByText("Ready");
   fireEvent.click(screen.getByLabelText("Stop and start"));
   fireEvent.click(screen.getByRole("button", { name: "Start plan" }));
   await waitFor(() => expect(onStarted).toHaveBeenCalledWith("next"));
@@ -33,6 +34,7 @@ it("keeps the dialog open when stopping the old run fails", async () => {
   vi.spyOn(api, "stopRun").mockRejectedValue(new Error("stop failed"));
   const start = vi.spyOn(api, "startRun");
   render(<StartRunDialog stage="plan" sessionKey="repo/x" runs={[idle]} onClose={() => {}} onStarted={() => {}} />);
+  await screen.findByText("Ready");
   fireEvent.click(screen.getByLabelText("Stop and start"));
   fireEvent.click(screen.getByRole("button", { name: "Start plan" }));
   expect(await screen.findByText("stop failed")).toBeInTheDocument();
@@ -45,6 +47,7 @@ it("can keep an idle run and start a separate run", async () => {
   const start = vi.spyOn(api, "startRun").mockResolvedValue({ run: { ...idle, id: "next" }, prompt: "Plan this" });
   const close = vi.fn();
   render(<StartRunDialog stage="plan" sessionKey="repo/x" runs={[idle]} onClose={close} onStarted={() => {}} />);
+  await screen.findByText("Ready");
   fireEvent.click(screen.getByLabelText("Keep running and start"));
   fireEvent.click(screen.getByRole("button", { name: "Start plan" }));
   await waitFor(() => expect(start).toHaveBeenCalledOnce());
@@ -56,7 +59,20 @@ it("refreshes stale run status before starting", async () => {
   vi.spyOn(api, "session").mockResolvedValue(view);
   const start = vi.spyOn(api, "startRun");
   render(<StartRunDialog stage="plan" sessionKey="repo/x" runs={[]} onClose={() => {}} onStarted={() => {}} />);
+  await screen.findByText("Ready");
   fireEvent.click(screen.getByRole("button", { name: "Start plan" }));
   expect(await screen.findByText("Choose what to do with the live run before starting another.")).toBeInTheDocument();
   expect(start).not.toHaveBeenCalled();
+});
+
+it("selects an available provider when the saved default is unavailable", async () => {
+  localStorage.setItem("plantool.provider", "claude");
+  vi.spyOn(api, "providers").mockResolvedValue({ providers: [
+    { id: "claude", available: false, models: [] },
+    { id: "codex", available: true, models: [] },
+  ] });
+  render(<StartRunDialog stage="plan" sessionKey="repo/x" runs={[]} onClose={() => {}} onStarted={() => {}} />);
+  await waitFor(() => expect(screen.getByLabelText("Provider")).toHaveValue("codex"));
+  expect(screen.getByRole("button", { name: "Start plan" })).toBeEnabled();
+  localStorage.removeItem("plantool.provider");
 });

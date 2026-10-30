@@ -4,6 +4,7 @@ import { PERMISSION_MODES, type ImplementationMode, type PermissionMode, type Ru
 import { relTime } from "../lib/format";
 import { providerLabel, savedAgentSetting, saveAgentSettings } from "../lib/agents";
 import { ProviderSetup } from "./ProviderSetup";
+import { useDialogFocus } from "../lib/dialog";
 
 export type RunStage = "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr";
 const STAGE_TEXT: Record<RunStage, { label: string; hint: string }> = {
@@ -25,6 +26,7 @@ interface ProviderInfo {
 }
 
 export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId, initialMode, initialPrompt = "", onClose, onStarted }: { stage: RunStage; sessionKey: string; runs: Run[]; resumeId?: string; initialMode?: ImplementationMode; initialPrompt?: string; onClose: () => void; onStarted: (id: string) => void }) {
+  const dialogRef = useDialogFocus();
   const resumeTarget = resumeId ? runs.find((r) => r.id === resumeId) : undefined;
   const [stage, setStage] = useState<RunStage>(initialStage);
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
@@ -126,7 +128,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   };
   return (
     <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label={resume ? "Resume run" : STAGE_TEXT[stage].label} onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} tabIndex={-1} className="modal form-stack" role="dialog" aria-modal="true" aria-label={resume ? "Resume run" : STAGE_TEXT[stage].label} onClick={(e) => e.stopPropagation()}>
         <h3>{resume ? "Resume run" : STAGE_TEXT[stage].label}</h3>
         <p className="muted small">{STAGE_TEXT[stage].hint}</p>
         <label>

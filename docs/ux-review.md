@@ -49,7 +49,7 @@ review context.
 
 ## Visual system
 
-Use restrained indigo accents, neutral surfaces, compact headings, generous
+Retain the existing blue accent, neutral surfaces, compact headings, generous
 document spacing, clear focus rings, and one prominent decision per step.
 Support light/dark themes and narrow screens. Color supplements explicit status
 text. Keep code paths and revision identifiers selectable and readable.

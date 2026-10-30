@@ -1932,6 +1932,19 @@ async fn phase_runs_have_separate_diff_windows_and_owner_checkpoint_approval() {
     assert!(whole_diff.contains("-hi"));
     assert!(whole_diff.contains("+completed 2"));
 
+    live.set_stage(plantool_core::Stage::Done, plantool_core::Actor::Human)
+        .unwrap();
+    let finished = plantool_daemon::routes::changes::resolve_window(
+        &live,
+        Some(plantool_daemon::changes::ChangeScope::All),
+    );
+    assert_eq!(
+        finished.base, whole.base,
+        "Done must retain the reviewed implementation base"
+    );
+    let finished_diff = plantool_daemon::git::diff_file(&h.repo, &finished.base, "a.txt").unwrap();
+    assert_eq!(finished_diff, whole_diff);
+
     assert_eq!(live.state().milestones[0].status, "approved");
     assert_eq!(live.state().milestones[1].status, "completed");
 }

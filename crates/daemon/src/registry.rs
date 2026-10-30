@@ -776,7 +776,12 @@ impl LiveSession {
         change: &crate::routes::where_context::Update,
     ) -> Result<Session, RegistryError> {
         let mut g = self.lock();
-        if change.base.is_some() || change.branch.is_some() || change.workspace.is_some() {
+        if change.base.is_some()
+            || change.branch.is_some()
+            || change.workspace.is_some()
+            || change.difftool.is_some()
+                && change.difftool.as_deref() != g.session.difftool.as_deref()
+        {
             g.state.review = None;
         }
         if let Some(base) = &change.base {

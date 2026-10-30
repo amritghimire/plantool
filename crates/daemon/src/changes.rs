@@ -170,6 +170,17 @@ fn reopen_difftool(path: &PathBuf, review: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn matching_target(
+    target: Option<&plantool_core::ReviewTarget>,
+    cwd: &std::path::Path,
+    base: &str,
+    executable: &std::path::Path,
+) -> bool {
+    target.is_some_and(|target| {
+        target.workspace == cwd && target.base == base && target.executable == executable
+    })
+}
+
 pub fn open_review(
     session: &Session,
     base: &str,
@@ -184,15 +195,19 @@ pub fn open_review(
             if let Some(ChangeReview::Difftool {
                 url,
                 review: Some(review),
+                target,
                 ..
             }) = existing
             {
-                if reopen_difftool(&path, review) {
+                if matching_target(target.as_ref(), &cwd, base, &path)
+                    && reopen_difftool(&path, review)
+                {
                     return Ok((
                         ChangeReview::Difftool {
                             url: url.clone(),
                             review: Some(review.clone()),
                             opened_at: plantool_core::now(),
+                            target: target.clone(),
                         },
                         Some("refreshed the existing difftool review and opened it".into()),
                     ));
@@ -251,6 +266,11 @@ pub fn open_review(
                             url,
                             review,
                             opened_at: plantool_core::now(),
+                            target: Some(plantool_core::ReviewTarget {
+                                workspace: cwd.clone(),
+                                base: base.to_string(),
+                                executable: path.clone(),
+                            }),
                         },
                         Some("difftool opened the review in your browser".into()),
                     ))
@@ -298,6 +318,20 @@ pub fn open_review(
     }
 }
 
+pub(crate) fn review_executable(review: &ChangeReview) -> anyhow::Result<PathBuf> {
+    if let ChangeReview::Difftool {
+        target: Some(target),
+        ..
+    } = review
+    {
+        return Ok(target.executable.clone());
+    }
+    match detect_change_tool() {
+        ChangeTool::Difftool { path } => Ok(path),
+        _ => anyhow::bail!("difftool is no longer available"),
+    }
+}
+
 pub fn unresolved_human_comments(review: &ChangeReview) -> anyhow::Result<usize> {
     let Some(reference) = (match review {
         ChangeReview::Difftool { review, .. } => review.as_deref(),
@@ -305,9 +339,7 @@ pub fn unresolved_human_comments(review: &ChangeReview) -> anyhow::Result<usize>
     }) else {
         return Ok(0);
     };
-    let ChangeTool::Difftool { path } = detect_change_tool() else {
-        anyhow::bail!("difftool is no longer available")
-    };
+    let path = review_executable(review)?;
     let out = Command::new(path)
         .args([
             "review",
@@ -357,5 +389,32 @@ mod tests {
         std::fs::write(&executable, script).unwrap();
         assert!(reopen_difftool(&executable, "complete-review"));
         assert_eq!(std::fs::read_to_string(calls).unwrap(), "refresh\nopen\n");
+    }
+
+    #[test]
+    fn review_reuse_requires_the_same_workspace_base_and_executable() {
+        let target = plantool_core::ReviewTarget {
+            workspace: "/repo/worktree".into(),
+            base: "pinned-sha".into(),
+            executable: "/tools/difftool".into(),
+        };
+        let cwd = std::path::Path::new("/repo/worktree");
+        let binary = std::path::Path::new("/tools/difftool");
+        assert!(matching_target(Some(&target), cwd, "pinned-sha", binary));
+        assert!(!matching_target(Some(&target), cwd, "another-sha", binary));
+        assert!(!matching_target(
+            Some(&target),
+            std::path::Path::new("/other"),
+            "pinned-sha",
+            binary
+        ));
+        assert!(!matching_target(
+            Some(&target),
+            cwd,
+            "pinned-sha",
+            std::path::Path::new("/other/difftool")
+        ));
+        // Reviews saved by older versions have no trustworthy target metadata.
+        assert!(!matching_target(None, cwd, "pinned-sha", binary));
     }
 }

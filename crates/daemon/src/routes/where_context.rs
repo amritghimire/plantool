@@ -114,20 +114,6 @@ async fn update(
         if !blockers.is_empty() {
             return Err(ApiError(StatusCode::CONFLICT, blockers.join("; ")));
         }
-        let latest = s
-            .runs()
-            .into_iter()
-            .filter(|run| {
-                run.task.as_deref() == Some("implement")
-                    || run.stage == plantool_core::Stage::Implementing
-            })
-            .max_by(|a, b| a.started_at.cmp(&b.started_at));
-        if let Some(mut run) = latest {
-            run.implementation_base = Some(body.base.clone().unwrap_or_else(|| old.base.clone()));
-            run.milestone_base = None;
-            run.milestone_review = None;
-            s.upsert_run(run, |run| crate::events::LiveEvent::RunUpdated { run })?;
-        }
     }
     if let Some(branch) = &body.branch {
         git::git(
@@ -138,6 +124,34 @@ async fn update(
     }
     let session = s.apply_context(&body)?;
     if moving {
+        let latest = s
+            .runs()
+            .into_iter()
+            .filter(|run| {
+                run.task.as_deref() == Some("implement")
+                    || run.stage == plantool_core::Stage::Implementing
+            })
+            .max_by(|a, b| a.started_at.cmp(&b.started_at));
+        if let Some(mut run) = latest {
+            run.implementation_base = Some(
+                git::git(
+                    session.cwd(),
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--end-of-options",
+                        &format!("{}^{{commit}}", session.base),
+                    ],
+                )
+                .map_err(|e| bad_request(e.to_string()))?,
+            );
+            run.cwd = session.cwd().clone();
+            run.milestone_base = None;
+            run.milestone_review = None;
+            s.upsert_run(run, |run| crate::events::LiveEvent::RunUpdated { run })?;
+        }
+    }
+    if moving {
         for run in live {
             if let Some(resume) = run
                 .provider_session_id
@@ -146,8 +160,20 @@ async fn update(
             {
                 let prompt = format!("The owner changed the session context. Workspace: {}. Base: {}. Re-read `plantool session get --session {} --json` and the plan before continuing.", session.cwd().display(), session.base, s.key);
                 let mut previous = run.clone();
-                previous.implementation_base = Some(session.base.clone());
-                previous.milestone_base = Some(session.base.clone());
+                previous.implementation_base = Some(
+                    git::git(
+                        session.cwd(),
+                        &[
+                            "rev-parse",
+                            "--verify",
+                            "--end-of-options",
+                            &format!("{}^{{commit}}", session.base),
+                        ],
+                    )
+                    .map_err(|e| bad_request(e.to_string()))?,
+                );
+                previous.milestone_base = None;
+                previous.milestone_review = None;
                 state.runs.start(
                     s.clone(),
                     run.provider,

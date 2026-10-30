@@ -488,7 +488,7 @@ export function SessionPage() {
       />
       <main className="content" id="session-content">
         <header className="document-heading">
-          <div><span className="eyebrow">{view.session.repo_slug}</span><h1>{tab === "changes" ? "Review changes" : tab === "research" ? "Research" : "Implementation plan"}</h1></div>
+          <h1>{tab === "changes" ? "Review changes" : tab === "research" ? "Research" : "Implementation plan"}</h1>
           <span className="document-state">{view.step ?? view.state.stage.replaceAll("-", " ")}</span>
         </header>
       <div className={`document-notices mode-${mode}`}>

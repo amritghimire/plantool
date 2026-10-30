@@ -86,6 +86,7 @@ export function SessionList() {
     {settings && <SettingsDialog onClose={() => setSettings(false)} />}
     {dropping && <DropSessionDialog view={dropping} busy={busy} onClose={() => setDropping(null)} onDelete={drop} />}
     <main className="list">
+      <header className="list-heading"><h2>Your sessions</h2><p className="muted">Research, plan, and review your agent’s work.</p></header>
       {error && <p className="error" role="alert">{error}</p>}
       {sessions && sessions.length > 0 && <div className="list-filters button-row" role="group" aria-label="Filter sessions">
         {FILTERS.map(({ id, label }) => <button key={id} className={filter === id ? "active" : ""} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label} <span className="badge">{sessions.filter((s) => matchesFilter(s, id)).length}</span></button>)}

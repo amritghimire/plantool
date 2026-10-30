@@ -53,6 +53,7 @@ export function Sidebar(p: SidebarProps) {
   const [commitMilestone, setCommitMilestone] = useState(true);
   const [commitMessage, setCommitMessage] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(() => {
     try { return localStorage.getItem(`plantool.actions.${p.view.key}`) !== "closed"; } catch { return true; }
   });
@@ -197,9 +198,9 @@ export function Sidebar(p: SidebarProps) {
         )}
         {(stage === "researching" || stage === "research-review") && (
           <>
-            <button className="btn primary" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
+            {p.view.handoff?.action !== "Plan it" && <button className="btn primary" onClick={() => p.onStartRun("plan")} disabled={p.busy} type="button">
               Plan it
-            </button>
+            </button>}
             <div className="skip-row muted small">
               skip:
               <button className="link" onClick={() => skipToBuild() && void p.onStage("approved")} disabled={p.busy} type="button">
@@ -305,6 +306,8 @@ export function Sidebar(p: SidebarProps) {
         </details>
       </details>
 
+      <button className="btn sidebar-details-toggle" type="button" aria-expanded={supportOpen} aria-controls="session-details" onClick={() => setSupportOpen((open) => !open)}>{supportOpen ? "Hide session details" : "Session details and history"}</button>
+      <div className="sidebar-support" id="session-details" data-open={supportOpen}>
       {p.reviewPanel}
       {p.activityPanel}
       {p.contextPanel}
@@ -407,6 +410,7 @@ export function Sidebar(p: SidebarProps) {
         >
           {stage === "done" ? "Drop this finished session" : "Drop session"}
         </button>
+      </div>
       </div>
       {deleting && <DropSessionDialog view={p.view} busy={p.busy} onClose={() => setDeleting(false)} onDelete={p.onDelete} />}
     </aside>
