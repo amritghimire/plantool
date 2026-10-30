@@ -169,6 +169,13 @@ scripts/smoke.sh                      # end-to-end against target/debug/plantool
 
 `scripts/package-binaries.sh [target]` builds and packages a release archive; CI runs it for every
 platform and attaches the archives plus `SHA256SUMS.txt` to GitHub Releases.
+The release workflow proposes Homebrew formula updates on
+`automation/homebrew-formula` through a pull request; it never pushes to main.
+Enable **Allow GitHub Actions to create and approve pull requests** in the
+repository's Actions workflow permissions for this automation. Formula PRs still
+follow the repository's review and merge rules. GitHub does not automatically
+trigger other workflows for PRs created with `GITHUB_TOKEN`; run required checks
+through the repository's normal process before merging.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit.
 

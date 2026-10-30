@@ -95,8 +95,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -107,13 +110,21 @@ jobs:
           files: dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Update the Homebrew formula on main
-        run: |
-          git fetch --depth=1 origin main
-          git checkout -B main origin/main
-          scripts/render-formula.sh "${{ github.event.release.tag_name }}" dist/SHA256SUMS.txt > Formula/plantool.rb
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/plantool.rb
-          git diff --cached --quiet || git commit -m "Point the Homebrew formula at ${{ github.event.release.tag_name }}"
-          git push origin main
+      - name: Render the Homebrew formula
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: scripts/render-formula.sh "$RELEASE_TAG" dist/SHA256SUMS.txt > Formula/plantool.rb
+      - name: Propose the Homebrew formula update
+        uses: peter-evans/create-pull-request@v7
+        with:
+          base: main
+          branch: automation/homebrew-formula
+          add-paths: Formula/plantool.rb
+          commit-message: Update Homebrew formula for ${{ github.event.release.tag_name }}
+          title: Update Homebrew formula for ${{ github.event.release.tag_name }}
+          body: |
+            Update the Homebrew formula to the published release `${{ github.event.release.tag_name }}`.
+
+            Archive URLs and checksums come from the release assets and `SHA256SUMS.txt`.
+            This pull request follows the repository rule requiring reviewed changes to main.
+          delete-branch: true
