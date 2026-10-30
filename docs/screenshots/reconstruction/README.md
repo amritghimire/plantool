@@ -17,3 +17,5 @@ Requires Python Playwright and Chromium. Use `--browser /path/to/chromium` if ne
 The checked run found no serious or critical axe violations across eight surfaces, no page JavaScript errors, and no horizontal page overflow at the tested widths. It also checks keyboard focus, approval, implementation configuration, provider fallback, review scope and file switching, mobile controls, creation, and cancellation of deletion. Automated scans do not replace a complete assistive-technology audit.
 
 Design rationale and skill sources: [DESIGN.md](../../../DESIGN.md).
+
+Latest captures include the [no-ai-slop](https://github.com/claudiusararu/unslop-ui-skill/blob/main/.claude/skills/no-ai-slop/SKILL.md) pass: self-hosted Plex typography, square document surfaces, shared small control corners, and 44px mobile controls. The browser check also opens the prompt disclosure to verify its independent copy control.

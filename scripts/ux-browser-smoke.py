@@ -114,6 +114,8 @@ async def capture(browser, port):
     await page.keyboard.press('Tab')
     assert await first.evaluate('(e) => e === document.activeElement')
     await page.screenshot(path=str(OUT/'after-run-dialog.png'),full_page=True)
+    await page.get_by_text('The prompt the agent gets',exact=True).click()
+    assert await page.get_by_role('button',name='Copy prompt',exact=True).is_visible()
     await check_accessibility(page,'run-dialog')
     await page.get_by_role('button',name='Cancel',exact=True).click()
     assert await page.get_by_role('button',name='Revise with agent',exact=True).evaluate('(e) => e === document.activeElement')

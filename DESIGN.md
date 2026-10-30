@@ -36,10 +36,10 @@ unreachable; published GitHub skill files were read directly.
 
 - Slate-neutral surfaces; green for decisions and selected states. Semantic
   warning/error colors remain distinct. Dark and light themes both ship.
-- Geist, self-hosted, for UI and document text. System monospace for source,
-  paths, and revisions. Font choice favors reading over decorative code headings.
-- 4/8-pixel spacing scale, compact 12–14px interface text and 16px document text.
-- Balanced headings, readable prose, tabular numbers, no custom tracking,
+- Self-hosted IBM Plex Sans for controls and bold headings; IBM Plex Serif for
+  plan/research prose. System monospace remains reserved for source, paths, and revisions.
+- 4/8-pixel spacing scale, compact 12–14px interface text and 16–17px document text.
+- Naturally wrapping headings, readable prose, tabular numbers, no custom tracking,
   gradients, glow, or decorative animation.
 - Consistent Phosphor outline icons. Icon controls have accessible names.
 - Radix Dialog and AlertDialog own modal focus, dismissal, and destructive
@@ -55,3 +55,18 @@ Use actual production builds with clearly labeled sample API data for visuals.
 Exercise keyboard focus, cancellation, slow/failed requests, long names/paths,
 both themes, 375/768/1024/1440px widths, and 200% zoom. Keep all workflow and
 backend regression checks. Refresh PR screenshots around the final reconstruction.
+
+## No AI Slop review
+
+Applied [no-ai-slop](https://github.com/claudiusararu/unslop-ui-skill/blob/main/.claude/skills/no-ai-slop/SKILL.md)
+and its root TELLS.md catalog. The style direction is a technical reading desk:
+Plex Sans controls and 700-weight headings, Plex Serif document prose, crisp
+white paper, green decision controls, small 4px control corners, and square
+reading surfaces. The sample marketing hero is not a product screen template.
+
+Removed Geist, blanket balanced headings, the constrained workspace subtitle,
+unnecessary monospace chrome, soft segmented-control elevation, rounded paper,
+and em-dash UI connectors. Mobile buttons, summaries, and selects share a 44px
+minimum height. Existing accessible navigation stays visible on mobile, so no
+hidden navigation requires a new menu. Screenshots and real documents are the
+product imagery; adding stock photography to code review would obscure the task.

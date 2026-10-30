@@ -215,7 +215,7 @@ export function SessionList() {
           }}
         >
           <FolderSimple size={18} aria-hidden="true" />
-          All sessions<span>{sessions?.length ?? "—"}</span>
+          All sessions<span>{sessions?.length ?? "..."}</span>
         </button>
         <h2>Repositories</h2>
         <nav aria-label="Repositories">

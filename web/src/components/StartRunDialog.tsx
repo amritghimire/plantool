@@ -245,9 +245,8 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         </details>
         {preview && (
           <details className="prompt-preview disclosure">
-            <summary>
-              The prompt the agent gets <CopyButton text={preview} label="copy" className="link" />
-            </summary>
+            <summary>The prompt the agent gets</summary>
+            <CopyButton text={preview} label="Copy prompt" className="link" />
             <pre className="prompt-text">{preview}</pre>
           </details>
         )}

@@ -329,7 +329,7 @@ function ActivityView({ a }: { a: Activity }) {
 function ItemView({ item }: { item: Item }) {
   if (item.t === "msg") return <div className={`run-msg ${item.m.role}`}>{item.m.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.m.content}</ReactMarkdown> : <pre>{item.m.content}</pre>}</div>;
   if (item.t === "act") return <ActivityView a={item.a} />;
-  return <div className="run-status-line muted small">{item.label}{item.detail ? ` — ${item.detail}` : ""}</div>;
+  return <div className="run-status-line muted small">{item.label}{item.detail ? `: ${item.detail}` : ""}</div>;
 }
 
 function ItemList({ items }: { items: Item[] }) {
