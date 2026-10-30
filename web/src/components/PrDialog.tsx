@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { CommitJob, Session } from "../types";
+import { Modal } from "./Modal";
 import { CommitProgress } from "./CommitProgress";
 
 type Preview = Awaited<ReturnType<typeof api.prPreview>>;
@@ -82,7 +83,7 @@ export function PrDialog({ sessionKey, commit, onCancelCommit, onClose, onDraftA
     finally { setBusy(false); }
   };
   const reason = blockReason(preview, preflightError, { title, body });
-  return <div className="modal-backdrop" onClick={() => !busy && onClose()}><div className="modal form-stack pr-dialog" role="dialog" aria-modal="true" aria-label="Create pull request" onClick={(e) => e.stopPropagation()}>
+  return <Modal title="Create pull request" className="pr-dialog" busy={busy} onClose={onClose}>
     <h3>Pull request</h3>
     <p className="muted small">The agent writes the first draft. Review and edit it before creating the PR.</p>
     <div className="composer-actions button-row dialog-actions"><button className={`btn ${hasDraft ? "ghost" : "primary"}`} type="button" disabled={busy} onClick={onDraftAgent}>{hasDraft ? "Redraft with agent" : "Draft with agent"}</button></div>
@@ -97,5 +98,5 @@ export function PrDialog({ sessionKey, commit, onCancelCommit, onClose, onDraftA
     {error && <div className="error" role="alert">{error}</div>}
     <div className="composer-actions button-row dialog-actions"><span className="spacer" /><button className="btn ghost" disabled={busy} onClick={onClose} type="button">Cancel</button><button className="btn primary" disabled={busy || reason !== null} title={reason ?? undefined} onClick={() => void submit()} type="button">{preview?.existing ? "Link existing PR" : "Create PR"}</button></div>
     {reason && <p className="muted small pr-reason">{reason}</p>}
-  </div></div>;
+  </Modal>;
 }

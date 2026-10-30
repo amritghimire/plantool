@@ -1,20 +1,46 @@
+import { cn } from "../lib/cn";
+import { ReviewPreferences } from "./ReviewPreferences";
+import { Modal } from "./Modal";
+import { useConfirmation } from "../lib/confirmation";
+import { AppRail } from "./AppRail";
+import { SessionInspector } from "./SessionInspector";
+import {
+  FolderSimple,
+  CaretRight,
+  FileText,
+  Code,
+  MagnifyingGlass,
+  ChatCircleText,
+} from "@phosphor-icons/react";
 import { DecisionSummary } from "./DecisionSummary";
 import { ArchivePanel } from "./ArchivePanel";
 import { WherePanel } from "./WherePanel";
 import { AwaySummary } from "./AwaySummary";
 import { PlanRevisions } from "./PlanRevisions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { api, authorName, setAuthorName } from "../api";
 import { useLive } from "../lib/live";
 import { tabForStage } from "../lib/stage";
-import type { Comment, DocKind, DocResponse, LiveEvent, Run, SessionView, Stage } from "../types";
+import type {
+  Comment,
+  DocKind,
+  DocResponse,
+  LiveEvent,
+  Run,
+  SessionView,
+  Stage,
+} from "../types";
 import { ChangesTab } from "./ChangesTab";
 import { DocView, type ViewMode } from "./DocView";
 import { RunPanel, type RunLine } from "./RunPanel";
 import { Sidebar, docKindOf } from "./Sidebar";
 import { StartRunDialog, type RunStage } from "./StartRunDialog";
-import { ThemeToggle } from "./ThemeToggle";
 import { PrDialog } from "./PrDialog";
 import { AskAgentDialog } from "./AskAgentDialog";
 import type { ThreadActions } from "./Thread";
@@ -22,13 +48,17 @@ import type { ThreadActions } from "./Thread";
 type Toast = { id: number; text: string; kind?: "info" | "error" | "warn" };
 
 export function SessionPage() {
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const { confirm, dialog: confirmation } = useConfirmation();
   const { repo, slug } = useParams();
   const key = `${repo}/${slug}`;
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const [view, setView] = useState<SessionView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [docs, setDocs] = useState<Partial<Record<DocKind, DocResponse | null>>>({});
+  const [docs, setDocs] = useState<
+    Partial<Record<DocKind, DocResponse | null>>
+  >({});
   const [paths, setPaths] = useState<Partial<Record<DocKind, string>>>({});
   const [prompts, setPrompts] = useState<Partial<Record<DocKind, string>>>({});
   const [reviewPrompt, setReviewPrompt] = useState<string | null>(null);
@@ -43,14 +73,25 @@ export function SessionPage() {
     localStorage.setItem("plantool.mode", m);
   };
   const [showResolved, setShowResolved] = useState(false);
-  const [target, setTarget] = useState<{ line: number; nonce: number; compose?: boolean } | null>(null);
+  const [target, setTarget] = useState<{
+    line: number;
+    nonce: number;
+    compose?: boolean;
+  } | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [dialog, setDialog] = useState<{ stage: RunStage; resumeId?: string; initialMode?: "step-by-step"; initialPrompt?: string } | null>(null);
+  const [dialog, setDialog] = useState<{
+    stage: RunStage;
+    resumeId?: string;
+    initialMode?: "step-by-step";
+    initialPrompt?: string;
+  } | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
-  const [selectedRun, setSelectedRun] = useState<string | null>(params.get("run"));
+  const [selectedRun, setSelectedRun] = useState<string | null>(
+    params.get("run"),
+  );
   const [runLines, setRunLines] = useState<Record<string, RunLine[]>>({});
   const [changesNonce, setChangesNonce] = useState(0);
   const [author, setAuthor] = useState(authorName());
@@ -63,7 +104,11 @@ export function SessionPage() {
   const toast = useCallback((text: string, kind: Toast["kind"] = "info") => {
     const id = ++toastId.current;
     setToasts((t) => [...t, { id, text, kind }]);
-    if (kind === "info") window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+    if (kind === "info")
+      window.setTimeout(
+        () => setToasts((t) => t.filter((x) => x.id !== id)),
+        4000,
+      );
   }, []);
 
   const setTab = (t: string) => {
@@ -86,7 +131,8 @@ export function SessionPage() {
 
   const loadPrompt = useCallback(
     async (kind: DocKind) => {
-      const stage = kind === "research" ? "research" : kind === "plan" ? "plan" : null;
+      const stage =
+        kind === "research" ? "research" : kind === "plan" ? "plan" : null;
       if (!stage) return;
       try {
         const p = await api.prompt(key, stage);
@@ -118,12 +164,16 @@ export function SessionPage() {
   );
 
   const loadReviewPrompt = useCallback(() => {
-    api.prompt(key, "review").then((r) => setReviewPrompt(r.prompt)).catch(() => setReviewPrompt(null));
+    api
+      .prompt(key, "review")
+      .then((r) => setReviewPrompt(r.prompt))
+      .catch(() => setReviewPrompt(null));
   }, [key]);
 
   const reloadPrompts = useCallback(() => {
     setDocs((m) => {
-      for (const k of Object.keys(m) as DocKind[]) if (m[k] === null) void loadPrompt(k);
+      for (const k of Object.keys(m) as DocKind[])
+        if (m[k] === null) void loadPrompt(k);
       return m;
     });
     loadReviewPrompt();
@@ -148,52 +198,114 @@ export function SessionPage() {
   }, [loadAll]);
 
   useEffect(() => {
-    const waiting = view?.runs.some((r) => r.status === "waiting") ? "● " : view?.runs.some((r) => r.status === "idle") ? "○ " : "";
-    document.title = view ? `${waiting}${view.session.title} · plantool` : "plantool";
+    const waiting = view?.runs.some((r) => r.status === "waiting")
+      ? "● "
+      : view?.runs.some((r) => r.status === "idle")
+        ? "○ "
+        : "";
+    document.title = view
+      ? `${waiting}${view.session.title} · plantool`
+      : "plantool";
   }, [view]);
 
   useEffect(() => {
     if (!selectedRun) return;
-    api.runEvents(key, selectedRun).then((r) => setRunLines((m) => ({ ...m, [selectedRun]: r.events.map((e) => ({ seq: e.seq, at: e.at, event: e.event as RunLine["event"] })) }))).catch(() => {});
+    api
+      .runEvents(key, selectedRun)
+      .then((r) =>
+        setRunLines((m) => ({
+          ...m,
+          [selectedRun]: r.events.map((e) => ({
+            seq: e.seq,
+            at: e.at,
+            event: e.event as RunLine["event"],
+          })),
+        })),
+      )
+      .catch(() => {});
   }, [key, selectedRun]);
 
   const onEvent = useCallback(
     (e: LiveEvent) => {
-      if (["stage-changed", "run-started", "run-updated", "run-ended", "run-removed"].includes(e.type)) void api.session(key).then(setView).catch(() => {});
+      if (
+        [
+          "stage-changed",
+          "run-started",
+          "run-updated",
+          "run-ended",
+          "run-removed",
+        ].includes(e.type)
+      )
+        void api
+          .session(key)
+          .then(setView)
+          .catch(() => {});
       switch (e.type) {
         case "comment-added":
-          setComments((c) => (c.some((x) => x.id === e.comment.id) ? c : [...c, e.comment]));
-          if (e.comment.kind === "agent") toast(`${e.comment.author} commented on ${e.comment.doc}:${e.comment.anchor.line}`);
+          setComments((c) =>
+            c.some((x) => x.id === e.comment.id) ? c : [...c, e.comment],
+          );
+          if (e.comment.kind === "agent")
+            toast(
+              `${e.comment.author} commented on ${e.comment.doc}:${e.comment.anchor.line}`,
+            );
           break;
         case "comments-added":
-          setComments((c) => [...c, ...e.comments.filter((n) => !c.some((x) => x.id === n.id))]);
+          setComments((c) => [
+            ...c,
+            ...e.comments.filter((n) => !c.some((x) => x.id === n.id)),
+          ]);
           toast(`${e.comments.length} comments added`);
           break;
         case "comments-since":
-          setComments((c) => [...c, ...e.comments.filter((n) => !c.some((x) => x.id === n.id))]);
+          setComments((c) => [
+            ...c,
+            ...e.comments.filter((n) => !c.some((x) => x.id === n.id)),
+          ]);
           break;
         case "comment-updated":
-          setComments((c) => c.map((x) => (x.id === e.comment.id ? e.comment : x)));
+          setComments((c) =>
+            c.map((x) => (x.id === e.comment.id ? e.comment : x)),
+          );
           break;
         case "comment-removed":
           setComments((c) => c.filter((x) => !e.ids.includes(x.id)));
           break;
         case "thread-resolution":
-          setComments((c) => c.map((x) => (e.ids.includes(x.id) || (x.parent && e.ids.includes(x.parent)) ? { ...x, resolved: e.resolved } : x)));
+          setComments((c) =>
+            c.map((x) =>
+              e.ids.includes(x.id) || (x.parent && e.ids.includes(x.parent))
+                ? { ...x, resolved: e.resolved }
+                : x,
+            ),
+          );
           break;
         case "doc-refreshed":
           void loadDoc(e.kind);
-          void api.session(key).then(setView).catch(() => {});
-          void api.comments(key).then((c) => setComments(c.comments)).catch(() => {});
-          toast(`${e.kind}.md updated${e.outdated ? ` · ${e.outdated} comment(s) outdated` : ""}`);
+          void api
+            .session(key)
+            .then(setView)
+            .catch(() => {});
+          void api
+            .comments(key)
+            .then((c) => setComments(c.comments))
+            .catch(() => {});
+          toast(
+            `${e.kind}.md updated${e.outdated ? ` · ${e.outdated} comment(s) outdated` : ""}`,
+          );
           break;
         case "stage-changed":
-          setView((v) => (v ? { ...v, state: { ...v.state, stage: e.to } } : v));
+          setView((v) =>
+            v ? { ...v, state: { ...v.state, stage: e.to } } : v,
+          );
           toast(`stage: ${e.to}`);
           loadReviewPrompt();
           break;
         case "session-updated":
-          void api.session(key).then(setView).catch(() => {});
+          void api
+            .session(key)
+            .then(setView)
+            .catch(() => {});
           setView((v) => (v ? { ...v, session: e.session } : v));
           reloadPrompts();
           break;
@@ -206,16 +318,34 @@ export function SessionPage() {
           const prev = viewRef.current?.runs.find((r) => r.id === e.run.id);
           setView((v) => (v ? { ...v, runs: upsertRun(v.runs, e.run) } : v));
           if (e.type === "run-started") setSelectedRun(e.run.id);
-          if (e.type === "run-updated" && prev && prev.status !== e.run.status) {
-            if (e.run.status === "waiting") toast("The agent needs your answer", "warn");
-            else if (e.run.status === "idle" && prev.status === "running") toast("The agent finished its turn; your move");
+          if (
+            e.type === "run-updated" &&
+            prev &&
+            prev.status !== e.run.status
+          ) {
+            if (e.run.status === "waiting")
+              toast("The agent needs your answer", "warn");
+            else if (e.run.status === "idle" && prev.status === "running")
+              toast("The agent finished its turn; your move");
           }
-          if (e.type === "run-ended") { setChangesNonce((n) => n + 1); void api.comments(key).then((r) => setComments(r.comments)).catch(() => {}); }
-          if (e.type === "run-ended") toast(`run ${e.run.status}${e.run.error ? `: ${e.run.error}` : ""}`, e.run.status === "failed" ? "error" : "info");
+          if (e.type === "run-ended") {
+            setChangesNonce((n) => n + 1);
+            void api
+              .comments(key)
+              .then((r) => setComments(r.comments))
+              .catch(() => {});
+          }
+          if (e.type === "run-ended")
+            toast(
+              `run ${e.run.status}${e.run.error ? `: ${e.run.error}` : ""}`,
+              e.run.status === "failed" ? "error" : "info",
+            );
           break;
         }
         case "run-removed":
-          setView((v) => (v ? { ...v, runs: v.runs.filter((r) => r.id !== e.id) } : v));
+          setView((v) =>
+            v ? { ...v, runs: v.runs.filter((r) => r.id !== e.id) } : v,
+          );
           setRunLines((m) => {
             const { [e.id]: _gone, ...rest } = m;
             return rest;
@@ -226,17 +356,23 @@ export function SessionPage() {
           setRunLines((m) => {
             const prev = m[e.run_id] ?? [];
             if (prev.length && prev[prev.length - 1].seq >= e.seq) return m;
-            return { ...m, [e.run_id]: [...prev, { seq: e.seq, at: e.at, event: e.event }] };
+            return {
+              ...m,
+              [e.run_id]: [...prev, { seq: e.seq, at: e.at, event: e.event }],
+            };
           });
           break;
         case "commit-progress": {
           const commit = e.commit;
-          const running = commit.phase === "staging" || commit.phase === "hooks";
+          const running =
+            commit.phase === "staging" || commit.phase === "hooks";
           setView((v) => (v ? { ...v, commit: running ? commit : null } : v));
           break;
         }
         case "changes-opened":
-          setView((v) => (v ? { ...v, state: { ...v.state, review: e.review } } : v));
+          setView((v) =>
+            v ? { ...v, state: { ...v.state, review: e.review } } : v,
+          );
           setChangesNonce((n) => n + 1);
           break;
         case "navigate": {
@@ -258,10 +394,19 @@ export function SessionPage() {
 
   const actions: ThreadActions = useMemo(
     () => ({
-      promote: async (root) => { await api.promoteBlocker(key, root.id); },
+      promote: async (root) => {
+        await api.promoteBlocker(key, root.id);
+      },
       reply: async (parent, body) => {
-        const r = await api.addComment(key, { doc: parent.doc, parent: parent.id, body });
-        setComments((c) => [...c, ...r.comments.filter((n) => !c.some((x) => x.id === n.id))]);
+        const r = await api.addComment(key, {
+          doc: parent.doc,
+          parent: parent.id,
+          body,
+        });
+        setComments((c) => [
+          ...c,
+          ...r.comments.filter((n) => !c.some((x) => x.id === n.id)),
+        ]);
       },
       resolve: async (root, resolved) => {
         await api.resolve(key, [root.id], resolved);
@@ -270,22 +415,39 @@ export function SessionPage() {
         await api.editComment(key, c.id, body);
       },
       remove: async (c) => {
-        if (!window.confirm("Delete this comment?")) return;
+        if (
+          !(await confirm("Delete this comment? This cannot be undone.", true))
+        )
+          return;
         await api.removeComments(key, [c.id]);
       },
     }),
-    [key],
+    [key, confirm],
   );
 
-  const onAdd = async (kind: DocKind, line: number, body: string, type?: import("../types").CommentType, scope?: import("../types").AnchorScope) => {
+  const onAdd = async (
+    kind: DocKind,
+    line: number,
+    body: string,
+    type?: import("../types").CommentType,
+    scope?: import("../types").AnchorScope,
+  ) => {
     const r = await api.addComment(key, { doc: kind, line, body, type, scope });
-    setComments((c) => [...c, ...r.comments.filter((n) => !c.some((x) => x.id === n.id))]);
+    setComments((c) => [
+      ...c,
+      ...r.comments.filter((n) => !c.some((x) => x.id === n.id)),
+    ]);
   };
 
   const onStage = async (s: Stage, overrideReason?: string) => {
     setBusy(true);
     try {
-      await api.setStage(key, s, overrideReason, s === "approved" ? docs.plan?.sha : undefined);
+      await api.setStage(
+        key,
+        s,
+        overrideReason,
+        s === "approved" ? docs.plan?.sha : undefined,
+      );
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
@@ -294,13 +456,43 @@ export function SessionPage() {
   };
 
   const onHandoff = () => {
-          if (!view) return;
-          const active = [...view.runs].sort((a, b) => b.started_at.localeCompare(a.started_at))[0];
-          if (view.handoff?.label === "Recovery needed" && active) setDialog({ stage: active.task === "assist" ? "assist" : active.task === "draft-pr" ? "draft-pr" : active.task === "critique" ? "critique" : active.task === "research" ? "research" : active.task === "implement" ? "implement" : "plan", resumeId: active.id });
-          else if (active && ["Agent working", "Agent needs an answer"].includes(view.handoff?.label ?? "")) setSelectedRun(active.id);
-          else if (view.handoff?.label === "Owner choosing next step") setDialog({ stage: ["new", "researching"].includes(view.state.stage) ? "research" : ["approved", "implementing"].includes(view.state.stage) ? "implement" : "plan" });
-          else setTab(tabForStage(view.state.stage));
-        };
+    if (!view) return;
+    const active = [...view.runs].sort((a, b) =>
+      b.started_at.localeCompare(a.started_at),
+    )[0];
+    if (view.handoff?.label === "Recovery needed" && active)
+      setDialog({
+        stage:
+          active.task === "assist"
+            ? "assist"
+            : active.task === "draft-pr"
+              ? "draft-pr"
+              : active.task === "critique"
+                ? "critique"
+                : active.task === "research"
+                  ? "research"
+                  : active.task === "implement"
+                    ? "implement"
+                    : "plan",
+        resumeId: active.id,
+      });
+    else if (
+      active &&
+      ["Agent working", "Agent needs an answer"].includes(
+        view.handoff?.label ?? "",
+      )
+    )
+      setSelectedRun(active.id);
+    else if (view.handoff?.label === "Owner choosing next step")
+      setDialog({
+        stage: ["new", "researching"].includes(view.state.stage)
+          ? "research"
+          : ["approved", "implementing"].includes(view.state.stage)
+            ? "implement"
+            : "plan",
+      });
+    else setTab(tabForStage(view.state.stage));
+  };
 
   const onBrief = async (brief: string | null) => {
     setBusy(true);
@@ -317,9 +509,18 @@ export function SessionPage() {
   };
 
   const onSendToRun = async (text: string) => {
-    const live = view?.runs.find((r) => r.status === "starting" || r.status === "running" || r.status === "waiting" || r.status === "idle");
+    const live = view?.runs.find(
+      (r) =>
+        r.status === "starting" ||
+        r.status === "running" ||
+        r.status === "waiting" ||
+        r.status === "idle",
+    );
     if (!live) {
-      toast("No run is live; start one or paste the prompt into your agent.", "error");
+      toast(
+        "No run is live; start one or paste the prompt into your agent.",
+        "error",
+      );
       return;
     }
     setBusy(true);
@@ -336,12 +537,20 @@ export function SessionPage() {
 
   const onContinueMilestone = async (milestoneRun: Run) => {
     if (milestoneRun.status !== "idle") {
-      setDialog({ stage: "implement", resumeId: milestoneRun.provider_session_id ? milestoneRun.id : undefined, initialMode: "step-by-step" });
+      setDialog({
+        stage: "implement",
+        resumeId: milestoneRun.provider_session_id
+          ? milestoneRun.id
+          : undefined,
+        initialMode: "step-by-step",
+      });
       return;
     }
     setBusy(true);
     try {
-      await api.runInput(key, milestoneRun.id, { text: "I reviewed the completed milestone. Continue with exactly the next unchecked plan task, then pause for review again. If no tasks remain, run the final checks and move to implementation-review." });
+      await api.runInput(key, milestoneRun.id, {
+        text: "I reviewed the completed milestone. Continue with exactly the next unchecked plan task, then pause for review again. If no tasks remain, run the final checks and move to implementation-review.",
+      });
       setSelectedRun(milestoneRun.id);
     } catch (e) {
       toast((e as Error).message, "error");
@@ -350,15 +559,29 @@ export function SessionPage() {
     }
   };
 
-  const onCancelCommit = () => void api.cancelCommit(key).catch((e: Error) => toast(e.message, "error"));
+  const onCancelCommit = () =>
+    void api.cancelCommit(key).catch((e: Error) => toast(e.message, "error"));
 
-  const onApproveMilestone = async (milestoneRun: Run, commit: boolean, message: string) => {
+  const onApproveMilestone = async (
+    milestoneRun: Run,
+    commit: boolean,
+    message: string,
+  ) => {
     setBusy(true);
     try {
-      const r = await api.approveMilestone(key, milestoneRun.id, commit, message);
+      const r = await api.approveMilestone(
+        key,
+        milestoneRun.id,
+        commit,
+        message,
+      );
       setSelectedRun(milestoneRun.id);
       setChangesNonce((n) => n + 1);
-      toast(r.committed ? `Milestone committed as ${r.sha.slice(0, 12)}; the agent is continuing` : "Milestone approved; the agent is continuing");
+      toast(
+        r.committed
+          ? `Milestone committed as ${r.sha.slice(0, 12)}; the agent is continuing`
+          : "Milestone approved; the agent is continuing",
+      );
     } catch (e) {
       setChangesNonce((n) => n + 1);
       toast((e as Error).message, "error");
@@ -382,7 +605,9 @@ export function SessionPage() {
   const onRemoveRun = async (id: string) => {
     try {
       await api.removeRun(key, id);
-      setView((v) => (v ? { ...v, runs: v.runs.filter((r) => r.id !== id) } : v));
+      setView((v) =>
+        v ? { ...v, runs: v.runs.filter((r) => r.id !== id) } : v,
+      );
       setSelectedRun((s) => (s === id ? null : s));
     } catch (e) {
       toast((e as Error).message, "error");
@@ -405,11 +630,15 @@ export function SessionPage() {
     return (
       <div className="page">
         <header className="topbar">
-          <Link to="/" className="brand">plantool</Link>
+          <Link to="/" className="brand">
+            plantool
+          </Link>
         </header>
         <main className="list">
           <p className="error">{error}</p>
-          <button className="btn" type="button" onClick={() => void loadAll()}>Try again</button>
+          <button className="btn" type="button" onClick={() => void loadAll()}>
+            Try again
+          </button>
         </main>
       </div>
     );
@@ -417,50 +646,53 @@ export function SessionPage() {
   if (!view) return <div className="page muted">Loading…</div>;
 
   const kind = docKindOf(tab);
-  const run: Run | null = selectedRun ? (view.runs.find((r) => r.id === selectedRun) ?? null) : null;
+  const run: Run | null = selectedRun
+    ? (view.runs.find((r) => r.id === selectedRun) ?? null)
+    : null;
 
   return (
-    <div className={`session ${run ? "with-run" : ""}`}>
-      <header className="topbar">
-        <Link to="/" className="brand">plantool</Link>
-        <span className="muted">/</span>
-        <span className="crumb">{view.session.repo_slug}</span>
-        <span className="muted">/</span>
-        <span className="crumb session-crumb" title={view.session.slug}>{view.session.title}</span>
+    <div className={cn("session", run && "with-run")}>
+      <AppRail />
+      <header className="topbar workspace-topbar">
+        <Link to="/" className="workspace-home">
+          Workspace
+        </Link>
+        <CaretRight size={14} aria-hidden="true" />
+        <span className="workspace-repository">
+          <FolderSimple size={17} aria-hidden="true" />
+          {view.session.repo_slug}
+        </span>
+        <CaretRight size={14} aria-hidden="true" />
+        <span className="crumb session-crumb" title={view.session.slug}>
+          {view.session.title}
+        </span>
         <span className="spacer" />
-        <label className="muted small author">
-          as
-          <input
-            value={author}
-            onChange={(e) => {
-              setAuthor(e.target.value);
-              setAuthorName(e.target.value);
-            }}
-          />
-        </label>
-        <label className="muted small">
-          <input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} /> resolved
-        </label>
-        {kind && (
-          <div className="seg">
-            <button className={mode === "rendered" ? "active" : ""} onClick={() => setMode("rendered")} type="button">
-              Rendered
-            </button>
-            <button className={mode === "slides" ? "active" : ""} onClick={() => setMode("slides")} type="button" title="One heading per slide; ← → to move">
-              Slides
-            </button>
-            <button className={mode === "source" ? "active" : ""} onClick={() => setMode("source")} type="button">
-              Source
-            </button>
-          </div>
-        )}
-        <ThemeToggle />
+        <span
+          className={`connection-status ${connected ? "connected" : "disconnected"}`}
+        >
+          <span />
+          {connected ? "Local workspace" : "Reconnecting"}
+        </span>
+        <button
+          className="btn small"
+          type="button"
+          onClick={() => setAskOpen(true)}
+        >
+          <ChatCircleText size={16} aria-hidden="true" /> Ask agent
+        </button>
       </header>
       <Sidebar
         onHandoff={onHandoff}
-        reviewPanel={kind === "plan" && docs.plan && <DecisionSummary doc={docs.plan} onNavigate={(line) => setTarget({ line, nonce: Date.now() })} onCritique={(prompt) => setDialog({ stage: "critique", initialPrompt: prompt })} />}
-        activityPanel={<AwaySummary sessionKey={key} state={view.state} />}
-        contextPanel={<><ArchivePanel sessionKey={key} repo={view.session.repo.root} /><WherePanel key={`${key}:${view.session.base}:${view.session.worktree}:${view.session.difftool}:${view.workspace_branch}:${JSON.stringify(view.session.pause_rule)}`} view={view} onUpdated={setView} /></>}
+        contextPanel={
+          <>
+            <ArchivePanel sessionKey={key} repo={view.session.repo.root} />
+            <WherePanel
+              key={`${key}:${view.session.base}:${view.session.worktree}:${view.session.difftool}:${view.workspace_branch}:${JSON.stringify(view.session.pause_rule)}`}
+              view={view}
+              onUpdated={setView}
+            />
+          </>
+        }
         view={view}
         comments={comments}
         activeTab={tab}
@@ -472,14 +704,27 @@ export function SessionPage() {
         onStartRun={(s, resumeId) => setDialog({ stage: s, resumeId })}
         onAskAgent={() => setAskOpen(true)}
         onPr={() => setPrOpen(true)}
-        onRefreshPr={() => void api.refreshPr(key).then((result) => setView((current) => current ? { ...current, session: result.session } : current)).catch((e: Error) => toast(e.message, "error"))}
+        onRefreshPr={() =>
+          void api
+            .refreshPr(key)
+            .then((result) =>
+              setView((current) =>
+                current ? { ...current, session: result.session } : current,
+              ),
+            )
+            .catch((e: Error) => toast(e.message, "error"))
+        }
         onContinueMilestone={(r) => void onContinueMilestone(r)}
-        onApproveMilestone={(r, commit, message) => void onApproveMilestone(r, commit, message)}
+        onApproveMilestone={(r, commit, message) =>
+          void onApproveMilestone(r, commit, message)
+        }
         onCancelCommit={onCancelCommit}
         onOpenChanges={onOpenChanges}
         onSelectRun={setSelectedRun}
         onRemoveRun={onRemoveRun}
-        onWorkspace={(session) => setView((current) => current ? { ...current, session } : current)}
+        onWorkspace={(session) =>
+          setView((current) => (current ? { ...current, session } : current))
+        }
         actions={actions}
         reviewPrompt={reviewPrompt}
         onSendToRun={onSendToRun}
@@ -487,53 +732,285 @@ export function SessionPage() {
         busy={busy}
       />
       <main className="content" id="session-content">
-        <header className="document-heading">
-          <h1>{tab === "changes" ? "Review changes" : tab === "research" ? "Research" : "Implementation plan"}</h1>
-          <span className="document-state">{view.step ?? view.state.stage.replaceAll("-", " ")}</span>
+        <nav className="workspace-tabs" aria-label="Session documents">
+          <button
+            type="button"
+            className={cn(tab === "research" && "active")}
+            aria-current={tab === "research" ? "page" : undefined}
+            onClick={() => setTab("research")}
+          >
+            <MagnifyingGlass size={17} aria-hidden="true" /> Research
+          </button>
+          <button
+            type="button"
+            className={cn(tab === "plan" && "active")}
+            aria-current={tab === "plan" ? "page" : undefined}
+            onClick={() => setTab("plan")}
+          >
+            <FileText size={17} aria-hidden="true" /> Plan
+          </button>
+          <button
+            type="button"
+            className={cn(tab === "changes" && "active")}
+            aria-current={tab === "changes" ? "page" : undefined}
+            onClick={() => setTab("changes")}
+          >
+            <Code size={17} aria-hidden="true" /> Changes
+          </button>
+        </nav>
+        <header className="workspace-intro">
+          <div>
+            <h1>
+              {tab === "changes"
+                ? "Changes"
+                : tab === "research"
+                  ? "Research"
+                  : "Implementation plan"}
+            </h1>
+            <p>
+              {tab === "changes"
+                ? "Review the code against the plan, then decide what ships."
+                : tab === "research"
+                  ? "Understand the problem before choosing an approach."
+                  : "A shared approach. Your approval before implementation."}
+            </p>
+          </div>
+          <span className={`stage-pill stage-${view.state.stage}`}>
+            {view.state.stage === "plan-review"
+              ? "Awaiting approval"
+              : view.state.stage === "implementation-review"
+                ? "Ready for review"
+                : view.state.stage === "done"
+                  ? "Completed"
+                  : (view.step ?? view.state.stage)}
+          </span>
         </header>
-      <div className={`document-notices mode-${mode}`}>
-        {!connected && <p className="banner">Disconnected. This view may be stale. Reconnecting to the local daemon…</p>}
-        {view.state.pause_reason && <p className="banner">Checkpoint: {view.state.pause_reason}</p>}
-      </div>
-
-        {kind ? (
-          <>
-          {kind === "plan" && docs.plan && <PlanRevisions sessionKey={key} sha={docs.plan.sha} content={docs.plan.content} onAccept={() => void onStage("approved")} />}
-          <DocView
-            kind={kind}
-            doc={docs[kind] ?? null}
-            path={paths[kind] ?? view.docs.find((d) => d.kind === kind)?.path ?? null}
-            prompt={prompts[kind] ?? null}
-            comments={comments.filter((c) => c.doc === kind && !c.anchor.code)}
-            actions={actions}
-            onAdd={onAdd}
-            mode={mode}
-            target={target}
-            highlightComment={highlight}
+        <div className="workspace-utility">
+          <span className="artifact-name">
+            <FileText size={15} aria-hidden="true" />
+            {kind ? `${kind}.md` : "Working tree"}
+          </span>
+          <span className="spacer" />
+          {kind && (
+            <div className="seg" aria-label="Document display">
+              <button
+                type="button"
+                className={mode === "rendered" ? "active" : ""}
+                aria-pressed={mode === "rendered"}
+                onClick={() => setMode("rendered")}
+              >
+                Document
+              </button>
+              <button
+                type="button"
+                className={mode === "slides" ? "active" : ""}
+                aria-pressed={mode === "slides"}
+                onClick={() => setMode("slides")}
+              >
+                Slides
+              </button>
+              <button
+                type="button"
+                className={mode === "source" ? "active" : ""}
+                aria-pressed={mode === "source"}
+                onClick={() => setMode("source")}
+              >
+                Source
+              </button>
+            </div>
+          )}
+          <button
+            className="btn ghost small overview-toggle"
+            type="button"
+            onClick={() => setOverviewOpen(true)}
+          >
+            Session overview
+          </button>
+          <ReviewPreferences
+            author={author}
+            onAuthor={(name) => {
+              setAuthor(name);
+              setAuthorName(name);
+            }}
             showResolved={showResolved}
+            onResolved={setShowResolved}
           />
-          </>
-        ) : (
-          <ChangesTab workspace={view.session.worktree ?? view.session.repo.root} highlightComment={highlight} sessionKey={key} nonce={changesNonce} comments={comments} actions={actions} onAdded={() => void api.comments(key).then((r) => setComments(r.comments))} />
-        )}
+        </div>
+        <div className={`document-notices mode-${mode}`}>
+          {!connected && (
+            <p className="banner">
+              Disconnected. This view may be stale. Reconnecting to the local
+              daemon…
+            </p>
+          )}
+          {view.state.pause_reason && (
+            <p className="banner">Checkpoint: {view.state.pause_reason}</p>
+          )}
+        </div>
+
+        <div className="document-surface">
+          {kind ? (
+            <>
+              {kind === "plan" && docs.plan && (
+                <PlanRevisions
+                  sessionKey={key}
+                  sha={docs.plan.sha}
+                  content={docs.plan.content}
+                  onAccept={() => void onStage("approved")}
+                />
+              )}
+              <DocView
+                kind={kind}
+                doc={docs[kind] ?? null}
+                path={
+                  paths[kind] ??
+                  view.docs.find((d) => d.kind === kind)?.path ??
+                  null
+                }
+                prompt={prompts[kind] ?? null}
+                comments={comments.filter(
+                  (c) => c.doc === kind && !c.anchor.code,
+                )}
+                actions={actions}
+                onAdd={onAdd}
+                mode={mode}
+                target={target}
+                highlightComment={highlight}
+                showResolved={showResolved}
+              />
+            </>
+          ) : (
+            <ChangesTab
+              key={`${key}:${view.session.worktree ?? view.session.repo.root}:${view.session.base}:${view.session.difftool ?? "auto"}`}
+              workspace={view.session.worktree ?? view.session.repo.root}
+              highlightComment={highlight}
+              sessionKey={key}
+              nonce={changesNonce}
+              comments={comments}
+              actions={actions}
+              onAdded={() =>
+                void api.comments(key).then((r) => setComments(r.comments))
+              }
+            />
+          )}
+        </div>
       </main>
+      {!run && (
+        <SessionInspector
+          view={view}
+          reviewPanel={
+            kind === "plan" &&
+            docs.plan && (
+              <DecisionSummary
+                doc={docs.plan}
+                onNavigate={(line) => setTarget({ line, nonce: Date.now() })}
+                onCritique={(prompt) =>
+                  setDialog({ stage: "critique", initialPrompt: prompt })
+                }
+              />
+            )
+          }
+          activityPanel={<AwaySummary sessionKey={key} state={view.state} />}
+        />
+      )}
       {run && (
         <RunPanel
           sessionKey={key}
           run={run}
           lines={runLines[run.id] ?? []}
           onClose={() => setSelectedRun(null)}
-          onResume={(r) => setDialog({ stage: r.task === "assist" ? "assist" : r.task === "draft-pr" ? "draft-pr" : r.stage === "researching" ? "research" : r.stage === "implementing" || r.stage === "implementation-review" ? "implement" : "plan", resumeId: r.id })}
+          onResume={(r) =>
+            setDialog({
+              stage:
+                r.task === "assist"
+                  ? "assist"
+                  : r.task === "draft-pr"
+                    ? "draft-pr"
+                    : r.stage === "researching"
+                      ? "research"
+                      : r.stage === "implementing" ||
+                          r.stage === "implementation-review"
+                        ? "implement"
+                        : "plan",
+              resumeId: r.id,
+            })
+          }
         />
       )}
-      {dialog && <StartRunDialog stage={dialog.stage} sessionKey={key} runs={view.runs} resumeId={dialog.resumeId} initialMode={dialog.initialMode} initialPrompt={dialog.initialPrompt} onClose={() => setDialog(null)} onStarted={(id) => setSelectedRun(id)} />}
-      {prOpen && <PrDialog sessionKey={key} commit={view.commit?.scope.kind === "pr" ? view.commit : null} onCancelCommit={onCancelCommit} onClose={() => setPrOpen(false)} onDraftAgent={() => { setPrOpen(false); setDialog({ stage: "draft-pr" }); }} onSaved={(session) => setView((current) => current ? { ...current, session } : current)} />}
-      {askOpen && <AskAgentDialog sessionKey={key} runs={view.runs} onClose={() => setAskOpen(false)} onStarted={(id) => setSelectedRun(id)} />}
+      {overviewOpen && (
+        <Modal title="Session overview" onClose={() => setOverviewOpen(false)}>
+          <h3>Session overview</h3>
+          <SessionInspector
+            view={view}
+            reviewPanel={null}
+            activityPanel={<AwaySummary sessionKey={key} state={view.state} />}
+          />
+          <button
+            className="btn"
+            type="button"
+            onClick={() => setOverviewOpen(false)}
+          >
+            Close overview
+          </button>
+        </Modal>
+      )}
+      {confirmation}
+      {dialog && (
+        <StartRunDialog
+          stage={dialog.stage}
+          sessionKey={key}
+          runs={view.runs}
+          resumeId={dialog.resumeId}
+          initialMode={dialog.initialMode}
+          initialPrompt={dialog.initialPrompt}
+          onClose={() => setDialog(null)}
+          onStarted={(id) => setSelectedRun(id)}
+        />
+      )}
+      {prOpen && (
+        <PrDialog
+          sessionKey={key}
+          commit={view.commit?.scope.kind === "pr" ? view.commit : null}
+          onCancelCommit={onCancelCommit}
+          onClose={() => setPrOpen(false)}
+          onDraftAgent={() => {
+            setPrOpen(false);
+            setDialog({ stage: "draft-pr" });
+          }}
+          onSaved={(session) =>
+            setView((current) => (current ? { ...current, session } : current))
+          }
+        />
+      )}
+      {askOpen && (
+        <AskAgentDialog
+          sessionKey={key}
+          runs={view.runs}
+          onClose={() => setAskOpen(false)}
+          onStarted={(id) => setSelectedRun(id)}
+        />
+      )}
       <div className="toasts">
         {toasts.map((t) => (
-          <div key={t.id} role={t.kind === "error" ? "alert" : "status"} className={`toast ${t.kind ?? "info"}`}>
+          <div
+            key={t.id}
+            role={t.kind === "error" ? "alert" : "status"}
+            className={`toast ${t.kind ?? "info"}`}
+          >
             {t.text}
-            {t.kind !== "info" && <button type="button" aria-label="Dismiss notification" onClick={() => setToasts((current) => current.filter((item) => item.id !== t.id))}>×</button>}
+            {t.kind !== "info" && (
+              <button
+                type="button"
+                aria-label="Dismiss notification"
+                onClick={() =>
+                  setToasts((current) =>
+                    current.filter((item) => item.id !== t.id),
+                  )
+                }
+              >
+                ×
+              </button>
+            )}
           </div>
         ))}
       </div>

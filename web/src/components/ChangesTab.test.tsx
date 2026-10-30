@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChangesTab } from "./ChangesTab";
 import { api } from "../api";
 import type { ChangesResponse } from "../types";
@@ -51,4 +51,39 @@ test("announces diff errors while keeping the full path reachable", async () => 
   fireEvent.click(toggle);
   expect(await screen.findByRole("alert")).toHaveTextContent(`Unable to read ${path}`);
   expect(screen.getByRole("button", { name: `Collapse ${path}` })).toBeInTheDocument();
+});
+
+test("filters the file navigator and restores the list", async () => {
+  vi.spyOn(api, "changes").mockResolvedValue(base);
+  render(<ChangesTab sessionKey="repo/filter" nonce={0} />);
+  await screen.findByRole("button", { name: "Expand src/auth.rs" });
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter changed files" }), { target: { value: "missing" } });
+  expect(screen.queryByRole("button", { name: "Expand src/auth.rs" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Clear file filter" }));
+  expect(screen.getByRole("button", { name: "Expand src/auth.rs" })).toBeInTheDocument();
+});
+
+test("built-in review opens a file without launching an external tool", async () => {
+  vi.spyOn(api, "changes").mockResolvedValue({ ...base, tool: "none" });
+  const external = vi.spyOn(api, "openChanges");
+  vi.spyOn(api, "changesFile").mockResolvedValue({ path: "src/auth.rs", diff: "+built-in review", truncated: false });
+  render(<ChangesTab sessionKey="repo/built-in" nonce={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Use built-in diff" }));
+  expect(await screen.findByText("+built-in review")).toBeInTheDocument();
+  expect(external).not.toHaveBeenCalled();
+});
+
+test("a slow milestone diff cannot overwrite the whole-implementation diff", async () => {
+  vi.spyOn(api, "changes").mockImplementation(async (_key, scope) => scope === "all" ? { ...base, scope: "all", label: "whole implementation" } : base);
+  let resolveOld!: (value: { path: string; diff: string; truncated: boolean }) => void;
+  vi.spyOn(api, "changesFile").mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; })).mockResolvedValue({ path: "src/auth.rs", diff: "+current scope", truncated: false });
+  render(<ChangesTab sessionKey="repo/race" nonce={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Expand src/auth.rs" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Whole implementation" }));
+  await screen.findByText(/changed whole implementation/);
+  fireEvent.click(screen.getByRole("button", { name: "Expand src/auth.rs" }));
+  await screen.findByText("+current scope");
+  await act(async () => resolveOld({ path: "src/auth.rs", diff: "+stale milestone", truncated: false }));
+  expect(screen.queryByText("+stale milestone")).toBeNull();
+  expect(screen.getByText("+current scope")).toBeInTheDocument();
 });

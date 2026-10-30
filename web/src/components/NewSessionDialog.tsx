@@ -3,13 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import type { RepoInfo } from "../types";
 import { relTime } from "../lib/format";
-import { useDialogFocus } from "../lib/dialog";
+import { Modal } from "./Modal";
 
 const OTHER = "__other__";
 const slugFromTitle = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
 
 export function NewSessionDialog({ onClose }: { onClose: () => void }) {
-  const dialogRef = useDialogFocus();
   const nav = useNavigate();
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [choice, setChoice] = useState<string>(OTHER);
@@ -23,11 +22,6 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onClose]);
   useEffect(() => {
     api.repos()
       .then((r) => {
@@ -52,8 +46,8 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
     }
   };
   return (
-    <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div ref={dialogRef} tabIndex={-1} className="modal form-stack" role="dialog" aria-modal="true" aria-label="New session" onClick={(e) => e.stopPropagation()}>
+    <Modal title="New session" onClose={onClose} busy={busy}>
+
         <h3>What would you like to build?</h3>
         <p className="dialog-intro">Start with a goal. Research and review the plan before the agent changes your code.</p>
         <label>
@@ -90,14 +84,13 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
           <span className="spacer" />
-          <button className="btn ghost" onClick={onClose} type="button">
+          <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Cancel
           </button>
           <button className="btn primary" disabled={busy || !slugOk || !repo} onClick={() => void create()} type="button">
             {busy ? "Creating…" : "Create session"}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

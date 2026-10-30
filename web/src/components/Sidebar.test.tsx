@@ -120,7 +120,7 @@ it("keeps stopped runs collapsed until opened and shows failures", () => {
 it("confirms session deletion once and makes worktree removal optional", () => {
   const { onDelete } = setup({ ...view, session: { ...view.session, worktree: "/worktrees/x" } });
   fireEvent.click(screen.getByRole("button", { name: "Drop session" }));
-  expect(screen.getByRole("dialog", { name: "Drop repo/x?" })).toBeInTheDocument();
+  expect(screen.getByRole("alertdialog", { name: "Drop repo/x?" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Drop session" }));

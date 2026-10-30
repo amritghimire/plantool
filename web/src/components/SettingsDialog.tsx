@@ -1,3 +1,4 @@
+import { Modal } from "./Modal";
 import { DiffToolSettings } from "./DiffToolSettings";
 import { useEffect, useState } from "react";
 import { api } from "../api";
@@ -72,8 +73,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal form-stack" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
+    <Modal title="Settings" onClose={onClose} busy={busy}>
         <h3>Settings</h3>
         <DiffToolSettings />
         <label>
@@ -104,7 +104,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="composer-actions button-row dialog-actions">
           {saved && <span className="muted small" role="status">Saved</span>}
           <span className="spacer" />
-          <button className="btn ghost" onClick={onClose} type="button">
+          <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Close
           </button>
           <button className="btn" disabled={busy || !setting || !(scope ? setting.repo?.value : setting.global)} onClick={() => void save(null)} type="button">
@@ -114,7 +114,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             Save
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

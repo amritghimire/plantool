@@ -4,7 +4,7 @@ import { PERMISSION_MODES, type ImplementationMode, type PermissionMode, type Ru
 import { relTime } from "../lib/format";
 import { providerLabel, savedAgentSetting, saveAgentSettings } from "../lib/agents";
 import { ProviderSetup } from "./ProviderSetup";
-import { useDialogFocus } from "../lib/dialog";
+import { Modal } from "./Modal";
 
 export type RunStage = "research" | "plan" | "implement" | "critique" | "assist" | "draft-pr";
 const STAGE_TEXT: Record<RunStage, { label: string; hint: string }> = {
@@ -26,7 +26,6 @@ interface ProviderInfo {
 }
 
 export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId, initialMode, initialPrompt = "", onClose, onStarted }: { stage: RunStage; sessionKey: string; runs: Run[]; resumeId?: string; initialMode?: ImplementationMode; initialPrompt?: string; onClose: () => void; onStarted: (id: string) => void }) {
-  const dialogRef = useDialogFocus();
   const resumeTarget = resumeId ? runs.find((r) => r.id === resumeId) : undefined;
   const [stage, setStage] = useState<RunStage>(initialStage);
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
@@ -58,11 +57,6 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
   const [busy, setBusy] = useState(false);
   const [handoff, setHandoff] = useState<"stop" | "keep" | null>(null);
   const [liveRuns, setLiveRuns] = useState<Run[]>(runs.filter(isLive));
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onClose]);
   useEffect(() => {
     api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setErr(e.message));
   }, []);
@@ -127,8 +121,8 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     }
   };
   return (
-    <div className="modal-backdrop" onClick={() => { if (!busy) onClose(); }}>
-      <div ref={dialogRef} tabIndex={-1} className="modal form-stack" role="dialog" aria-modal="true" aria-label={resume ? "Resume run" : STAGE_TEXT[stage].label} onClick={(e) => e.stopPropagation()}>
+    <Modal title={resume ? "Resume run" : STAGE_TEXT[stage].label} onClose={onClose} busy={busy}>
+
         <h3>{resume ? "Resume run" : STAGE_TEXT[stage].label}</h3>
         <p className="muted small">{STAGE_TEXT[stage].hint}</p>
         <label>
@@ -260,7 +254,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
           <span className="spacer" />
-          <button className="btn ghost" onClick={onClose} type="button">
+          <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Cancel
           </button>
           {providers && !providers.some((p) => p.available) && preview && <CopyButton text={preview} label="Copy prompt for your terminal agent" className="btn primary" />}
@@ -268,8 +262,7 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
             {busy ? "Starting…" : resume ? "Resume run" : `Start ${STAGE_TEXT[stage].label.toLowerCase()}`}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

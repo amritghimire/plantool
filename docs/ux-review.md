@@ -1,3 +1,5 @@
+> The complete workspace reconstruction and current design decisions are documented in [DESIGN.md](../DESIGN.md). This review records the initial customer-flow audit.
+
 # Plantool: a workspace for reviewing agent work
 
 The customer should always know what is happening, what needs their attention,

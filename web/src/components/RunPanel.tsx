@@ -1,3 +1,4 @@
+import { X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -255,7 +256,7 @@ export function RunPanel({ sessionKey, run, lines, onClose, onResume }: { sessio
           </button>
         )}
         <button className="btn ghost" onClick={onClose} type="button" title="Hide" aria-label="Hide run">
-          ×
+          <X size={16} aria-hidden="true" />
         </button>
       </header>
       {phase && (
