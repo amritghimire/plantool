@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api } from "../api";
 import { PERMISSION_MODES, type ImplementationMode, type PermissionMode, type Run } from "../types";
 import { relTime } from "../lib/format";
@@ -82,6 +82,23 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
     if (ready) { setProvider(ready.id); setModel(savedAgentSetting(ready.id, "model")); setEffort(savedAgentSetting(ready.id, "effort")); }
   }, [providers, provider, resumeTarget]);
   useEffect(() => { if (provider === "ollama" && current && !current.models.some((item) => item.id === model)) setModel(current.models[0]?.id ?? ""); }, [provider, current, model]);
+  const whyId = useId();
+  const ollamaPermission = provider === "ollama" && stage !== "assist" && permission !== "auto" && permission !== "allow-all";
+  const why = !providers
+    ? "Checking agents…"
+    : !current?.available
+      ? providers.some((p) => p.available)
+        ? `${providerLabel(provider)} is not ready. Pick another agent.`
+        : "No agent is ready. Copy the prompt for your terminal agent instead."
+      : stage === "assist" && !prompt.trim()
+        ? "Write your request first"
+        : liveRuns.length > 0 && !handoff
+          ? "Choose what to do with the live run"
+          : provider === "ollama" && !model
+            ? "Install an Ollama model first"
+            : ollamaPermission
+              ? "Choose Auto or Allow all for OpenCode"
+              : null;
   const start = async () => {
     setBusy(true);
     setErr(null);
@@ -252,12 +269,13 @@ export function StartRunDialog({ stage: initialStage, sessionKey, runs, resumeId
         )}
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
+          {why && !busy && <span className="dialog-why" id={whyId}>{why}</span>}
           <span className="spacer" />
           <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Cancel
           </button>
           {providers && !providers.some((p) => p.available) && preview && <CopyButton text={preview} label="Copy prompt for your terminal agent" className="btn primary" />}
-          <button className="btn primary" disabled={busy || !providers || !current?.available || (stage === "assist" && !prompt.trim()) || (liveRuns.length > 0 && !handoff) || (current ? !current.available : false) || (provider === "ollama" && (!model || (stage !== "assist" && permission !== "auto" && permission !== "allow-all")))} onClick={() => void start()} type="button">
+          <button className="btn primary" disabled={busy || !!why} aria-describedby={why && !busy ? whyId : undefined} onClick={() => void start()} type="button">
             {busy ? "Starting…" : resume ? "Resume run" : `Start ${STAGE_TEXT[stage].label.toLowerCase()}`}
           </button>
         </div>

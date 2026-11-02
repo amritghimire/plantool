@@ -418,6 +418,45 @@ async fn navigate(
 struct ViewedBody {
     sha: String,
 }
+#[derive(Deserialize)]
+pub struct CheckboxBody {
+    pub line: u32,
+    pub checked: bool,
+    pub sha: String,
+}
+
+async fn set_checkbox(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((repo, slug)): Path<(String, String)>,
+    Json(body): Json<CheckboxBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if actor_from(&headers, &state) != Actor::Human {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only the owner can tick tasks from the browser".into(),
+        ));
+    }
+    let s = resolve(&state, &format!("{repo}/{slug}"), None)?;
+    s.capture_doc(DocKind::Plan)?;
+    let current = s
+        .doc(DocKind::Plan)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "the plan is not written yet".into()))?;
+    if current.sha != body.sha {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "the plan changed since you loaded it; reload and try again".into(),
+        ));
+    }
+    let next = plantool_core::markdown::set_checkbox(&current.content, body.line, body.checked)
+        .ok_or_else(|| bad_request(format!("line {} is not a task", body.line)))?;
+    crate::store::write_atomic(&s.doc_path(DocKind::Plan), next.as_bytes())
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    s.capture_doc(DocKind::Plan)?;
+    let sha = s.doc(DocKind::Plan).map(|d| d.sha);
+    Ok(Json(json!({ "sha": sha })))
+}
+
 async fn viewed(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -495,6 +534,7 @@ pub fn routes() -> Router<AppState> {
             "/sessions/{repo}/{slug}/docs/plan/revisions",
             get(revisions),
         )
+        .route("/sessions/{repo}/{slug}/docs/plan/checkbox", post(set_checkbox))
         .route("/sessions/{repo}/{slug}/docs/{kind}/viewed", post(viewed))
         .route(
             "/sessions/{repo}/{slug}/plan/propose-revision",

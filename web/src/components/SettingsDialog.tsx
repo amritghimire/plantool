@@ -103,6 +103,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
           {saved && <span className="muted small" role="status">Saved</span>}
+          {!setting && !err && <span className="dialog-why" id="settings-why">Loading the current setting…</span>}
           <span className="spacer" />
           <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Close
@@ -110,7 +111,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <button className="btn" disabled={busy || !setting || !(scope ? setting.repo?.value : setting.global)} onClick={() => void save(null)} type="button">
             Reset
           </button>
-          <button className="btn primary" disabled={busy || !setting} onClick={() => void save(value.trim() || null)} type="button">
+          <button className="btn primary" disabled={busy || !setting} aria-describedby={setting ? undefined : "settings-why"} onClick={() => void save(value.trim() || null)} type="button">
             Save
           </button>
         </div>

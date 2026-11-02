@@ -1,0 +1,139 @@
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/public-sans/files/public-sans-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("@fontsource/public-sans/files/public-sans-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("@fontsource/public-sans/files/public-sans-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("@fontsource/public-sans/files/public-sans-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Courier Prime";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/courier-prime/files/courier-prime-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Courier Prime";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("@fontsource/courier-prime/files/courier-prime-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/source-serif-4/files/source-serif-4-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("@fontsource/source-serif-4/files/source-serif-4-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/source-serif-4/files/source-serif-4-latin-400-italic.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light;
+  --sheet: #ffffff;
+  --sheet-2: #f6f6f5;
+  --ink: #111111;
+  --ink-2: #5c5c5c;
+  --rule: #d9d9d9;
+  --rule-strong: #8a8a8a;
+  --human: #1f3a93;
+  --human-ink: #ffffff;
+  --human-wash: #e8ecf6;
+  --warn: #8a5300;
+  --warn-wash: #fbf1e1;
+  --danger: #b3261e;
+  --danger-wash: #fbeae8;
+  --ok: #1d6b3a;
+  --focus: #1f3a93;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  --font-ui: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-ref: "Courier Prime", "Courier New", monospace;
+  --font-doc: "Source Serif 4", Georgia, serif;
+  --font-code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-ui-sm: 12px;
+  --fs-ui: 14px;
+  --fs-doc: 17px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --sheet: #0e1220;
+  --sheet-2: #131829;
+  --ink: #eceef3;
+  --ink-2: #a3a9b8;
+  --rule: #2a3043;
+  --rule-strong: #666e86;
+  --human: #93abf2;
+  --human-ink: #0b1020;
+  --human-wash: #1f2a4c;
+  --warn: #e8b060;
+  --warn-wash: #2e2414;
+  --danger: #f49a93;
+  --danger-wash: #361a1d;
+  --ok: #7fcf9b;
+  --focus: #93abf2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --sheet: #0e1220;
+    --sheet-2: #131829;
+    --ink: #eceef3;
+    --ink-2: #a3a9b8;
+    --rule: #2a3043;
+    --rule-strong: #666e86;
+    --human: #93abf2;
+    --human-ink: #0b1020;
+    --human-wash: #1f2a4c;
+    --warn: #e8b060;
+    --warn-wash: #2e2414;
+    --danger: #f49a93;
+    --danger-wash: #361a1d;
+    --ok: #7fcf9b;
+    --focus: #93abf2;
+  }
+}

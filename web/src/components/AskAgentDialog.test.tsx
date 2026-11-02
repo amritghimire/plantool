@@ -39,3 +39,14 @@ it("keeps the new session draft when an earlier request completes", async () => 
   expect(started).not.toHaveBeenCalled();
   expect(start).toHaveBeenCalledWith("repo/first", expect.objectContaining({ prompt: "Old request" }));
 });
+
+it("says why Send is disabled until there is a request", async () => {
+  vi.spyOn(api, "providers").mockResolvedValue({ providers: [{ id: "claude", available: true, models: [] }] });
+  render(<AskAgentDialog sessionKey="repo/change" runs={[]} onClose={() => {}} onStarted={() => {}} />);
+  const send = screen.getByRole("button", { name: "Start and send" });
+  expect(send).toBeDisabled();
+  expect(send).toHaveAccessibleDescription("Write your request first");
+  fireEvent.change(screen.getByLabelText("Your request"), { target: { value: "Review this" } });
+  expect(send).toBeEnabled();
+  expect(send).not.toHaveAttribute("aria-describedby");
+});

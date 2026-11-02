@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { api } from "../api";
 import { RunPanel, type RunLine } from "./RunPanel";
 import type { Run } from "../types";
@@ -83,4 +83,37 @@ it("captures the run receiving an attachment while preserving a new run draft", 
   expect(screen.getByLabelText("Message to agent")).toHaveValue("Other run draft");
   expect(screen.queryByLabelText("Attachments")).toBeNull();
   vi.restoreAllMocks();
+});
+
+it("puts provider, status, permission mode, resume and the one close on a single header row", () => {
+  const onClose = vi.fn();
+  const onBack = vi.fn();
+  const onResume = vi.fn();
+  render(<RunPanel sessionKey="repo/head" run={{ ...run, permission_mode: "auto" }} lines={lines} onClose={onClose} onBack={onBack} onResume={onResume} />);
+  const head = screen.getByRole("heading", { name: /Claude Code · implement/ }).closest("header") as HTMLElement;
+  expect(within(head).getByText("stopped")).toBeInTheDocument();
+  expect(within(head).getByText("Auto")).toBeInTheDocument();
+  fireEvent.click(within(head).getByRole("button", { name: "Resume" }));
+  expect(onResume).toHaveBeenCalled();
+  expect(screen.getAllByRole("button", { name: /^Close/ })).toHaveLength(1);
+  fireEvent.click(within(head).getByRole("button", { name: "Close agent run" }));
+  expect(onClose).toHaveBeenCalled();
+  fireEvent.click(within(head).getByRole("button", { name: "All runs" }));
+  expect(onBack).toHaveBeenCalled();
+});
+
+it("collapses the sent prompt, quiets system lines and only shows a stop reason it has", () => {
+  const transcript: RunLine[] = [
+    { seq: 1, event: { type: "message", id: "prompt", role: "user", content: "Continue the next milestone of repo/x." } },
+    { seq: 2, event: { type: "status", label: "codex: idle" } },
+    { seq: 3, event: { type: "status", label: "codex thread ready" } },
+    { seq: 4, event: { type: "message", id: "a", role: "assistant", content: "Done." } },
+  ];
+  const { rerender } = render(<RunPanel sessionKey="repo/prompt" run={run} lines={transcript} onClose={() => {}} />);
+  const prompt = screen.getByText("Prompt sent to the agent");
+  expect(prompt.closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("codex thread ready")).toHaveClass("run-sys");
+  expect(screen.queryByRole("status")).toBeNull();
+  rerender(<RunPanel sessionKey="repo/prompt" run={{ ...run, idle_stopped: true }} lines={transcript} onClose={() => {}} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Stopped after sitting idle");
 });

@@ -21,7 +21,7 @@ export function Modal({
   const invokingControl = useRef(
     typeof document !== "undefined" &&
       document.activeElement instanceof HTMLElement
-      ? document.activeElement
+      ? menuTrigger(document.activeElement) ?? document.activeElement
       : null,
   );
   const restoreFocus = (event: Event) => {
@@ -73,4 +73,10 @@ export function Modal({
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+function menuTrigger(el: HTMLElement): HTMLElement | null {
+  const popup = el.closest<HTMLElement>("[data-radix-popper-content-wrapper] [id]");
+  if (!popup?.id) return null;
+  return document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(popup.id)}"]`);
 }

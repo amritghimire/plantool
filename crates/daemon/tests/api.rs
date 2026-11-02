@@ -2224,3 +2224,41 @@ async fn owner_comments_do_not_bypass_revision_review_for_idle_runs() {
         .send(&next.id, plantool_daemon::providers::RunInput::Stop)
         .await;
 }
+
+#[tokio::test]
+async fn owner_ticks_a_plan_task_from_the_browser() {
+    use plantool_core::DocKind;
+    let h = harness();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({"slug":"tick","repo":h.repo})),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    let path = live.doc_path(DocKind::Plan);
+    std::fs::write(&path, "# Plan\n### Phase 1\n- [ ] First\n- [x] Second\n").unwrap();
+    live.capture_doc(DocKind::Plan).unwrap();
+    let sha = live.doc(DocKind::Plan).unwrap().sha;
+    let url = format!("/api/sessions/{key}/docs/plan/checkbox");
+
+    let (status, _) = call(&h.app, "POST", &url, Some(json!({"line":3,"checked":true,"sha":sha})), false, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "agents cannot tick from the browser endpoint");
+
+    let (status, body) = call(&h.app, "POST", &url, Some(json!({"line":3,"checked":true,"sha":sha})), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Plan\n### Phase 1\n- [x] First\n- [x] Second\n");
+    let new_sha = live.doc(DocKind::Plan).unwrap().sha;
+    assert_eq!(body["sha"], json!(new_sha));
+    assert!(!live.state().plan_revision_pending, "ticking is progress, not a scope change");
+
+    let (status, _) = call(&h.app, "POST", &url, Some(json!({"line":4,"checked":false,"sha":sha})), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::CONFLICT, "a stale sha is refused");
+
+    let (status, _) = call(&h.app, "POST", &url, Some(json!({"line":1,"checked":true,"sha":new_sha})), true, "127.0.0.1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "non-task lines are refused");
+}

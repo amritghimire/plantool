@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Sun, Moon, Monitor } from "@phosphor-icons/react";
+import { SunIcon, MoonIcon, MonitorIcon } from "@phosphor-icons/react";
 
 type Theme = "system" | "light" | "dark";
 
@@ -18,7 +18,7 @@ export function applyTheme(t: Theme) {
   else root.setAttribute("data-theme", t);
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ className = "spine-icon theme-toggle", size = 16 }: { className?: string; size?: number }) {
   const [theme, setTheme] = useState<Theme>(read);
   useEffect(() => {
     applyTheme(theme);
@@ -30,8 +30,8 @@ export function ThemeToggle() {
   }, [theme]);
   const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
   return (
-    <button className="rail-button theme-toggle" type="button" aria-label={`Theme: ${theme}. Switch to ${next[theme]}`} title={`Theme: ${theme}`} onClick={() => setTheme(next[theme])}>
-      {theme === "system" ? <Monitor size={21} aria-hidden="true" /> : theme === "light" ? <Sun size={21} aria-hidden="true" /> : <Moon size={21} aria-hidden="true" />}
+    <button className={className} type="button" aria-label={`Theme: ${theme}. Switch to ${next[theme]}`} title={`Theme: ${theme}`} onClick={() => setTheme(next[theme])}>
+      {theme === "system" ? <MonitorIcon size={size} aria-hidden="true" /> : theme === "light" ? <SunIcon size={size} aria-hidden="true" /> : <MoonIcon size={size} aria-hidden="true" />}
     </button>
   );
 }

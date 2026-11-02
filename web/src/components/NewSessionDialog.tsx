@@ -1,9 +1,38 @@
 import { useEffect, useState } from "react";
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import type { RepoInfo } from "../types";
 import { relTime } from "../lib/format";
 import { Modal } from "./Modal";
+import { ProviderSetup } from "./ProviderSetup";
+import { providerLabel } from "../lib/agents";
+
+type Provider = Awaited<ReturnType<typeof api.providers>>["providers"][number];
+
+export function ProviderReadiness({ providers, error }: { providers: Provider[] | null; error: string | null }) {
+  if (error) return <p className="provider-ready muted small">Could not check agents: {error}</p>;
+  if (!providers) return <p className="provider-ready muted small" role="status">Checking agents…</p>;
+  const ready = providers.some((item) => item.available);
+  return (
+    <div className="provider-ready">
+      <span className="provider-ready-label">Agents</span>
+      <ul aria-label="Agent providers">
+        {providers.map((item) => (
+          <li key={item.id} className={item.available && !item.error ? "ready" : undefined}>
+            {providerLabel(item.id)} <span>{item.available ? (item.error ? "sign-in not verified" : "ready") : "not ready"}</span>
+          </li>
+        ))}
+      </ul>
+      {!ready && (
+        <>
+          <p className="small">No agent can run from the browser yet. You can still create the session and paste its prompt into any agent in your terminal.</p>
+          <ProviderSetup providers={providers} />
+        </>
+      )}
+    </div>
+  );
+}
 
 const OTHER = "__other__";
 const slugFromTitle = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
@@ -22,6 +51,11 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [providerErr, setProviderErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.providers().then((r) => setProviders(r.providers)).catch((e: Error) => setProviderErr(e.message));
+  }, []);
   useEffect(() => {
     api.repos()
       .then((r) => {
@@ -32,6 +66,17 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   }, []);
   const repo = choice === OTHER ? path.trim() : choice;
   const slugOk = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/.test(slug);
+  const why = repos === null && !err && choice === OTHER
+    ? "Loading repositories…"
+    : !repo
+    ? choice === OTHER
+      ? "Enter a repository path"
+      : "Pick a repository"
+    : !slug
+      ? "Add a title"
+      : !slugOk
+        ? "Fix the session ID"
+        : null;
   const create = async () => {
     setBusy(true);
     setErr(null);
@@ -48,10 +93,11 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New session" onClose={onClose} busy={busy}>
 
-        <h3>What would you like to build?</h3>
-        <p className="dialog-intro">Start with a goal. Research and review the plan before the agent changes your code.</p>
+        <h3>New session</h3>
+        <p className="dialog-intro">What would you like to build? Start with a goal. Research and review the plan before the agent changes your code.</p>
         <label>
           Repository
+          <span className="select-wrap">
           <select value={choice} onChange={(e) => setChoice(e.target.value)}>
             {(repos ?? []).map((r) => (
               <option key={r.root} value={r.root}>
@@ -60,6 +106,8 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
             ))}
             <option value={OTHER}>Another path…</option>
           </select>
+          <CaretDownIcon className="select-caret" size={14} aria-hidden="true" />
+          </span>
           {choice === OTHER && <input value={path} placeholder="/absolute/path/to/a/git/checkout" autoFocus onChange={(e) => setPath(e.target.value)} />}
         </label>
         <label>
@@ -80,14 +128,16 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
           <label>Base branch <span className="muted small">(default: origin/HEAD or main)</span><input value={base} onChange={(e) => setBase(e.target.value)} /></label>
           <label className="check check-row"><input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /><span>Create a git worktree now <span className="muted small">(otherwise one is created when implementation starts)</span></span></label>
         </details>
+        <ProviderReadiness providers={providers} error={providerErr} />
         {slug && !slugOk && <p className="error">Open Workspace options to correct the session ID.</p>}
         {err && <div className="error" role="alert">{err}</div>}
         <div className="composer-actions button-row dialog-actions">
+          {why && !busy && <span className="dialog-why" id="create-why">{why}</span>}
           <span className="spacer" />
           <button className="btn ghost" disabled={busy} onClick={onClose} type="button">
             Cancel
           </button>
-          <button className="btn primary" disabled={busy || !slugOk || !repo} onClick={() => void create()} type="button">
+          <button className="btn primary" disabled={busy || !!why} aria-describedby={why ? "create-why" : undefined} onClick={() => void create()} type="button">
             {busy ? "Creating…" : "Create session"}
           </button>
         </div>

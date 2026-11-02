@@ -87,3 +87,27 @@ test("a slow milestone diff cannot overwrite the whole-implementation diff", asy
   expect(screen.queryByText("+stale milestone")).toBeNull();
   expect(screen.getByText("+current scope")).toBeInTheDocument();
 });
+
+test("one summary row with one difftool action, and the drift check folded as a table", async () => {
+  vi.spyOn(api, "changes").mockResolvedValue({
+    ...base,
+    stat: [{ path: "src/auth.rs", added: 9, deleted: 1 }, { path: "Cargo.lock", added: 2, deleted: 2 }],
+    review: { tool: "difftool", url: "http://127.0.0.1:7000/r/abc", review: "abc", opened_at: "" },
+    difftool_open_comments: 0,
+    drift: { checked: true, planned_files: ["`src/auth.rs`", "src/auth.rs", "src/db.rs`, `src/auth.rs"], outside_files: ["Cargo.lock"], ticks_without_diff: false, plan_changed: false },
+  });
+  render(<ChangesTab sessionKey="repo/summary" nonce={0} />);
+  await screen.findByText(/includes new files/);
+  expect(screen.getAllByRole("button", { name: /difftool/i })).toHaveLength(1);
+  expect(screen.queryByRole("link", { name: /Open this review/ })).toBeNull();
+  expect(screen.getByText(/None yet\. They appear here when you leave them in difftool/)).toBeInTheDocument();
+  const summary = screen.getByText(/heuristic drift check/);
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  const row = (name: string) => screen.getByRole("rowheader", { name }).closest("tr") as HTMLElement;
+  expect(row("Outside the plan")).toHaveTextContent("1");
+  expect(row("Planned and touched")).toHaveTextContent("1");
+  expect(row("Planned, not touched")).toHaveTextContent("1");
+  const touched = row("Planned and touched").querySelectorAll("li");
+  expect([...touched].map((li) => li.textContent)).toEqual(["src/auth.rs"]);
+  expect(row("Planned, not touched").querySelector("li")?.textContent).toBe("src/db.rs");
+});

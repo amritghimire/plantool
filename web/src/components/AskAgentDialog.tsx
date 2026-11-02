@@ -1,5 +1,5 @@
 import { Modal } from "./Modal";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../api";
 import { providerLabel, savedAgentSetting, saveAgentSettings } from "../lib/agents";
 import { PERMISSION_MODES, type PermissionMode, type Run } from "../types";
@@ -34,6 +34,19 @@ export function AskAgentDialog({ sessionKey, runs, onClose, onStarted }: { sessi
     if (ready) { setProvider(ready.id); setModel(savedAgentSetting(ready.id, "model")); setEffort(savedAgentSetting(ready.id, "effort")); }
   }, [providers, provider]);
   useEffect(() => { if (provider === "ollama" && chosenProvider && !chosenProvider.models.some((item) => item.id === model)) setModel(chosenProvider.models[0]?.id ?? ""); }, [provider, chosenProvider, model]);
+  const whyId = useId();
+  const draft = composer.draft;
+  const why = busy
+    ? null
+    : !(draft.text.trim() || draft.attachments.length)
+      ? "Write your request first"
+      : draft.attachments.some((a) => a.status !== "ready")
+        ? "Wait for attachments to upload, or remove failed ones"
+        : action === "fresh" && chosenProvider?.available === false
+          ? `${providerLabel(provider)} is not ready`
+          : action === "fresh" && provider === "ollama" && !model
+            ? "Install an Ollama model first"
+            : null;
   const effectiveProvider = action === "resume" ? chosenRun?.provider ?? provider : provider;
   const submit = async () => {
     const submittedDestination = destination;
@@ -75,6 +88,6 @@ export function AskAgentDialog({ sessionKey, runs, onClose, onStarted }: { sessi
     {action === "fresh" && <label>Permissions<select value={permission} onChange={(event) => setPermission(event.target.value as PermissionMode)}>{PERMISSION_MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><span className="muted small">{["copilot", "ollama"].includes(provider) && permission === "ask" ? "This mode can read files. Choose Auto to let it edit files or run commands." : PERMISSION_MODES.find((item) => item.id === permission)?.hint}</span></label>}
     {action === "fresh" && chosenProvider?.error && <p className="error">{chosenProvider.error}</p>}
     {error && <p className="error" role="alert">{error}</p>}
-    <div className="composer-actions button-row dialog-actions"><span className="muted small">⌘↩ to send</span><span className="spacer" /><button className="btn ghost" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="btn primary" type="button" disabled={!composer.canSend || (action === "fresh" && (chosenProvider?.available === false || (provider === "ollama" && !model)))} onClick={() => void submit()}>{busy ? "Sending…" : action === "live" ? "Send" : action === "resume" ? "Resume and send" : "Start and send"}</button></div>
+    <div className="composer-actions button-row dialog-actions">{why ? <span className="dialog-why" id={whyId}>{why}</span> : <span className="muted small">⌘↩ to send</span>}<span className="spacer" /><button className="btn ghost" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="btn primary" type="button" disabled={!composer.canSend || !!why} aria-describedby={why ? whyId : undefined} onClick={() => void submit()}>{busy ? "Sending…" : action === "live" ? "Send" : action === "resume" ? "Resume and send" : "Start and send"}</button></div>
   </Modal>;
 }

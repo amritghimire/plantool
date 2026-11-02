@@ -1,15 +1,10 @@
-import {
-  Code,
-  FileCode,
-  MagnifyingGlass,
-  ArrowUpRight,
-  CaretRight,
-} from "@phosphor-icons/react";
+import { MagnifyingGlassIcon, ArrowUpRightIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { cn } from "../lib/cn";
 import { CodeReview } from "./CodeReview";
 import { Thread, type ThreadActions } from "./Thread";
 import type { Comment } from "../types";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { driftRows } from "../lib/drift";
 import { api } from "../api";
 import type { ChangeScope, ChangesResponse, FileDiff } from "../types";
 
@@ -154,10 +149,20 @@ export function ChangesTab({
         <div />
       </div>
     );
-  const total = data.stat.reduce(
-    (a, f) => ({ added: a.added + f.added, deleted: a.deleted + f.deleted }),
-    { added: 0, deleted: 0 },
-  );
+  const total = changeTotals(data);
+  const drift = data.drift?.checked
+    ? driftRows(data.drift.planned_files, data.stat.map((f) => f.path))
+    : null;
+  const query = fileQuery.toLowerCase();
+  const files = data.stat.filter((file) => file.path.toLowerCase().includes(query));
+  const difftoolComments =
+    data.review?.tool === "difftool" && data.difftool_open_comments !== undefined
+      ? data.difftool_open_comments === null
+        ? "Couldn't be read from difftool"
+        : data.difftool_open_comments === 0
+          ? "None yet. They appear here when you leave them in difftool."
+          : `${data.difftool_open_comments} open. Resolve them in difftool.`
+      : null;
   return (
     <div className="changes" aria-busy={loading}>
       {loading && (
@@ -165,14 +170,16 @@ export function ChangesTab({
           Updating comparison…
         </p>
       )}
-      <div className="changes-head button-row">
-        <div>
-          <strong>{data.stat.length}</strong> file
+      <div className="changes-head">
+        <p className="changes-count">
+          <strong className="num">{data.stat.length}</strong> file
           {data.stat.length === 1 ? "" : "s"} changed {data.label}
           <span className="added"> +{total.added}</span>
           <span className="deleted"> −{total.deleted}</span>
-        </div>
-        <span className="spacer" />
+          {data.review?.tool === "difftool" && (
+            <span className="muted"> · includes new files</span>
+          )}
+        </p>
         <span className="review-tool">
           {data.tool === "difftool"
             ? "difftool"
@@ -181,7 +188,7 @@ export function ChangesTab({
               : "Built-in diff"}
         </span>
         <button
-          className="btn primary"
+          className="btn"
           onClick={() =>
             data.tool === "none"
               ? data.stat[0] && toggle(data.stat[0].path)
@@ -197,79 +204,69 @@ export function ChangesTab({
             : data.tool === "none"
               ? "Use built-in diff"
               : "Open in git difftool"}
-          <ArrowUpRight size={15} aria-hidden="true" />
+          {data.tool !== "none" && <ArrowUpRightIcon size={15} aria-hidden="true" />}
         </button>
       </div>
       <dl className="review-context" aria-label="Comparison context">
         {workspace && (
           <div>
             <dt>Workspace</dt>
-            <dd title={workspace}>{workspace}</dd>
+            <dd className="ref" title={workspace}>
+              {workspace}
+            </dd>
           </div>
         )}
         <div>
           <dt>Comparing</dt>
           <dd>
-            <code title={data.base}>{data.base}</code>
+            <code className="ref" title={data.base}>
+              {data.base}
+            </code>
             <span aria-hidden="true"> → </span>working tree
           </dd>
         </div>
         <div>
           <dt>Scope</dt>
           <dd>
-            {data.scope === "step"
-              ? "Current milestone"
-              : "Whole implementation"}
+            {data.step_available ? (
+              <div className="seg" role="tablist" aria-label="Change scope">
+                <button
+                  className={data.scope === "step" ? "active" : ""}
+                  onClick={() => pickScope("step")}
+                  type="button"
+                  role="tab"
+                  disabled={busy}
+                  aria-selected={data.scope === "step"}
+                >
+                  This milestone
+                </button>
+                <button
+                  className={data.scope === "all" ? "active" : ""}
+                  onClick={() => pickScope("all")}
+                  type="button"
+                  role="tab"
+                  disabled={busy}
+                  aria-selected={data.scope === "all"}
+                >
+                  Whole implementation
+                </button>
+              </div>
+            ) : data.scope === "step" ? (
+              "Current milestone"
+            ) : (
+              "Whole implementation"
+            )}
           </dd>
         </div>
-      </dl>
-      {data.review?.tool === "difftool" &&
-        data.difftool_open_comments !== undefined && (
-          <p className="muted">
-            Difftool comments (read only):{" "}
-            {data.difftool_open_comments === null
-              ? "not available"
-              : `${data.difftool_open_comments} open`}
-            . Resolve them in difftool.
-          </p>
-        )}
-      {data.step_available && (
-        <div className="changes-scope button-row">
-          <span className="muted small">show</span>
-          <div className="seg" role="tablist" aria-label="Change scope">
-            <button
-              className={data.scope === "step" ? "active" : ""}
-              onClick={() => pickScope("step")}
-              type="button"
-              role="tab"
-              disabled={busy}
-              aria-selected={data.scope === "step"}
-            >
-              This milestone
-            </button>
-            <button
-              className={data.scope === "all" ? "active" : ""}
-              onClick={() => pickScope("all")}
-              type="button"
-              role="tab"
-              disabled={busy}
-              aria-selected={data.scope === "all"}
-            >
-              Whole implementation
-            </button>
+        {difftoolComments && (
+          <div>
+            <dt>Difftool comments</dt>
+            <dd>{difftoolComments}</dd>
           </div>
-        </div>
-      )}
-      {data.review?.tool === "difftool" && (
-        <p className="banner">
-          <a href={data.review.url} target="_blank" rel="noreferrer noopener">
-            Open this review in difftool ↗
-          </a>
-          <span className="muted small"> · includes new files</span>
-        </p>
-      )}
+        )}
+      </dl>
       {data.review?.tool === "git-difftool" && (
-        <p className="banner">git difftool was launched on this machine.</p>
+        <p className="muted small">git difftool was launched on this machine.</p>
       )}
       {err && (
         <p className="error" role="alert">
@@ -279,7 +276,7 @@ export function ChangesTab({
       {data.message && <p className="muted">{data.message}</p>}
       {actions && comments.some((c) => !c.parent && c.anchor.code) && (
         <section aria-label="Code review comments">
-          <h3>Code review comments</h3>
+          <h2>Code review comments</h2>
           {comments
             .filter((c) => !c.parent && c.anchor.code)
             .map((root) => (
@@ -294,27 +291,25 @@ export function ChangesTab({
         </section>
       )}
       {data.drift && (
-        <details
-          className="banner disclosure"
-          open={
-            !data.drift.checked ||
-            data.drift.outside_files.length > 0 ||
-            data.drift.ticks_without_diff ||
-            data.drift.plan_changed
-          }
-        >
+        <details className="disclosure changes-section">
           <summary>
             Plan and code ·{" "}
             {data.drift.checked ? "heuristic drift check" : "drift not checked"}
+            {drift && (
+              <span className="muted">
+                {" "}
+                · {drift.outside.length} outside the plan
+              </span>
+            )}
+            {data.drift.plan_changed && (
+              <span className="muted"> · plan changed after approval</span>
+            )}
           </summary>
           {!data.drift.checked && (
             <p>
               The plan has no parseable affected-files table. Add one to check
               changed files against the plan.
             </p>
-          )}
-          {data.drift.checked && data.drift.outside_files.length > 0 && (
-            <p>Outside planned files: {data.drift.outside_files.join(", ")}</p>
           )}
           {data.drift.ticks_without_diff && (
             <p>
@@ -327,152 +322,164 @@ export function ChangesTab({
               The plan changed after approval. Review its revision comparison.
             </p>
           )}
-          <p>
-            Planned files: {data.drift.planned_files.join(", ") || "Not listed"}
-          </p>
-          <p className="muted">
+          {drift && (
+            <table className="drift-table">
+              <tbody>
+                {(
+                  [
+                    ["Outside the plan", drift.outside],
+                    ["Planned and touched", drift.touched],
+                    ["Planned, not touched", drift.untouched],
+                  ] as const
+                ).map(([label, paths]) => (
+                  <tr key={label}>
+                    <th scope="row">{label}</th>
+                    <td className="num">{paths.length}</td>
+                    <td>
+                      {paths.length > 0 && (
+                        <details>
+                          <summary>
+                            {paths.length === 1 ? "Show file" : "Show files"}
+                          </summary>
+                          <ul className="path-list">
+                            {paths.map((path) => (
+                              <li key={path}>{path}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="muted small">
             These signals help find drift. They do not prove a task is complete.
           </p>
         </details>
       )}
-      {data.milestones && (
-        <details className="disclosure">
+      {data.milestones && data.milestones.length > 0 && (
+        <details className="disclosure changes-section">
           <summary>Planned milestones and completed tasks</summary>
           {data.milestones.map((m) => (
-            <section key={m.key}>
-              <strong>
-                {m.key} · {m.status}
-              </strong>
-              <ul>
-                {m.completed_tasks.map((task) => (
-                  <li key={task}>{task}</li>
-                ))}
-              </ul>
+            <section key={m.key} className="milestone-tasks">
+              <p className="milestone-name">
+                {m.key} <span className="muted">· {m.status}</span>
+              </p>
+              {m.completed_tasks.length > 0 && (
+                <ul>
+                  {m.completed_tasks.map((task) => (
+                    <li key={task}>{task}</li>
+                  ))}
+                </ul>
+              )}
             </section>
           ))}
         </details>
       )}
-      <div className="review-files-layout">
-        <nav className="review-file-list" aria-label="Changed files">
-          <div className="file-list-title">
-            Files <span>{data.stat.length}</span>
-          </div>
-          <label className="file-search">
-            <MagnifyingGlass size={15} aria-hidden="true" />
-            <input
-              aria-label="Filter changed files"
-              placeholder="Filter files…"
-              value={fileQuery}
-              onChange={(event) => setFileQuery(event.target.value)}
-            />
-          </label>
-          {data.stat
-            .filter((file) =>
-              file.path.toLowerCase().includes(fileQuery.toLowerCase()),
-            )
-            .map((file) => (
-              <button
-                key={file.path}
-                type="button"
-                className={cn("review-file", open.has(file.path) && "selected")}
-                aria-expanded={open.has(file.path)}
-                onClick={() => toggle(file.path)}
-                disabled={loading}
-              >
-                <span className="sr-only">
-                  {open.has(file.path) ? "Collapse " : "Expand "}
-                </span>
-                <FileCode size={16} aria-hidden="true" />
-                <span>{file.path}</span>
-                <small aria-hidden="true">
-                  <span className="added">+{file.added}</span>
-                  <span className="deleted">−{file.deleted}</span>
-                </small>
-              </button>
-            ))}
-          {fileQuery &&
-            !data.stat.some((file) =>
-              file.path.toLowerCase().includes(fileQuery.toLowerCase()),
-            ) && (
-              <div className="file-list-empty">
-                <p>No matching files.</p>
-                <button
-                  className="link"
-                  type="button"
-                  onClick={() => setFileQuery("")}
-                >
-                  Clear file filter
-                </button>
-              </div>
-            )}
-        </nav>
-        <section className="review-file-content" aria-label="File diffs">
-          {!open.size && (
-            <div className="diff-empty">
-              <Code size={32} aria-hidden="true" />
-              <h2>
-                {data.stat.length
-                  ? "Choose a file to review"
-                  : "No changes yet"}
-              </h2>
-              <p>
-                {data.stat.length
-                  ? "Inspect each change and leave feedback directly on a line."
-                  : "Changes will appear here as your agent works."}
-              </p>
-              {data.stat[0] && (
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={() => toggle(data.stat[0].path)}
-                  disabled={loading}
-                >
-                  Review first file
-                  <CaretRight size={15} aria-hidden="true" />
-                </button>
-              )}
-            </div>
+      <section className="changes-files" aria-label="Changed files">
+        <div className="changes-files-head">
+          <h2>
+            Files <span className="num muted">{data.stat.length}</span>
+          </h2>
+          {data.stat.length > 0 && (
+            <label className="file-search">
+              <MagnifyingGlassIcon size={15} aria-hidden="true" />
+              <input
+                aria-label="Filter changed files"
+                placeholder="Filter files…"
+                value={fileQuery}
+                onChange={(event) => setFileQuery(event.target.value)}
+              />
+            </label>
           )}
-          {data.stat
-            .filter((file) => open.has(file.path))
-            .map((file) => {
-              const state = diffs[file.path];
-              return (
-                <article className="review-file-panel" key={file.path}>
-                  <header>
-                    <FileCode size={16} aria-hidden="true" />
-                    <span>{file.path}</span>
-                    <span className="spacer" />
-                    <small className="added">+{file.added}</small>
-                    <small className="deleted">−{file.deleted}</small>
-                  </header>
-                  {!state || state.kind === "loading" ? (
-                    <div className="diff-loading" role="status">
-                      Loading diff…
-                      <div />
-                      <div />
-                      <div />
-                    </div>
-                  ) : state.kind === "error" ? (
-                    <p className="error file-diff" role="alert">
-                      {state.message}
-                    </p>
-                  ) : (
-                    <DiffBlock
-                      diff={state.diff}
-                      review={
-                        actions && onAdded
-                          ? { sessionKey, comments, actions, onAdded }
-                          : undefined
-                      }
-                    />
-                  )}
-                </article>
-              );
-            })}
-        </section>
-      </div>
+        </div>
+        {!data.stat.length && (
+          <p className="muted">No changes yet. They appear here as your agent works.</p>
+        )}
+        {fileQuery && !files.length && (
+          <div className="file-list-empty">
+            <p>No matching files.</p>
+            <button className="link" type="button" onClick={() => setFileQuery("")}>
+              Clear file filter
+            </button>
+          </div>
+        )}
+        {files.length > 0 && (
+          <table className="stat">
+            <thead>
+              <tr>
+                <th scope="col">Path</th>
+                <th scope="col">Added</th>
+                <th scope="col">Removed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {files.map((file) => {
+                const isOpen = open.has(file.path);
+                const state = diffs[file.path];
+                return (
+                  <Fragment key={file.path}>
+                    <tr className={cn("file", isOpen && "open")}>
+                      <td>
+                        <button
+                          type="button"
+                          className="file-toggle"
+                          aria-expanded={isOpen}
+                          onClick={() => toggle(file.path)}
+                          disabled={loading}
+                        >
+                          <span className="sr-only">{isOpen ? "Collapse " : "Expand "}</span>
+                          <CaretRightIcon className="chev" size={13} aria-hidden="true" />
+                          <span className="file-path">{file.path}</span>
+                        </button>
+                      </td>
+                      <td className="added">+{file.added}</td>
+                      <td className="deleted">−{file.deleted}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="diff">
+                        <td colSpan={3}>
+                          {!state || state.kind === "loading" ? (
+                            <div className="diff-loading" role="status">
+                              Loading diff…
+                              <div />
+                              <div />
+                              <div />
+                            </div>
+                          ) : state.kind === "error" ? (
+                            <p className="error file-diff" role="alert">
+                              {state.message}
+                            </p>
+                          ) : (
+                            <DiffBlock
+                              diff={state.diff}
+                              review={
+                                actions && onAdded
+                                  ? { sessionKey, comments, actions, onAdded }
+                                  : undefined
+                              }
+                            />
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
     </div>
+  );
+}
+
+export function changeTotals(data: ChangesResponse) {
+  return data.stat.reduce(
+    (a, f) => ({ added: a.added + f.added, deleted: a.deleted + f.deleted }),
+    { added: 0, deleted: 0 },
   );
 }
 

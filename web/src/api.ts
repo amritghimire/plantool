@@ -72,6 +72,7 @@ export const api = {
   doc: (key: string, kind: DocKind) => request<DocResponse>("GET", `/api/sessions/${key}/docs/${kind}`),
   planRevisions: (key: string) => request<{ current: DocResponse | null; approved: DocResponse | null; viewed: DocResponse | null; change: string | null; pending: boolean }>("GET", `/api/sessions/${key}/docs/plan/revisions`),
   markViewed: (key: string, kind: DocKind, sha: string) => request("POST", `/api/sessions/${key}/docs/${kind}/viewed`, { sha }),
+  setTask: (key: string, line: number, checked: boolean, sha: string) => request<{ sha: string | null }>("POST", `/api/sessions/${key}/docs/plan/checkbox`, { line, checked, sha }),
   docPath: (key: string, kind: DocKind) => request<{ kind: DocKind; path: string; exists: boolean }>("GET", `/api/sessions/${key}/docs/${kind}/path`),
   comments: (key: string) => request<{ seq: number; comments: Comment[] }>("GET", `/api/sessions/${key}/comments`),
   addComment: (key: string, c: { doc: DocKind; line?: number; match?: string; body: string; parent?: string; type?: import("./types").CommentType; scope?: import("./types").AnchorScope; code?: import("./types").CodeAnchor }) =>

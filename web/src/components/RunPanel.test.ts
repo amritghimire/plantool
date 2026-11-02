@@ -31,7 +31,9 @@ describe("projectRun", () => {
     expect(phaseOf(base, working.items, working.pending)).toMatchObject({ kind: "working", title: "Working · Read plan.md" });
     expect(phaseOf({ ...base, status: "idle" }, [], []).kind).toBe("idle");
     expect(phaseOf({ ...base, status: "waiting" }, [], [{ request_id: "p", kind: "permission", title: "x" }]).kind).toBe("waiting");
-    expect(phaseOf({ ...base, status: "stopped" }, [], []).detail).toMatch(/Resume/);
+    expect(phaseOf({ ...base, status: "stopped" }, [], []).detail).toBeUndefined();
+    expect(phaseOf({ ...base, status: "stopped", idle_stopped: true }, [], []).detail).toBe("Stopped after sitting idle");
+    expect(phaseOf({ ...base, status: "failed", error: "provider exited" }, [], []).detail).toBe("provider exited");
   });
 
   it("does not repeat streamed text when the final message arrives", () => {

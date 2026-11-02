@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T00:00:00Z",
+  "title": "Design System: plantool",
+  "extensions": {
+    "colorMeta": {
+      "human": { "role": "primary", "displayName": "Examiner's Blue", "canonical": "#1f3a93", "tonalRamp": ["#0b1640", "#13245f", "#1f3a93", "#3a56ad", "#6680c7", "#93abf2", "#c4d1f5", "#e8ecf6"] },
+      "human-wash": { "role": "primary", "displayName": "Allowance Wash", "canonical": "#e8ecf6", "tonalRamp": ["#1f2a4c", "#2e3c66", "#4a5a88", "#7584ab", "#a3aecb", "#c9d0e3", "#dde2ef", "#e8ecf6"] },
+      "warn": { "role": "secondary", "displayName": "Ochre Warning", "canonical": "#8a5300", "tonalRamp": ["#2e2414", "#4a3000", "#6b4100", "#8a5300", "#b2771f", "#e8b060", "#f3d6a8", "#fbf1e1"] },
+      "danger": { "role": "secondary", "displayName": "Docket Red", "canonical": "#b3261e", "tonalRamp": ["#361a1d", "#5c1410", "#871d17", "#b3261e", "#d4554c", "#f49a93", "#f7cbc7", "#fbeae8"] },
+      "ok": { "role": "secondary", "displayName": "Filed Green", "canonical": "#1d6b3a", "tonalRamp": ["#0c2b17", "#134726", "#1d6b3a", "#2f8a52", "#55aa75", "#7fcf9b", "#bfe6cc", "#e6f5eb"] },
+      "sheet": { "role": "neutral", "displayName": "Sheet", "canonical": "#ffffff", "tonalRamp": ["#111111", "#2b2b2b", "#5c5c5c", "#8a8a8a", "#d9d9d9", "#ececeb", "#f6f6f5", "#ffffff"] },
+      "sheet-2": { "role": "neutral", "displayName": "Second Sheet", "canonical": "#f6f6f5", "tonalRamp": ["#111111", "#2b2b2b", "#5c5c5c", "#8a8a8a", "#d9d9d9", "#ececeb", "#f6f6f5", "#ffffff"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#111111", "tonalRamp": ["#111111", "#2b2b2b", "#5c5c5c", "#8a8a8a", "#d9d9d9", "#ececeb", "#f6f6f5", "#ffffff"] },
+      "ink-2": { "role": "neutral", "displayName": "Grey Ink", "canonical": "#5c5c5c", "tonalRamp": ["#111111", "#2b2b2b", "#5c5c5c", "#8a8a8a", "#d9d9d9", "#ececeb", "#f6f6f5", "#ffffff"] },
+      "rule": { "role": "neutral", "displayName": "Hairline", "canonical": "#d9d9d9", "tonalRamp": ["#111111", "#2b2b2b", "#5c5c5c", "#8a8a8a", "#d9d9d9", "#ececeb", "#f6f6f5", "#ffffff"] },
+      "rule-strong": { "role": "neutral", "displayName": "Strong Rule", "canonical": "#8a8a8a", "tonalRamp": ["#111111", "#2b2b2b", "#5c5c5c", "#8a8a8a", "#d9d9d9", "#ececeb", "#f6f6f5", "#ffffff"] },
+      "sheet-dark": { "role": "neutral", "displayName": "Night Sheet", "canonical": "#0e1220", "tonalRamp": ["#0e1220", "#131829", "#2a3043", "#666e86", "#a3a9b8", "#c8ccd6", "#e0e3ea", "#eceef3"] },
+      "human-dark": { "role": "primary", "displayName": "Examiner's Blue (night)", "canonical": "#93abf2", "tonalRamp": ["#0b1020", "#1f2a4c", "#3a56ad", "#6680c7", "#93abf2", "#b3c4f5", "#d3ddf8", "#eef2fc"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "The document's own H1; no page title above it." },
+      "headline": { "displayName": "Headline", "purpose": "Document H2s and the inbox page title." },
+      "title": { "displayName": "Title", "purpose": "Session title in the spine, drawer and modal headings, the notice heading (700)." },
+      "prose": { "displayName": "Prose", "purpose": "Document paragraphs and lists in a 600px measure; 16px on phones." },
+      "body": { "displayName": "Body", "purpose": "Base UI text and canvas tabs." },
+      "control": { "displayName": "Control", "purpose": "Buttons, menus, drawer toggles, spine links, drawer text." },
+      "label": { "displayName": "Label", "purpose": "Metadata, chips, segmented controls, small buttons, field labels." },
+      "form-header": { "displayName": "Form Header", "purpose": "Uppercase title bar of a ruled form box and inbox queue headings only." },
+      "ref": { "displayName": "Reference", "purpose": "Paragraph numbers, FIG numbers and states, repo, branch, revisions, line refs, counts, field values." },
+      "ref-numeral": { "displayName": "Reference Numeral", "purpose": "Underlined comment numerals in the margin and comments drawer." },
+      "code": { "displayName": "Code", "purpose": "Inline code, pre blocks, diffs." }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      { "name": "drawer-collapse", "value": "1100px" },
+      { "name": "inbox-compact", "value": "860px" },
+      { "name": "phone", "value": "760px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The human's committing act in a region: approve, accept, start, send, allow. One per region.",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Approve plan</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 6px 12px; border: 1px solid var(--ink, #111111); border-radius: 0; background: var(--sheet, #ffffff); color: var(--ink, #111111); font: 500 13px/1.5 var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-btn-primary { background: var(--human, #1f3a93); border-color: var(--human, #1f3a93); color: var(--human-ink, #ffffff); font-weight: 600; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--human, #1f3a93) 88%, var(--ink, #111111)); } .ds-btn:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Default outlined ink button for every non-committing action.",
+      "html": "<button class=\"ds-btn-secondary\">Ask agent</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 6px 12px; border: 1px solid var(--ink, #111111); border-radius: 0; background: var(--sheet, #ffffff); color: var(--ink, #111111); font: 500 13px/1.5 var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-btn-secondary:hover { background: var(--sheet-2, #f6f6f5); } .ds-btn-secondary:active { background: color-mix(in srgb, var(--ink, #111111) 8%, var(--sheet, #ffffff)); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Borderless tertiary action; hover underlines.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { min-height: 34px; padding: 6px 12px; border: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ink, #111111); font: 500 13px/1.5 var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-btn-ghost:hover { text-decoration: underline; text-underline-offset: 3px; } .ds-btn-ghost:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Square field with a strong-rule border and blue caret.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search title, repo, branch, brief\" />",
+      "css": ".ds-input { min-height: 36px; padding: 7px 10px; border: 1px solid var(--rule-strong, #8a8a8a); border-radius: 0; background: var(--sheet, #ffffff); color: var(--ink, #111111); caret-color: var(--human, #1f3a93); font: 400 14px/1.5 var(--font-ui, 'Public Sans', sans-serif); } .ds-input::placeholder { color: var(--ink-2, #5c5c5c); } .ds-input:hover { border-color: var(--ink, #111111); } .ds-input:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "Filter Chips",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Comment filters; active fills ink.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">Open 34</button><button class=\"ds-chip\">Blockers 0</button><button class=\"ds-chip\">Mine</button></div>",
+      "css": ".ds-chips { display: flex; gap: 6px; flex-wrap: wrap; } .ds-chip { padding: 4px 8px; border: 1px solid var(--rule-strong, #8a8a8a); border-radius: 0; background: var(--sheet, #ffffff); color: var(--ink, #111111); font: 400 12px/1.5 var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-chip[aria-pressed=\"true\"] { background: var(--ink, #111111); border-color: var(--ink, #111111); color: var(--sheet, #ffffff); } .ds-chip:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "FIG List",
+      "kind": "nav",
+      "description": "The session steps as FIG. 1-5 with typewriter state words; current step in blue.",
+      "html": "<ol class=\"ds-figs\"><li><span class=\"ds-fig-n\">FIG. 1</span><span>Research</span><span class=\"ds-fig-s\">done</span></li><li class=\"current\"><span class=\"ds-fig-n\">FIG. 2</span><span class=\"ds-fig-name\">Plan</span><span class=\"ds-fig-s\">current</span></li><li><span class=\"ds-fig-n\">FIG. 3</span><span>Build</span><span class=\"ds-fig-s\">pending</span></li></ol>",
+      "css": ".ds-figs { list-style: none; margin: 0; padding: 0; width: 216px; border-top: 1px solid var(--ink, #111111); font: 400 13px/1.5 var(--font-ui, 'Public Sans', sans-serif); color: var(--ink, #111111); } .ds-figs li { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--rule, #d9d9d9); } .ds-figs li:hover span:nth-child(2) { text-decoration: underline; } .ds-fig-n, .ds-fig-s { color: var(--ink-2, #5c5c5c); font: 400 12px/1.5 var(--font-ref, 'Courier Prime', monospace); } .ds-fig-s { text-transform: uppercase; } .ds-figs li.current .ds-fig-n, .ds-figs li.current .ds-fig-s { color: var(--human, #1f3a93); font-weight: 700; } .ds-figs li.current .ds-fig-name { font-weight: 600; }"
+    },
+    {
+      "name": "Notice of Allowance",
+      "kind": "card",
+      "description": "The ruled form box holding the step's single decision; 2px ink border, caps-tracked title bar, typewriter field values.",
+      "html": "<section class=\"ds-notice\"><header>Notice of allowance</header><div class=\"ds-notice-body\"><h3>Your turn: approve the plan</h3><dl><dt>Application</dt><dd>plan.md rev 74d4920</dd><dt>Status</dt><dd>Open: 3 · Blockers: 0</dd></dl><button class=\"ds-notice-primary\">Approve plan</button><button class=\"ds-notice-ask\">Ask agent</button></div></section>",
+      "css": ".ds-notice { width: 216px; border: 2px solid var(--ink, #111111); background: var(--sheet, #ffffff); color: var(--ink, #111111); font: 400 13px/1.5 var(--font-ui, 'Public Sans', sans-serif); } .ds-notice > header { padding: 6px 12px; border-bottom: 1px solid var(--ink, #111111); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; } .ds-notice-body { display: grid; gap: 8px; padding: 12px; } .ds-notice h3 { margin: 0; font-size: 15px; font-weight: 700; line-height: 1.35; } .ds-notice dl { display: grid; gap: 4px; margin: 0; } .ds-notice dt { color: var(--ink-2, #5c5c5c); font-size: 12px; } .ds-notice dd { margin: 0; font: 400 13px/1.4 var(--font-ref, 'Courier Prime', monospace); } .ds-notice button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--ink, #111111); border-radius: 0; background: var(--sheet, #ffffff); color: var(--ink, #111111); font: 500 13px/1.5 var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-notice button:hover { background: var(--sheet-2, #f6f6f5); } .ds-notice .ds-notice-primary { background: var(--human, #1f3a93); border-color: var(--human, #1f3a93); color: var(--human-ink, #ffffff); font-weight: 600; } .ds-notice .ds-notice-primary:hover { background: color-mix(in srgb, var(--human, #1f3a93) 88%, var(--ink, #111111)); } .ds-notice button:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "Numbered Paragraph with Reference Numeral",
+      "kind": "custom",
+      "refersTo": "ref-numeral-selected",
+      "description": "Serif prose with a bracketed paragraph number in the gutter and an underlined comment numeral on a curved leader in the margin.",
+      "html": "<div class=\"ds-para selected\"><span class=\"ds-para-n\">[0004]</span><p>After the fix, the server redirects only to the extension's callback, and the page warns when the token never expires.</p><button class=\"ds-refnum selected\"><svg viewBox=\"0 0 24 14\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M0 12 C 10 12, 12 3, 24 3\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1\" vector-effect=\"non-scaling-stroke\"/></svg><span>22</span></button></div>",
+      "css": ".ds-para { position: relative; padding: 0 92px 0 76px; max-width: 768px; color: var(--ink, #111111); } .ds-para.selected p { background: var(--human-wash, #e8ecf6); } .ds-para p { margin: 0; font: 400 17px/1.8 var(--font-doc, 'Source Serif 4', Georgia, serif); } .ds-para-n { position: absolute; left: 0; top: 0; font: 400 12px/31px var(--font-ref, 'Courier Prime', monospace); color: var(--ink-2, #5c5c5c); user-select: none; } .ds-para.selected .ds-para-n { color: var(--human, #1f3a93); } .ds-refnum { position: absolute; right: 0; top: 4px; width: 86px; display: flex; align-items: center; padding: 0; border: 0; background: none; color: var(--ink, #111111); cursor: pointer; } .ds-refnum svg { flex: 1; height: 14px; color: var(--ink-2, #5c5c5c); } .ds-refnum span { padding: 3px 3px 2px; border: 1px solid transparent; font: 700 15px/1 var(--font-ref, 'Courier Prime', monospace); text-decoration: underline; text-underline-offset: 3px; } .ds-refnum:hover span { border-color: var(--ink, #111111); } .ds-refnum.selected svg { color: var(--human, #1f3a93); } .ds-refnum.selected span { background: var(--human, #1f3a93); border-color: var(--human, #1f3a93); color: var(--human-ink, #ffffff); } .ds-refnum:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    },
+    {
+      "name": "Inbox Queue",
+      "kind": "custom",
+      "refersTo": "queue-row",
+      "description": "Urgency section with a caps-tracked heading and fixed-column 56px rows led by a status mark.",
+      "html": "<section class=\"ds-queue\"><h2>Waiting on you <span>17</span></h2><div class=\"ds-row\"><span class=\"ds-mark\"></span><span class=\"ds-title\">fix security inbox findings</span><span class=\"ds-repo\">datachain-ai-studio</span><span>Approve plan</span><span class=\"ds-repo\">34 open</span><span class=\"ds-repo\">3d</span></div></section>",
+      "css": ".ds-queue { font: 400 14px/1.5 var(--font-ui, 'Public Sans', sans-serif); color: var(--ink, #111111); } .ds-queue h2 { display: flex; gap: 8px; align-items: baseline; margin: 0; padding-bottom: 6px; border-bottom: 1px solid var(--human, #1f3a93); color: var(--human, #1f3a93); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; } .ds-queue h2 span { font: 400 13px var(--font-ref, 'Courier Prime', monospace); letter-spacing: 0; } .ds-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 160px 140px 64px 40px; gap: 0 16px; align-items: center; min-height: 56px; padding: 8px; border-bottom: 1px solid var(--rule, #d9d9d9); } .ds-row:hover { background: var(--sheet-2, #f6f6f5); } .ds-row:focus-within { background: var(--human-wash, #e8ecf6); } .ds-mark { width: 12px; height: 12px; border-radius: 50%; background: var(--human, #1f3a93); justify-self: center; } .ds-title { font-weight: 500; } .ds-repo { color: var(--ink-2, #5c5c5c); font: 400 12px var(--font-ref, 'Courier Prime', monospace); }"
+    },
+    {
+      "name": "Canvas Tabs and Drawer Toggle",
+      "kind": "nav",
+      "refersTo": "drawer-toggle-active",
+      "description": "Sticky canvas header: text tabs with a 3px ink underline, segmented view mode, and outlined drawer toggles that fill Allowance Wash when open.",
+      "html": "<div class=\"ds-head\"><button class=\"ds-tab\">Research</button><button class=\"ds-tab active\">Plan</button><button class=\"ds-tab\">Changes</button><span class=\"ds-spacer\"></span><span class=\"ds-seg\"><button class=\"active\">Document</button><button>Slides</button><button>Source</button></span><button class=\"ds-toggle active\">Comments 34</button></div>",
+      "css": ".ds-head { display: flex; align-items: stretch; gap: 4px 8px; min-height: 48px; padding: 0 16px; background: var(--sheet, #ffffff); border-bottom: 1px solid var(--ink, #111111); font-family: var(--font-ui, 'Public Sans', sans-serif); } .ds-tab { padding: 0 10px; margin-bottom: -1px; border: 0; border-bottom: 3px solid transparent; background: none; color: var(--ink-2, #5c5c5c); font-size: 14px; cursor: pointer; } .ds-tab:hover { color: var(--ink, #111111); } .ds-tab.active { border-bottom-color: var(--ink, #111111); color: var(--ink, #111111); font-weight: 600; } .ds-spacer { flex: 1; } .ds-seg { align-self: center; display: inline-flex; border: 1px solid var(--rule-strong, #8a8a8a); } .ds-seg button { min-height: 26px; padding: 3px 10px; border: 0; background: transparent; color: var(--ink-2, #5c5c5c); font: 500 12px var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-seg button + button { border-left: 1px solid var(--rule, #d9d9d9); } .ds-seg button.active { background: var(--ink, #111111); color: var(--sheet, #ffffff); } .ds-toggle { align-self: center; min-height: 28px; padding: 3px 8px; border: 1px solid var(--ink, #111111); background: var(--sheet, #ffffff); color: var(--ink, #111111); font: 400 13px var(--font-ui, 'Public Sans', sans-serif); cursor: pointer; } .ds-toggle:hover { background: var(--sheet-2, #f6f6f5); } .ds-toggle.active { background: var(--human-wash, #e8ecf6); } .ds-head button:focus-visible { outline: 2px solid var(--focus, #1f3a93); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Examiner's Desk",
+    "overview": "The plan is a specification under examination, and the screen is laid out like the paperwork of a patent office. A white sheet, black ink, hairline rules, and one blue that belongs to the examiner. Documents carry bracketed paragraph numbers in a left gutter ([0001]); comments are reference numerals pinned to those paragraphs on curved leader lines in the right margin; the session's steps read FIG. 1 to FIG. 5; and the single decision for the step sits in a ruled form box titled like an official notice (\"NOTICE OF ALLOWANCE\"). Approval is an allowance only the human issues.\n\nThe document owns the canvas. Chrome is one slim left column (wordmark, way back to the inbox, session identity, the FIG list, the notice) and a sticky canvas header; comments, the agent run and session details are drawers that open on the right and close again. The inbox is a queue ordered by who moves next (Waiting on you, Agent running, Recently done) with fixed columns, so rows restyle on state change rather than reflow.\n\nThe material is flat print: square corners, 1px rules, no shadows, no gradients, no transitions. State changes are instant swaps of fill and rule. Hierarchy comes from rule weight (hairline grey for separation, solid ink for structure, a 2px ink border for the notice) and from the three type families each doing one job.",
+    "keyCharacteristics": [
+      "White sheet, black ink, grey hairlines; one patent-office blue reserved for the human.",
+      "Three families with fixed jobs: sans for controls, serif for prose, typewriter for references.",
+      "Bracketed paragraph numbers and underlined reference numerals with curved leaders.",
+      "Square corners everywhere; the only round shape is the 8px run-status dot.",
+      "Flat, instant, no shadows, no motion.",
+      "Dark theme is the same sheet translated to a deep blue-black, not an inverted grey."
+    ],
+    "rules": [
+      { "name": "The Examiner's Blue Rule", "body": "Blue marks the human: their decision, their blockers, their selection, their place. Agent activity is drawn in ink (a running agent is an ink dot and an ink bar), never in blue.", "section": "colors" },
+      { "name": "The One Fill Rule", "body": "Each region has at most one blue-filled button, and it is the human's committing act there. Everything else is outlined in ink or ghost.", "section": "colors" },
+      { "name": "The Typewriter Rule", "body": "Anything that is a number, an identifier or a field value (revision, slug, repo, branch, line, count, paragraph) is set in Courier Prime. Words that describe are set in Public Sans.", "section": "typography" },
+      { "name": "The Serif Is For Reading Rule", "body": "Source Serif 4 appears only for document prose. Controls inside the document, headings and every piece of chrome stay in Public Sans.", "section": "typography" },
+      { "name": "The Paper Rule", "body": "No box-shadow, no gradient, no blur, no transition. A state change swaps a fill or a rule and happens instantly.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep blue for the human: one filled primary per region, blockers, selection, the current FIG, focus.",
+      "Do set every number, identifier and field value in Courier Prime, and every control in Public Sans.",
+      "Do let the document own the canvas: a 600px serif measure with the 76px number gutter and 92px reference margin.",
+      "Do separate with 1px hairlines and structure with 1px ink; reserve the 2px border for the notice.",
+      "Do put session facts and secondary tools in drawers that the human opens, not in permanent columns.",
+      "Do keep inbox rows on fixed columns so a state change restyles the row without moving it.",
+      "Do dock the notice below the document on phones so the human reads before approving."
+    ],
+    "donts": [
+      "Don't round a corner, add a shadow or gradient, or animate a state change.",
+      "Don't paint agent activity, navigation or progress in blue; the agent is drawn in ink.",
+      "Don't add a page title above the document's own H1, or label anything twice.",
+      "Don't use caps-tracked text except as the title bar of a form box, an inbox queue heading, or a tag.",
+      "Don't expand comment threads inside the prose; they live in the margin as numerals and open in the drawer.",
+      "Don't use the serif for controls or the typewriter face for prose."
+    ]
+  }
+}
