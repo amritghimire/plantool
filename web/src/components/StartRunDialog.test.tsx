@@ -76,3 +76,21 @@ it("selects an available provider when the saved default is unavailable", async 
   expect(screen.getByRole("button", { name: "Start plan" })).toBeEnabled();
   localStorage.removeItem("plantool.provider");
 });
+
+it("says why Start is disabled when no agent is ready and offers the prompt instead", async () => {
+  vi.spyOn(api, "providers").mockResolvedValue({ providers: [{ id: "claude", available: false, models: [] }] });
+  render(<StartRunDialog stage="plan" sessionKey="repo/x" runs={[]} onClose={() => {}} onStarted={() => {}} />);
+  const start = screen.getByRole("button", { name: "Start plan" });
+  expect(start).toHaveAccessibleDescription("Checking agents…");
+  await waitFor(() => expect(start).toHaveAccessibleDescription("No agent is ready. Copy the prompt for your terminal agent instead."));
+  expect(start).toBeDisabled();
+  expect(await screen.findByRole("button", { name: "Copy prompt for your terminal agent" })).toBeInTheDocument();
+});
+
+it("asks for the request before an assist run", async () => {
+  render(<StartRunDialog stage="assist" sessionKey="repo/x" runs={[]} onClose={() => {}} onStarted={() => {}} />);
+  const start = screen.getByRole("button", { name: "Start ask for help" });
+  await waitFor(() => expect(start).toHaveAccessibleDescription("Write your request first"));
+  fireEvent.change(screen.getByPlaceholderText("What should the agent do?"), { target: { value: "Explain" } });
+  expect(start).toBeEnabled();
+});

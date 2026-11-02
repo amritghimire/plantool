@@ -34,7 +34,7 @@ function CommitSection({ preview, message, onMessage, busy, error, onCommit, com
     <label>Commit message<textarea rows={4} value={message} onChange={(e) => onMessage(e.target.value)} disabled={busy} placeholder="Subject line, blank line, body" /></label>
     {preview.live_run && <div className="muted small">An agent run is live in this checkout. It may be editing files while you commit.</div>}
     {error && <div className="error" role="alert">{error}</div>}
-    {commit ? <CommitProgress job={commit} label="Committing…" onCancel={onCancelCommit} /> : <div className="composer-actions button-row dialog-actions"><span className="spacer" /><button className="btn primary" type="button" disabled={busy || !message.trim()} onClick={onCommit}>Commit all changes</button></div>}
+    {commit ? <CommitProgress job={commit} label="Committing…" onCancel={onCancelCommit} /> : <div className="composer-actions button-row dialog-actions">{!message.trim() && <span className="dialog-why" id="pr-commit-why">Write a commit message first</span>}<span className="spacer" /><button className="btn primary" type="button" disabled={busy || !message.trim()} aria-describedby={message.trim() ? undefined : "pr-commit-why"} onClick={onCommit}>Commit all changes</button></div>}
   </div>;
 }
 
@@ -96,7 +96,7 @@ export function PrDialog({ sessionKey, commit, onCancelCommit, onClose, onDraftA
     <label>Body<textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What changed and why" /></label>
     {!preview?.existing && <fieldset className="handoff-options"><legend>Create as</legend><label><input type="radio" name="pr-mode" checked={mode === "draft"} onChange={() => setMode("draft")} /> Draft</label><label><input type="radio" name="pr-mode" checked={mode === "ready"} onChange={() => setMode("ready")} /> Ready for review</label></fieldset>}
     {error && <div className="error" role="alert">{error}</div>}
-    <div className="composer-actions button-row dialog-actions"><span className="spacer" /><button className="btn ghost" disabled={busy} onClick={onClose} type="button">Cancel</button><button className="btn primary" disabled={busy || reason !== null} title={reason ?? undefined} onClick={() => void submit()} type="button">{preview?.existing ? "Link existing PR" : "Create PR"}</button></div>
-    {reason && <p className="muted small pr-reason">{reason}</p>}
+    <div className="composer-actions button-row dialog-actions"><span className="spacer" /><button className="btn ghost" disabled={busy} onClick={onClose} type="button">Cancel</button><button className="btn primary" disabled={busy || reason !== null} aria-describedby={reason ? "pr-why" : undefined} onClick={() => void submit()} type="button">{preview?.existing ? "Link existing PR" : "Create PR"}</button></div>
+    {reason && <p className="muted small pr-reason" id="pr-why">{reason}</p>}
   </Modal>;
 }

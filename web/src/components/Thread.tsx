@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { relTime } from "../lib/format";
@@ -13,16 +14,17 @@ export interface ThreadActions {
   remove: (c: Comment) => Promise<void>;
 }
 
-export function Thread({ root, replies, actions, highlighted }: { root: Comment; replies: Comment[]; actions: ThreadActions; highlighted?: boolean }) {
+export function Thread({ root, replies, actions, highlighted, compact = false }: { root: Comment; replies: Comment[]; actions: ThreadActions; highlighted?: boolean; compact?: boolean }) {
   const [replying, setReplying] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(root.resolved);
+  const [collapsedState, setCollapsed] = useState(root.resolved);
+  const collapsed = !compact && collapsedState;
   const all = [root, ...replies];
   const latestAgent = replies.filter((r) => r.kind === "agent").sort((a, b) => b.seq - a.seq)[0];
   const status = root.resolved ? "Resolved" : latestAgent?.proposes_resolve ? "Agent proposes resolution" : latestAgent ? "Agent replied · awaiting your review" : root.anchor.outdated ? "Outdated · unaddressed" : "Open";
   return (
-    <div id={`c-${root.id}`} className={`thread feedback-${root.type ?? "note"} ${root.resolved ? "resolved" : ""} ${highlighted ? "highlight" : ""}`}>
-      <div className="thread-head">
+    <div id={compact ? undefined : `c-${root.id}`} className={`thread feedback-${root.type ?? "note"} ${root.resolved ? "resolved" : ""} ${highlighted ? "highlight" : ""} ${compact ? "compact" : ""}`}>
+      {!compact && <div className="thread-head">
         <button className="link" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)} type="button">{status}</button>
         <span className={`feedback-badge feedback-${root.type ?? "note"}`}>{(root.type ?? "note").replace("-", " ")}</span>
         <span className={`kind kind-${root.kind}`}>{root.kind}</span>
@@ -33,8 +35,8 @@ export function Thread({ root, replies, actions, highlighted }: { root: Comment;
         </span>
         <span className="spacer" />
         <span className="muted">{all.length > 1 ? `${all.length} comments` : ""}</span>
-        <span className="muted">{collapsed ? "▸" : "▾"}</span>
-      </div>
+        {collapsed ? <CaretRightIcon size={12} aria-hidden="true" /> : <CaretDownIcon size={12} aria-hidden="true" />}
+      </div>}
       {!collapsed && (
         <>
           {all.map((c) => (

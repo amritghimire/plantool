@@ -97,8 +97,8 @@ async fn shutdown(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({ "ok": true }))
 }
 
-async fn spa(State(state): State<AppState>, uri: Uri) -> Response {
-    crate::assets::serve(&uri, &state.config.token)
+async fn spa(State(state): State<AppState>, uri: Uri, headers: HeaderMap) -> Response {
+    crate::assets::serve(&uri, &headers, &state.config.token)
 }
 
 pub fn router(state: AppState) -> Router {

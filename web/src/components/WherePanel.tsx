@@ -32,7 +32,8 @@ export function WherePanel({ view, onUpdated }: { view: SessionView; onUpdated: 
     <label>Pause rule <select value={pauseMode} onChange={(e) => setPauseMode(e.target.value as typeof pauseMode)}><option value="no-pauses">No pauses</option><option value="every-milestone">Every milestone</option><option value="plain-language">When this rule applies</option></select></label>
     {pauseMode === "plain-language" && <label>Checkpoint rule <textarea value={pauseText} onChange={(e) => setPauseText(e.target.value)} placeholder="Pause before changing a public API or when an assumption fails." /></label>}
     <p>Diff window: {view.session.base} → {base}…working tree. A live agent will stop and resume in the selected workspace.</p>
-    <button type="button" className="btn primary" disabled={busy || !base.trim() || !workspace.trim()} onClick={() => void apply()}>Apply context change</button>
+    {(!base.trim() || !workspace.trim()) && <p className="dialog-why" id="where-why">{!workspace.trim() ? "Enter a workspace path" : "Enter a base branch"}</p>}
+    <button type="button" className="btn primary" disabled={busy || !base.trim() || !workspace.trim()} aria-describedby={!base.trim() || !workspace.trim() ? "where-why" : undefined} onClick={() => void apply()}>Apply context change</button>
     <button type="button" className="btn ghost" onClick={() => void api.session(view.key).then(onUpdated).catch((e: Error) => setError(e.message))}>Re-check</button>
   </details>
     {error && <p className="error" role="alert">{error}</p>}

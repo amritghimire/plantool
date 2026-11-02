@@ -1,3 +1,18 @@
+
+    #[test]
+    fn set_checkbox_flips_only_the_target_line() {
+        let doc = "# Plan\n\n### Phase 1\n- [ ] one\n- [x] two\n";
+        assert_eq!(set_checkbox(doc, 4, true).unwrap(), "# Plan\n\n### Phase 1\n- [x] one\n- [x] two\n");
+        assert_eq!(set_checkbox(doc, 5, false).unwrap(), "# Plan\n\n### Phase 1\n- [ ] one\n- [ ] two\n");
+    }
+
+    #[test]
+    fn set_checkbox_refuses_non_tasks_and_fenced_lines() {
+        let doc = "- plain\n```\n- [ ] code\n```\n";
+        assert!(set_checkbox(doc, 1, true).is_none());
+        assert!(set_checkbox(doc, 3, true).is_none());
+        assert!(set_checkbox(doc, 99, true).is_none());
+    }
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,6 +115,25 @@ pub fn checkboxes(content: &str) -> Vec<Checkbox> {
         });
     }
     out
+}
+
+/// Ticks or unticks the checkbox on `line` (1-based). Returns `None` when that line is not a
+/// task checkbox outside a code fence.
+pub fn set_checkbox(content: &str, line: u32, checked: bool) -> Option<String> {
+    checkboxes(content).into_iter().find(|c| c.line == line)?;
+    let mut out = String::with_capacity(content.len());
+    for (i, raw) in content.split_inclusive('\n').enumerate() {
+        if i as u32 + 1 != line {
+            out.push_str(raw);
+            continue;
+        }
+        let open = raw.find('[')?;
+        let mark = if checked { 'x' } else { ' ' };
+        out.push_str(&raw[..open + 1]);
+        out.push(mark);
+        out.push_str(&raw[open + 2..]);
+    }
+    Some(out)
 }
 
 pub fn progress(content: &str) -> Vec<PhaseProgress> {

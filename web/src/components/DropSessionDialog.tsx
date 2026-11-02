@@ -23,7 +23,6 @@ export function DropSessionDialog({
       busy={busy}
       onClose={onClose}
     >
-      {" "}
       <h3 id="drop-session-title">Drop {view.key}?</h3>
       <p id="drop-session-description">
         This deletes the session's documents, comments, and run transcripts. You

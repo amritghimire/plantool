@@ -2,7 +2,7 @@
 
 Production frontend rendered in Chromium with illustrative API and WebSocket fixtures. No actual daemon, external difftool, or paid provider is invoked.
 
-Screenshots cover the plan, file review, agent activity, workspace inbox, new session, run configuration, deletion confirmation, and empty state. Responsive captures use 1440, 1024, 768, and 375 CSS pixel widths. Light and dark themes are included.
+Screenshots cover the plan with its Notice of Allowance, file review, the agent drawer, the inbox queue, new session, run configuration, milestone review, Done, deletion confirmation, and the first-run empty state. Responsive captures use 1440, 1024, 768, and 390 CSS pixel widths. Light and dark themes are included.
 
 Build and reproduce from the repository root:
 
@@ -18,4 +18,4 @@ The checked run found no serious or critical axe violations across eight surface
 
 Design rationale and skill sources: [DESIGN.md](../../../DESIGN.md).
 
-Latest captures include the [no-ai-slop](https://github.com/claudiusararu/unslop-ui-skill/blob/main/.claude/skills/no-ai-slop/SKILL.md) pass: self-hosted Plex typography, square document surfaces, shared small control corners, and 44px mobile controls. The browser check also opens the prompt disclosure to verify its independent copy control.
+Latest captures show the Patent Filing redesign: a slim spine with FIG. 1–5 and the Notice of Allowance, numbered specification paragraphs with reference numerals in the margin, and comments, agent runs and session details in drawers.

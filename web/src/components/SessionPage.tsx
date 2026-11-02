@@ -1,21 +1,7 @@
 import { cn } from "../lib/cn";
-import { ReviewPreferences } from "./ReviewPreferences";
-import { Modal } from "./Modal";
+import { ReviewPreferences, VIEW_MODES } from "./ReviewPreferences";
 import { useConfirmation } from "../lib/confirmation";
-import { AppRail } from "./AppRail";
-import { SessionInspector } from "./SessionInspector";
-import {
-  FolderSimple,
-  CaretRight,
-  FileText,
-  Code,
-  MagnifyingGlass,
-  ChatCircleText,
-} from "@phosphor-icons/react";
-import { DecisionSummary } from "./DecisionSummary";
-import { ArchivePanel } from "./ArchivePanel";
-import { WherePanel } from "./WherePanel";
-import { AwaySummary } from "./AwaySummary";
+import { XIcon } from "@phosphor-icons/react";
 import { PlanRevisions } from "./PlanRevisions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -26,7 +12,11 @@ import {
 } from "react-router-dom";
 import { api, authorName, setAuthorName } from "../api";
 import { useLive } from "../lib/live";
-import { tabForStage } from "../lib/stage";
+import { docKindOf, tabForStage } from "../lib/stage";
+import { isLive, openThreads, resumeStageFor, RUN_WORD } from "../lib/notice";
+import { groupQueue } from "../lib/inbox";
+import { documentOrder, referenceNumerals, stepThread } from "../lib/comments";
+import { useShortcuts } from "../lib/shortcuts";
 import type {
   Comment,
   DocKind,
@@ -38,17 +28,22 @@ import type {
 } from "../types";
 import { ChangesTab } from "./ChangesTab";
 import { DocView, type ViewMode } from "./DocView";
-import { RunPanel, type RunLine } from "./RunPanel";
-import { Sidebar, docKindOf } from "./Sidebar";
+import type { RunLine } from "./RunPanel";
 import { StartRunDialog, type RunStage } from "./StartRunDialog";
 import { PrDialog } from "./PrDialog";
 import { AskAgentDialog } from "./AskAgentDialog";
+import { SettingsDialog } from "./SettingsDialog";
 import type { ThreadActions } from "./Thread";
+import { SessionSpine } from "./SessionSpine";
+import { Drawer, drawerFrom, type DrawerId } from "./Drawer";
+import { DetailsDrawer } from "./DetailsDrawer";
+import { CommentsDrawer } from "./CommentsDrawer";
+import { AgentDrawer } from "./AgentDrawer";
+import { ShortcutsHelp } from "./ShortcutsHelp";
 
 type Toast = { id: number; text: string; kind?: "info" | "error" | "warn" };
 
 export function SessionPage() {
-  const [overviewOpen, setOverviewOpen] = useState(false);
   const { confirm, dialog: confirmation } = useConfirmation();
   const { repo, slug } = useParams();
   const key = `${repo}/${slug}`;
@@ -63,6 +58,7 @@ export function SessionPage() {
   const [prompts, setPrompts] = useState<Partial<Record<DocKind, string>>>({});
   const [reviewPrompt, setReviewPrompt] = useState<string | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
+  const numerals = useMemo(() => referenceNumerals(comments), [comments]);
   const [tab, setTabState] = useState<string>(params.get("tab") ?? "plan");
   const [mode, setModeState] = useState<ViewMode>(() => {
     const m = localStorage.getItem("plantool.mode");
@@ -72,7 +68,6 @@ export function SessionPage() {
     setModeState(m);
     localStorage.setItem("plantool.mode", m);
   };
-  const [showResolved, setShowResolved] = useState(false);
   const [target, setTarget] = useState<{
     line: number;
     nonce: number;
@@ -88,6 +83,7 @@ export function SessionPage() {
     initialPrompt?: string;
   } | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
   const [selectedRun, setSelectedRun] = useState<string | null>(
     params.get("run"),
@@ -96,6 +92,37 @@ export function SessionPage() {
   const [changesNonce, setChangesNonce] = useState(0);
   const [author, setAuthor] = useState(authorName());
   const toastId = useRef(0);
+  const headObserver = useRef<ResizeObserver | null>(null);
+  const observeHead = useCallback((el: HTMLDivElement | null) => {
+    headObserver.current?.disconnect();
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const sync = () =>
+      el
+        .closest<HTMLElement>(".session")
+        ?.style.setProperty("--canvas-head-h", `${el.offsetHeight}px`);
+    headObserver.current = new ResizeObserver(sync);
+    headObserver.current.observe(el);
+    sync();
+  }, []);
+  const [waiting, setWaiting] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api
+        .sessions()
+        .then((all) => {
+          if (!cancelled) setWaiting(groupQueue(all).waiting.length);
+        })
+        .catch(() => {
+          if (!cancelled) setWaiting(null);
+        });
+    void load();
+    window.addEventListener("focus", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", load);
+    };
+  }, []);
   const viewRef = useRef<SessionView | null>(null);
   useEffect(() => {
     viewRef.current = view;
@@ -113,10 +140,45 @@ export function SessionPage() {
 
   const setTab = (t: string) => {
     setTabState(t);
-    const next = new URLSearchParams(params);
-    next.set("tab", t);
-    setParams(next, { replace: true });
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("tab", t);
+        return next;
+      },
+      { replace: true },
+    );
   };
+
+  const drawer = drawerFrom(params.get("drawer"));
+  const drawerRef = useRef<DrawerId | null>(drawer);
+  drawerRef.current = drawer;
+  const setDrawer = useCallback(
+    (d: DrawerId | null) => {
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (d) next.set("drawer", d);
+          else next.delete("drawer");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
+  const toggleDrawer = (d: DrawerId) => setDrawer(drawer === d ? null : d);
+  const closeDrawer = useCallback(() => setDrawer(null), [setDrawer]);
+  useEffect(() => {
+    if (params.get("run") && !drawer) setDrawer("agent");
+  }, []);
+  const showRun = useCallback(
+    (id: string, force = false) => {
+      setSelectedRun(id);
+      if (force || drawerRef.current === null) setDrawer("agent");
+    },
+    [setDrawer],
+  );
 
   const stage = view?.state.stage ?? null;
   const seenStage = useRef<Stage | null>(null);
@@ -317,7 +379,7 @@ export function SessionPage() {
         case "run-ended": {
           const prev = viewRef.current?.runs.find((r) => r.id === e.run.id);
           setView((v) => (v ? { ...v, runs: upsertRun(v.runs, e.run) } : v));
-          if (e.type === "run-started") setSelectedRun(e.run.id);
+          if (e.type === "run-started") showRun(e.run.id);
           if (
             e.type === "run-updated" &&
             prev &&
@@ -387,7 +449,7 @@ export function SessionPage() {
           break;
       }
     },
-    [key, loadDoc, reloadPrompts, loadReviewPrompt, toast],
+    [key, loadDoc, reloadPrompts, loadReviewPrompt, toast, showRun],
   );
 
   const { connected } = useLive(view ? key : null, onEvent, loadAll);
@@ -455,45 +517,6 @@ export function SessionPage() {
     }
   };
 
-  const onHandoff = () => {
-    if (!view) return;
-    const active = [...view.runs].sort((a, b) =>
-      b.started_at.localeCompare(a.started_at),
-    )[0];
-    if (view.handoff?.label === "Recovery needed" && active)
-      setDialog({
-        stage:
-          active.task === "assist"
-            ? "assist"
-            : active.task === "draft-pr"
-              ? "draft-pr"
-              : active.task === "critique"
-                ? "critique"
-                : active.task === "research"
-                  ? "research"
-                  : active.task === "implement"
-                    ? "implement"
-                    : "plan",
-        resumeId: active.id,
-      });
-    else if (
-      active &&
-      ["Agent working", "Agent needs an answer"].includes(
-        view.handoff?.label ?? "",
-      )
-    )
-      setSelectedRun(active.id);
-    else if (view.handoff?.label === "Owner choosing next step")
-      setDialog({
-        stage: ["new", "researching"].includes(view.state.stage)
-          ? "research"
-          : ["approved", "implementing"].includes(view.state.stage)
-            ? "implement"
-            : "plan",
-      });
-    else setTab(tabForStage(view.state.stage));
-  };
-
   const onBrief = async (brief: string | null) => {
     setBusy(true);
     try {
@@ -551,7 +574,7 @@ export function SessionPage() {
       await api.runInput(key, milestoneRun.id, {
         text: "I reviewed the completed milestone. Continue with exactly the next unchecked plan task, then pause for review again. If no tasks remain, run the final checks and move to implementation-review.",
       });
-      setSelectedRun(milestoneRun.id);
+      showRun(milestoneRun.id);
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
@@ -575,7 +598,7 @@ export function SessionPage() {
         commit,
         message,
       );
-      setSelectedRun(milestoneRun.id);
+      showRun(milestoneRun.id);
       setChangesNonce((n) => n + 1);
       toast(
         r.committed
@@ -616,10 +639,34 @@ export function SessionPage() {
 
   const onJump = (c: Comment) => {
     setTab(c.anchor.code ? "changes" : c.doc);
-    if (c.resolved) setShowResolved(true);
     setHighlight(c.id);
     setTarget({ line: c.anchor.line, nonce: Date.now() });
+    setDrawer("comments");
   };
+
+  const onOpenThread = (c: Comment) => {
+    setHighlight(c.id);
+    setDrawer("comments");
+  };
+
+  const stepComment = (dir: 1 | -1) => {
+    const k = docKindOf(tab);
+    const scoped = comments.filter(
+      (c) => !c.parent && !c.resolved && (k ? c.doc === k && !c.anchor.code : !!c.anchor.code),
+    );
+    const next = stepThread(documentOrder(scoped), highlight, dir);
+    if (next) onJump(next);
+  };
+
+  useShortcuts({
+    n: () => stepComment(1),
+    p: () => stepComment(-1),
+    c: () => toggleDrawer("comments"),
+    "g i": () => nav("/"),
+    "1": () => setTab("research"),
+    "2": () => setTab("plan"),
+    "3": () => setTab("changes"),
+  });
 
   const onOpenChanges = () => {
     setTab("changes");
@@ -649,191 +696,128 @@ export function SessionPage() {
   const run: Run | null = selectedRun
     ? (view.runs.find((r) => r.id === selectedRun) ?? null)
     : null;
+  const liveRun =
+    [...view.runs]
+      .filter(isLive)
+      .sort((a, b) => b.started_at.localeCompare(a.started_at))[0] ?? null;
+  const latestRun =
+    [...view.runs].sort((a, b) => b.started_at.localeCompare(a.started_at))[0] ??
+    null;
+  const agentState = liveRun
+    ? RUN_WORD[liveRun.status]
+    : latestRun
+      ? RUN_WORD[latestRun.status]
+      : "no runs";
+  const openCount = openThreads(comments).length;
+  const startRun = (
+    stage: RunStage,
+    request?: {
+      resumeId?: string;
+      initialMode?: "step-by-step";
+      initialPrompt?: string;
+    },
+  ) => setDialog({ stage, ...request });
+  const onRefreshPr = () =>
+    void api
+      .refreshPr(key)
+      .then((result) =>
+        setView((current) =>
+          current ? { ...current, session: result.session } : current,
+        ),
+      )
+      .catch((e: Error) => toast(e.message, "error"));
 
   return (
-    <div className={cn("session", run && "with-run")}>
-      <AppRail />
-      <header className="topbar workspace-topbar">
-        <Link to="/" className="workspace-home">
-          Workspace
-        </Link>
-        <CaretRight size={14} aria-hidden="true" />
-        <span className="workspace-repository">
-          <FolderSimple size={17} aria-hidden="true" />
-          {view.session.repo_slug}
-        </span>
-        <CaretRight size={14} aria-hidden="true" />
-        <span className="crumb session-crumb" title={view.session.slug}>
-          {view.session.title}
-        </span>
-        <span className="spacer" />
-        <span
-          className={`connection-status ${connected ? "connected" : "disconnected"}`}
-        >
-          <span />
-          {connected ? "Local workspace" : "Reconnecting"}
-        </span>
-        <button
-          className="btn small"
-          type="button"
-          onClick={() => setAskOpen(true)}
-        >
-          <ChatCircleText size={16} aria-hidden="true" /> Ask agent
-        </button>
-      </header>
-      <Sidebar
-        onHandoff={onHandoff}
-        contextPanel={
-          <>
-            <ArchivePanel sessionKey={key} repo={view.session.repo.root} />
-            <WherePanel
-              key={`${key}:${view.session.base}:${view.session.worktree}:${view.session.difftool}:${view.workspace_branch}:${JSON.stringify(view.session.pause_rule)}`}
-              view={view}
-              onUpdated={setView}
-            />
-          </>
-        }
+    <div className={cn("session", drawer && "with-drawer")}>
+      <SessionSpine
         view={view}
         comments={comments}
         activeTab={tab}
-        onTab={setTab}
+        planDoc={docs.plan ?? null}
+        prompt={prompts.research ?? null}
+        busy={busy}
+        onStartRun={startRun}
         onStage={onStage}
-        onBrief={onBrief}
-        onDelete={onDelete}
         onJump={onJump}
-        onStartRun={(s, resumeId) => setDialog({ stage: s, resumeId })}
+        onNavigate={(line) => {
+          setTab("plan");
+          setTarget({ line, nonce: Date.now() });
+        }}
         onAskAgent={() => setAskOpen(true)}
         onPr={() => setPrOpen(true)}
-        onRefreshPr={() =>
-          void api
-            .refreshPr(key)
-            .then((result) =>
-              setView((current) =>
-                current ? { ...current, session: result.session } : current,
-              ),
-            )
-            .catch((e: Error) => toast(e.message, "error"))
-        }
+        onOpenRun={(id) => showRun(id, true)}
+        onOpenChanges={onOpenChanges}
         onContinueMilestone={(r) => void onContinueMilestone(r)}
         onApproveMilestone={(r, commit, message) =>
           void onApproveMilestone(r, commit, message)
         }
         onCancelCommit={onCancelCommit}
-        onOpenChanges={onOpenChanges}
-        onSelectRun={setSelectedRun}
-        onRemoveRun={onRemoveRun}
-        onWorkspace={(session) =>
-          setView((current) => (current ? { ...current, session } : current))
-        }
-        actions={actions}
-        reviewPrompt={reviewPrompt}
-        onSendToRun={onSendToRun}
-        selectedRun={selectedRun}
-        busy={busy}
+        onDetails={() => setDrawer("details")}
+        onSettings={() => setSettingsOpen(true)}
+        onTab={setTab}
+        waiting={waiting}
       />
-      <main className="content" id="session-content">
-        <nav className="workspace-tabs" aria-label="Session documents">
-          <button
-            type="button"
-            className={cn(tab === "research" && "active")}
-            aria-current={tab === "research" ? "page" : undefined}
-            onClick={() => setTab("research")}
-          >
-            <MagnifyingGlass size={17} aria-hidden="true" /> Research
-          </button>
-          <button
-            type="button"
-            className={cn(tab === "plan" && "active")}
-            aria-current={tab === "plan" ? "page" : undefined}
-            onClick={() => setTab("plan")}
-          >
-            <FileText size={17} aria-hidden="true" /> Plan
-          </button>
-          <button
-            type="button"
-            className={cn(tab === "changes" && "active")}
-            aria-current={tab === "changes" ? "page" : undefined}
-            onClick={() => setTab("changes")}
-          >
-            <Code size={17} aria-hidden="true" /> Changes
-          </button>
-        </nav>
-        <header className="workspace-intro">
-          <div>
-            <h1>
-              {tab === "changes"
-                ? "Changes"
-                : tab === "research"
-                  ? "Research"
-                  : "Implementation plan"}
-            </h1>
-            <p>
-              {tab === "changes"
-                ? "Review the code against the plan, then decide what ships."
-                : tab === "research"
-                  ? "Understand the problem before choosing an approach."
-                  : "A shared approach. Your approval before implementation."}
-            </p>
-          </div>
-          <span className={`stage-pill stage-${view.state.stage}`}>
-            {view.state.stage === "plan-review"
-              ? "Awaiting approval"
-              : view.state.stage === "implementation-review"
-                ? "Ready for review"
-                : view.state.stage === "done"
-                  ? "Completed"
-                  : (view.step ?? view.state.stage)}
-          </span>
-        </header>
-        <div className="workspace-utility">
-          <span className="artifact-name">
-            <FileText size={15} aria-hidden="true" />
-            {kind ? `${kind}.md` : "Working tree"}
-          </span>
+      <main className="canvas" id="session-content">
+        <div className="canvas-head" ref={observeHead}>
+          <nav className="canvas-tabs" aria-label="Session documents">
+            {(["research", "plan", "changes"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={cn(tab === t && "active")}
+                aria-current={tab === t ? "page" : undefined}
+                onClick={() => setTab(t)}
+              >
+                {t === "research" ? "Research" : t === "plan" ? "Plan" : "Changes"}
+              </button>
+            ))}
+          </nav>
           <span className="spacer" />
           {kind && (
             <div className="seg" aria-label="Document display">
-              <button
-                type="button"
-                className={mode === "rendered" ? "active" : ""}
-                aria-pressed={mode === "rendered"}
-                onClick={() => setMode("rendered")}
-              >
-                Document
-              </button>
-              <button
-                type="button"
-                className={mode === "slides" ? "active" : ""}
-                aria-pressed={mode === "slides"}
-                onClick={() => setMode("slides")}
-              >
-                Slides
-              </button>
-              <button
-                type="button"
-                className={mode === "source" ? "active" : ""}
-                aria-pressed={mode === "source"}
-                onClick={() => setMode("source")}
-              >
-                Source
-              </button>
+              {VIEW_MODES.map(([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={mode === m ? "active" : ""}
+                  aria-pressed={mode === m}
+                  onClick={() => setMode(m)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           )}
           <button
-            className="btn ghost small overview-toggle"
             type="button"
-            onClick={() => setOverviewOpen(true)}
+            className={cn("drawer-toggle", drawer === "comments" && "active")}
+            aria-expanded={drawer === "comments"}
+            aria-controls="drawer-comments"
+            onClick={() => toggleDrawer("comments")}
           >
-            Session overview
+            Comments <span className="num">{openCount}</span>
+          </button>
+          <button
+            type="button"
+            className={cn("drawer-toggle", drawer === "agent" && "active")}
+            aria-expanded={drawer === "agent"}
+            aria-controls="drawer-agent"
+            onClick={() => toggleDrawer("agent")}
+          >
+            <span
+              className={cn("run-status", (liveRun ?? latestRun)?.status)}
+              aria-hidden="true"
+            />
+            Agent<span className="toggle-state"> · {agentState}</span>
           </button>
           <ReviewPreferences
+            mode={kind ? mode : undefined}
+            onMode={setMode}
             author={author}
             onAuthor={(name) => {
               setAuthor(name);
               setAuthorName(name);
             }}
-            showResolved={showResolved}
-            onResolved={setShowResolved}
           />
         </div>
         <div className={`document-notices mode-${mode}`}>
@@ -848,6 +832,9 @@ export function SessionPage() {
           )}
         </div>
 
+        {!(kind && mode === "rendered" && docs[kind]?.headings.some((h) => h.level === 1)) && (
+          <h1 className="sr-only">{view.session.title}</h1>
+        )}
         <div className="document-surface">
           {kind ? (
             <>
@@ -856,7 +843,6 @@ export function SessionPage() {
                   sessionKey={key}
                   sha={docs.plan.sha}
                   content={docs.plan.content}
-                  onAccept={() => void onStage("approved")}
                 />
               )}
               <DocView
@@ -871,12 +857,27 @@ export function SessionPage() {
                 comments={comments.filter(
                   (c) => c.doc === kind && !c.anchor.code,
                 )}
-                actions={actions}
                 onAdd={onAdd}
                 mode={mode}
                 target={target}
                 highlightComment={highlight}
-                showResolved={showResolved}
+                onOpenThread={onOpenThread}
+                onToggleTask={
+                  kind === "plan" && mode === "rendered" && docs.plan
+                    ? async (line, checked) => {
+                        const sha = docs.plan?.sha;
+                        if (!sha) return;
+                        try {
+                          await api.setTask(key, line, checked, sha);
+                          await loadDoc("plan");
+                        } catch (e) {
+                          toast((e as Error).message, "error");
+                          await loadDoc("plan");
+                        }
+                      }
+                    : undefined
+                }
+                numerals={numerals}
               />
             </>
           ) : (
@@ -895,66 +896,55 @@ export function SessionPage() {
           )}
         </div>
       </main>
-      {!run && (
-        <SessionInspector
-          view={view}
-          reviewPanel={
-            kind === "plan" &&
-            docs.plan && (
-              <DecisionSummary
-                doc={docs.plan}
-                onNavigate={(line) => setTarget({ line, nonce: Date.now() })}
-                onCritique={(prompt) =>
-                  setDialog({ stage: "critique", initialPrompt: prompt })
-                }
-              />
-            )
-          }
-          activityPanel={<AwaySummary sessionKey={key} state={view.state} />}
-        />
-      )}
-      {run && (
-        <RunPanel
-          sessionKey={key}
-          run={run}
-          lines={runLines[run.id] ?? []}
-          onClose={() => setSelectedRun(null)}
-          onResume={(r) =>
-            setDialog({
-              stage:
-                r.task === "assist"
-                  ? "assist"
-                  : r.task === "draft-pr"
-                    ? "draft-pr"
-                    : r.stage === "researching"
-                      ? "research"
-                      : r.stage === "implementing" ||
-                          r.stage === "implementation-review"
-                        ? "implement"
-                        : "plan",
-              resumeId: r.id,
-            })
-          }
-        />
-      )}
-      {overviewOpen && (
-        <Modal title="Session overview" onClose={() => setOverviewOpen(false)}>
-          <h3>Session overview</h3>
-          <SessionInspector
-            view={view}
-            reviewPanel={null}
-            activityPanel={<AwaySummary sessionKey={key} state={view.state} />}
-          />
-          <button
-            className="btn"
-            type="button"
-            onClick={() => setOverviewOpen(false)}
-          >
-            Close overview
-          </button>
-        </Modal>
+      {drawer && (
+        <Drawer id={drawer} onClose={closeDrawer} bare={drawer === "agent"}>
+          {drawer === "comments" && (
+            <CommentsDrawer
+              sessionKey={key}
+              comments={comments}
+              docs={docs}
+              author={author}
+              selected={highlight}
+              onSelect={onJump}
+              liveRun={liveRun}
+              reviewPrompt={reviewPrompt}
+              onSendToRun={onSendToRun}
+              actions={actions}
+              busy={busy}
+              numerals={numerals}
+            />
+          )}
+          {drawer === "agent" && (
+            <AgentDrawer
+              sessionKey={key}
+              runs={view.runs}
+              selectedRun={run?.id ?? null}
+              lines={run ? (runLines[run.id] ?? []) : []}
+              onSelectRun={setSelectedRun}
+              onRemoveRun={onRemoveRun}
+              onResume={(r) => startRun(resumeStageFor(r), { resumeId: r.id })}
+              onClose={closeDrawer}
+            />
+          )}
+          {drawer === "details" && (
+            <DetailsDrawer
+              view={view}
+              busy={busy}
+              onBrief={onBrief}
+              onStage={onStage}
+              onStartRun={(s) => startRun(s)}
+              onRefreshPr={onRefreshPr}
+              onUpdated={setView}
+              onWorkspace={(session) =>
+                setView((current) => (current ? { ...current, session } : current))
+              }
+              onDelete={onDelete}
+            />
+          )}
+        </Drawer>
       )}
       {confirmation}
+      <ShortcutsHelp />
       {dialog && (
         <StartRunDialog
           stage={dialog.stage}
@@ -964,7 +954,7 @@ export function SessionPage() {
           initialMode={dialog.initialMode}
           initialPrompt={dialog.initialPrompt}
           onClose={() => setDialog(null)}
-          onStarted={(id) => setSelectedRun(id)}
+          onStarted={(id) => showRun(id, true)}
         />
       )}
       {prOpen && (
@@ -987,9 +977,10 @@ export function SessionPage() {
           sessionKey={key}
           runs={view.runs}
           onClose={() => setAskOpen(false)}
-          onStarted={(id) => setSelectedRun(id)}
+          onStarted={(id) => showRun(id, true)}
         />
       )}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       <div className="toasts">
         {toasts.map((t) => (
           <div
@@ -1008,7 +999,7 @@ export function SessionPage() {
                   )
                 }
               >
-                ×
+                <XIcon size={14} aria-hidden="true" />
               </button>
             )}
           </div>
