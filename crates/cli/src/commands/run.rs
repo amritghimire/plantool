@@ -7,7 +7,7 @@ pub struct Args {
     /// Build one named plan phase.
     #[arg(long)]
     pub milestone: Option<String>,
-    /// Agent provider: claude, codex, copilot, ollama or opencode (default: claude, or PLANTOOL_PROVIDER).
+    /// Agent provider: claude, codex, copilot, ollama, opencode or t3 (default: claude, or PLANTOOL_PROVIDER).
     #[arg(long)]
     pub provider: Option<String>,
     #[arg(long)]
