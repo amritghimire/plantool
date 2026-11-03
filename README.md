@@ -143,6 +143,13 @@ plantool session stage --session <ref> --set planning
 | `PLANTOOL_LOG` | daemon log filter | `info` |
 
 Hosted-run prompts can be overridden per stage in `~/.plantool/prompts/{research,plan,implement}.md`.
+
+To add to a step's prompt instead of replacing it, write `~/.plantool/prompts/<step>.extra.md`
+(`research`, `plan`, `implement`, `review`, `critique`, `draft-pr`). Plantool appends it to that
+step's built-in prompt. The recommended set in [`prompts/extras/`](prompts/extras) tells agents
+which installed skills to use at each step (ponytail, poteto-mode, tdd, interrogate and others).
+It is optional: download it with `plantool settings prompt-extras --install` (add `--force` to
+replace your own edits, `--ref <tag>` to pin a version) or from Settings in the browser.
 Placeholders: `{slug}`, `{title}`, `{key}`, `{checkout}`, `{session_dir}`, `{research_path}`,
 `{plan_path}`, `{extra}`.
 

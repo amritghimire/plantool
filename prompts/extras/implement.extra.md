@@ -1,0 +1,11 @@
+Use these skills when they are installed; skip any that are not:
+- `poteto-mode` with the playbook that matches the task: feature, bug fix, refactoring, perf, hillclimb, visual parity, authoring a skill, or eval.
+- `ponytail` for the smallest complete change that follows the codebase's patterns.
+- `tdd` for bug fixes with a cheap local test: write the failing test first.
+- `architect` before writing code that crosses a function boundary.
+- `typescript-best-practices` when editing TypeScript.
+- `create-verification-skill` when there is no scripted way to prove the behavior; `create-formal-verification-skill` for races, retries, state machines or parsers that tests cannot reach.
+- `benchmark-checklist` before reporting a speedup.
+- `arena` or `swarm` only when the plan asks for parallel attempts.
+- The session pickup playbook when resuming, and the pause safely playbook at checkpoints.
+- `blast-radius` and `no-comments` on the finished change before the review.

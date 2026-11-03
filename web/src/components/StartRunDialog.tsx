@@ -11,7 +11,7 @@ const STAGE_TEXT: Record<RunStage, { label: string; hint: string }> = {
   research: { label: "Research", hint: "The agent reads the repository and writes research.md for review." },
   plan: { label: "Plan", hint: "The agent turns the brief and research into plan.md for your approval." },
   implement: { label: "Implement", hint: "The agent follows the approved plan and updates the code." },
-  critique: { label: "Review document", hint: "The agent reads the current document and leaves comments for you to review." },
+  critique: { label: "Review with agent", hint: "The agent reviews the current document, or the code changes once implementation has started, and leaves comments for you." },
   assist: { label: "Ask for help", hint: "The agent answers your request without moving the session to another stage." },
   "draft-pr": { label: "Draft PR", hint: "The agent prepares PR text from the implementation." },
 };

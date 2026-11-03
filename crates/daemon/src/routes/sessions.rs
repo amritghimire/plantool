@@ -375,6 +375,7 @@ async fn prompt(
     };
     let text = if let Some(r) = reviewing.filter(|r| r.milestone_pending) {
         crate::prompts::render_milestone_review(
+            &state.config.home,
             &s.session(),
             &s.store.dir,
             r.milestone_review.as_ref(),

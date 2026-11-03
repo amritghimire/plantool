@@ -155,6 +155,28 @@ async fn set_difftool(
     Ok(get_difftool(State(state)).await)
 }
 
+async fn get_prompt_extras(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(crate::prompts::extras_status(&state.config.home))
+}
+
+#[derive(Deserialize)]
+struct PromptExtrasBody {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn install_prompt_extras(
+    State(state): State<AppState>,
+    Json(body): Json<PromptExtrasBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let home = state.config.home.clone();
+    tokio::task::spawn_blocking(move || crate::prompts::install_extras(&home, "main", body.force))
+        .await
+        .map_err(anyhow::Error::from)?
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -162,4 +184,8 @@ pub fn routes() -> Router<AppState> {
             get(get_worktree_dir).post(set_worktree_dir),
         )
         .route("/settings/difftool", get(get_difftool).post(set_difftool))
+        .route(
+            "/settings/prompt-extras",
+            get(get_prompt_extras).post(install_prompt_extras),
+        )
 }

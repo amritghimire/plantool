@@ -77,11 +77,118 @@ End with one comment on the title line: the verdict (ready, needs updates, or ne
 {brief}
 {extra}"#;
 
+pub const CRITIQUE_CODE: &str = r#"Critically review the code changes for plantool session `{key}`: {title}
+
+Run `plantool skill` and follow it. You are the reviewer here, not the author: do not edit code, the plan, or the session stage.
+Run `plantool changes {key} --scope all --no-open --json` to open or refresh the change review and note its difftool review id.
+Read the plan at `{plan_path}`, then the diff in `{checkout}` against `{base}`. Read the code around each change, not only the diff:
+callers, tests, and the files the change touches.
+
+If the ponytail-review, interrogate, or code-review skill is installed, use it for this review. Otherwise look for: logic that is
+wrong on real inputs or edge cases; lost data, leaked secrets, or missing checks at trust boundaries; risky code with no test;
+slow paths under real load; plan tasks ticked but not done, or done differently; work the plan did not ask for; and code that
+could be deleted or reuse what the codebase already has. Run the project's checks if they are cheap.
+
+Post each finding as an inline comment on the line it is about, all in one batch
+(`difftool review comment add --review <id> --input -` with `{"comments":[{"filePath":"<path>","match":"<line text>","type":"issue|suggestion","body":"…"}]}`).
+If difftool is not available, post them as plan comments with `plantool session comment apply --session {key} --input -`.
+Each body: the problem, a concrete input or state that triggers it, and the fix; one finding per comment; skip praise and style nits.
+End with a short summary: the verdict (ready to merge, needs fixes, or needs rework) and the two or three findings that matter most.
+{brief}
+{extra}"#;
+
 pub const RESUME: &str = r#"Continue plantool session `{key}` ({title}) where you left off; the run was restarted and you keep your context.
 
 Run `plantool skill` if it is no longer in your context. Check the current stage with `plantool session get --session {key} --json`; it may have changed while this run was stopped. Read new human comments with `plantool session comment list --session {key} --kind human --unresolved --context --json`. Answer questions on their threads and leave them open; for requested changes, update the relevant document or code, reply with what changed, and resolve the thread. Continue the unfinished work for the current stage, following its stage skill. Do not edit the plan during implementation unless the plan needs correction, and do not start a new task before milestone approval.
 {brief}
 {extra}"#;
+
+/// Steps that read an optional `~/.plantool/prompts/<step>.extra.md`, appended to the built-in prompt.
+pub const EXTRA_STAGES: [&str; 6] = [
+    "research",
+    "plan",
+    "implement",
+    "critique",
+    "review",
+    "draft-pr",
+];
+
+const EXTRAS_REPOSITORY: &str = match option_env!("PLANTOOL_RELEASE_REPOSITORY") {
+    Some(r) => r,
+    None => "amritghimire/plantool",
+};
+
+fn extra_path(home: &Path, stage: &str) -> std::path::PathBuf {
+    home.join("prompts").join(format!("{stage}.extra.md"))
+}
+
+fn with_extra(home: &Path, stage: &str, prompt: String) -> String {
+    match std::fs::read_to_string(extra_path(home, stage)) {
+        Ok(extra) if !extra.trim().is_empty() => {
+            format!(
+                "{prompt}\n\nStanding instructions from the user:\n{}",
+                extra.trim()
+            )
+        }
+        _ => prompt,
+    }
+}
+
+pub fn extras_status(home: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "dir": home.join("prompts"),
+        "source": format!("https://github.com/{EXTRAS_REPOSITORY}/tree/main/prompts/extras"),
+        "files": EXTRA_STAGES.iter().map(|stage| serde_json::json!({
+            "stage": stage,
+            "installed": extra_path(home, stage).is_file(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// Download the recommended extras from the plantool repository, the way `plantool update` fetches releases.
+pub fn install_extras(
+    home: &Path,
+    git_ref: &str,
+    force: bool,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::Context;
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(format!("plantool/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let mut files = Vec::new();
+    for stage in EXTRA_STAGES {
+        let url = format!("https://raw.githubusercontent.com/{EXTRAS_REPOSITORY}/{git_ref}/prompts/extras/{stage}.extra.md");
+        let text = client
+            .get(&url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.text())
+            .with_context(|| format!("could not download {url}"))?;
+        files.push((stage, text));
+    }
+    write_extras(home, &files, force)
+}
+
+// Download everything before writing anything, so a failed download leaves no half-installed set.
+fn write_extras(
+    home: &Path,
+    files: &[(&str, String)],
+    force: bool,
+) -> anyhow::Result<serde_json::Value> {
+    std::fs::create_dir_all(home.join("prompts"))?;
+    let (mut installed, mut kept) = (Vec::new(), Vec::new());
+    for (stage, text) in files {
+        let path = extra_path(home, stage);
+        if path.exists() && !force {
+            kept.push(stage.to_string());
+        } else {
+            std::fs::write(&path, text)?;
+            installed.push(stage.to_string());
+        }
+    }
+    Ok(serde_json::json!({ "dir": home.join("prompts"), "installed": installed, "kept": kept }))
+}
 
 pub fn template(home: &Path, stage: &str) -> String {
     let override_path = home.join("prompts").join(format!("{stage}.md"));
@@ -97,6 +204,7 @@ pub fn template(home: &Path, stage: &str) -> String {
         "review" => REVIEW.to_string(),
         "resume" => RESUME.to_string(),
         "critique" => CRITIQUE.to_string(),
+        "critique-code" => CRITIQUE_CODE.to_string(),
         "assist" => ASSIST.to_string(),
         "draft-pr" => DRAFT_PR.to_string(),
         _ => String::new(),
@@ -148,7 +256,9 @@ pub fn render_at(
     extra: Option<&str>,
     current: plantool_core::Stage,
 ) -> String {
-    let t = template(home, stage);
+    let code_review =
+        stage == "critique" && current.index() >= plantool_core::Stage::Implementing.index();
+    let t = template(home, if code_review { "critique-code" } else { stage });
     let brief = session
         .brief
         .as_deref()
@@ -194,6 +304,21 @@ pub fn render_at(
             .replace("{brief}", &brief)
             .replace("{extra}", &extra),
     );
+    let extra_stage = match (stage, current) {
+        (
+            "resume",
+            plantool_core::Stage::New
+            | plantool_core::Stage::Researching
+            | plantool_core::Stage::ResearchReview,
+        ) => "research",
+        ("resume", plantool_core::Stage::Planning | plantool_core::Stage::PlanReview) => "plan",
+        ("resume", plantool_core::Stage::ImplementationReview | plantool_core::Stage::Done) => {
+            "review"
+        }
+        ("resume", _) => "implement",
+        (other, _) => other,
+    };
+    let rendered = with_extra(home, extra_stage, rendered);
     format!("{rendered}\n\n{}", context_prompt(session))
 }
 
@@ -217,6 +342,7 @@ pub fn render_run(
 }
 
 pub fn render_milestone_review(
+    home: &Path,
     session: &Session,
     session_dir: &Path,
     review: Option<&ChangeReview>,
@@ -234,6 +360,7 @@ pub fn render_milestone_review(
             "\n\nAdditional instructions from the user:\n{extra}"
         ));
     }
+    let mut prompt = with_extra(home, "implement", prompt);
     prompt.push_str(&format!("\n\n{}", context_prompt(session)));
     prompt
 }
@@ -370,6 +497,67 @@ mod tests {
         assert!(p.contains("/d/plan.md"), "{p}");
         assert!(p.contains("comment apply --session repo/fix-it"), "{p}");
         assert!(p.contains("do not edit the document"), "{p}");
+    }
+
+    #[test]
+    fn critique_after_implementation_reviews_the_code() {
+        let p = render_at(
+            Path::new("/nonexistent"),
+            "critique",
+            &session(None),
+            Path::new("/d"),
+            None,
+            Stage::ImplementationReview,
+        );
+        assert!(
+            p.contains("plantool changes repo/fix-it --scope all"),
+            "{p}"
+        );
+        assert!(p.contains("difftool review comment add --review"), "{p}");
+        assert!(p.contains("do not edit code"), "{p}");
+    }
+
+    #[test]
+    fn extras_are_appended_and_installs_keep_user_edits() {
+        let home = tempfile::tempdir().unwrap();
+        let plain = render(home.path(), "plan", &session(None), Path::new("/d"), None);
+        assert!(!plain.contains("Standing instructions"));
+        let files = [
+            ("plan", "Use ponytail.".to_string()),
+            ("implement", "Use tdd.".to_string()),
+        ];
+        write_extras(home.path(), &files, false).unwrap();
+        let p = render(home.path(), "plan", &session(None), Path::new("/d"), None);
+        assert!(
+            p.contains("Standing instructions from the user:\nUse ponytail."),
+            "{p}"
+        );
+        assert!(
+            p.find("Use ponytail.") < p.find("Current session context:"),
+            "{p}"
+        );
+
+        std::fs::write(home.path().join("prompts/plan.extra.md"), "Mine.").unwrap();
+        let result = write_extras(home.path(), &files, false).unwrap();
+        assert_eq!(result["kept"], serde_json::json!(["plan", "implement"]));
+        assert_eq!(
+            std::fs::read_to_string(home.path().join("prompts/plan.extra.md")).unwrap(),
+            "Mine."
+        );
+        let resumed = render_at(
+            home.path(),
+            "resume",
+            &session(None),
+            Path::new("/d"),
+            None,
+            Stage::Implementing,
+        );
+        assert!(resumed.contains("Use tdd."), "{resumed}");
+        write_extras(home.path(), &files, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.path().join("prompts/plan.extra.md")).unwrap(),
+            "Use ponytail."
+        );
     }
 
     #[test]
