@@ -235,7 +235,7 @@ describe("noticeFor", () => {
     expect(n.form).toBe("Final review");
     expect(n.primary).toMatchObject({ id: "accept", label: "Accept and finish" });
     expect(n.alternates[0].id).toBe("review-changes");
-    expect(ids(n, "secondary")).toEqual(["ask", "create-pr"]);
+    expect(ids(n, "secondary")).toEqual(["critique", "ask", "create-pr"]);
   });
 
   it("done shows what shipped and the PR", () => {

@@ -55,6 +55,7 @@ This is a guard against honest mistakes, not against an agent with a shell on th
   daemon.json                         pid, port, protocol
   daemon.log
   prompts/<stage>.md                  optional prompt overrides
+  prompts/<stage>.extra.md            optional text appended to a stage prompt
   sessions/<repo>/<slug>/
     meta.json                         Session (rare writes)
     state.json                        stage, comments, doc shas, seq, review (per mutation, atomic)

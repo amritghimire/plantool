@@ -1,5 +1,6 @@
 import { Modal } from "./Modal";
 import { DiffToolSettings } from "./DiffToolSettings";
+import { PromptExtrasSettings } from "./PromptExtrasSettings";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { RepoInfo, WorktreeDirSetting } from "../types";
@@ -76,6 +77,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     <Modal title="Settings" onClose={onClose} busy={busy}>
         <h3>Settings</h3>
         <DiffToolSettings />
+        <PromptExtrasSettings />
         <label>
           Worktree location <span className="muted small">(where session worktrees are created)</span>
           <select value={scope} onChange={(e) => setScope(e.target.value)}>

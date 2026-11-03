@@ -309,7 +309,14 @@ function stageNotice(view: SessionView, ctx: NoticeContext): Notice {
   if ((stage === "planning" || stage === "plan-review") && plan?.exists)
     secondary.push({ id: "revise-plan", label: "Revise with agent" });
   const activeDoc = view.docs.find((d) => d.kind === ctx.activeTab);
-  if (
+  // Once building starts, a critique run reviews the code changes instead of a document.
+  const reviewsCode =
+    stage === "implementing" ||
+    stage === "implementation-review" ||
+    stage === "done";
+  if (reviewsCode)
+    secondary.push({ id: "critique", label: "Review code with agent" });
+  else if (
     activeDoc?.exists &&
     (activeDoc.kind === "research" || activeDoc.kind === "plan")
   )
@@ -317,7 +324,7 @@ function stageNotice(view: SessionView, ctx: NoticeContext): Notice {
       id: "critique",
       label: `Review ${activeDoc.kind} with agent`,
     });
-  if (activeDoc?.exists && activeDoc.kind === "plan")
+  if (!reviewsCode && activeDoc?.exists && activeDoc.kind === "plan")
     for (const q of CRITIQUE_PRESETS)
       secondary.push({ id: "critique", label: q, prompt: critiquePrompt(q) });
   secondary.push({ id: "ask", label: "Ask agent…" });
