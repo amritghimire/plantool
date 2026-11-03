@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod changes;
 pub mod comments;
+pub mod files;
 pub mod live;
 pub mod pr;
 pub mod runs;
@@ -107,6 +108,7 @@ pub fn router(state: AppState) -> Router {
         .route("/shutdown", post(shutdown))
         .merge(sessions::routes())
         .merge(comments::routes())
+        .merge(files::routes())
         .merge(changes::routes())
         .merge(archive::routes())
         .merge(live::routes())
