@@ -157,18 +157,7 @@ pub fn install_extras(
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     // A private plantool repository only serves raw files to a signed-in GitHub user.
-    let token = ["GH_TOKEN", "GITHUB_TOKEN"]
-        .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
-        .or_else(|| {
-            std::process::Command::new("gh")
-                .args(["auth", "token"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .filter(|t| !t.is_empty())
-        });
+    let token = crate::config::github_token();
     let mut files = Vec::new();
     for stage in EXTRA_STAGES {
         let url = format!("https://raw.githubusercontent.com/{EXTRAS_REPOSITORY}/{git_ref}/prompts/extras/{stage}.extra.md");
