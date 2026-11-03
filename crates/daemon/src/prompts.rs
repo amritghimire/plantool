@@ -156,15 +156,33 @@ pub fn install_extras(
         .user_agent(format!("plantool/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
+    // A private plantool repository only serves raw files to a signed-in GitHub user.
+    let token = ["GH_TOKEN", "GITHUB_TOKEN"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .or_else(|| {
+            std::process::Command::new("gh")
+                .args(["auth", "token"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|t| !t.is_empty())
+        });
     let mut files = Vec::new();
     for stage in EXTRA_STAGES {
         let url = format!("https://raw.githubusercontent.com/{EXTRAS_REPOSITORY}/{git_ref}/prompts/extras/{stage}.extra.md");
-        let text = client
-            .get(&url)
+        let mut request = client.get(&url);
+        if let Some(token) = &token {
+            request = request.bearer_auth(token);
+        }
+        let text = request
             .send()
             .and_then(|r| r.error_for_status())
             .and_then(|r| r.text())
-            .with_context(|| format!("could not download {url}"))?;
+            .with_context(|| {
+                format!("could not download {url}; for a private repository, sign in with `gh auth login` or set GH_TOKEN")
+            })?;
         files.push((stage, text));
     }
     write_extras(home, &files, force)
