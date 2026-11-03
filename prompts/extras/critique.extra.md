@@ -1,4 +1,4 @@
-Use these skills when they are installed; skip any that are not.
+Use these skills. When one is not installed, read its file from the skill list below; skip it only when it is not listed.
 For code changes:
 - `interrogate` or `ponytail-review`. Keep only findings you can show with a concrete input.
 - `council` or `sol-loop` for a second opinion from other models on risky changes.

@@ -150,6 +150,13 @@ step's built-in prompt. The recommended set in [`prompts/extras/`](prompts/extra
 which installed skills to use at each step (ponytail, poteto-mode, tdd, interrogate and others).
 It is optional: download it with `plantool settings prompt-extras --install` (add `--force` to
 replace your own edits, `--ref <tag>` to pin a version) or from Settings in the browser.
+
+Installing the hints also downloads the skills they name into `~/.plantool/skills/`, from the
+repositories that publish them ([ponytail](https://github.com/DietrichGebert/ponytail),
+[tstack](https://github.com/t3dotgg/tstack) and [pstack](https://github.com/cursor/plugins/tree/main/pstack),
+all MIT, listed in [`prompts/extras/sources.json`](prompts/extras/sources.json)). Each prompt then lists
+the `SKILL.md` path for every named skill on the machine, so an agent that does not have a skill
+installed can read it. Skills you installed yourself take precedence over the downloaded copies.
 Placeholders: `{slug}`, `{title}`, `{key}`, `{checkout}`, `{session_dir}`, `{research_path}`,
 `{plan_path}`, `{extra}`.
 

@@ -1,4 +1,4 @@
-Use these skills when they are installed; skip any that are not:
+Use these skills. When one is not installed, read its file from the skill list below; skip it only when it is not listed.
 - `poteto-mode` with its investigation playbook. Research stays read-only.
 - `how`, `why` or `teach` to explain how the code involved works and why it was built this way.
 - `recall` to rebuild earlier context on this topic.
