@@ -1,4 +1,4 @@
-Use these skills when they are installed; skip any that are not:
+Use these skills. When one is not installed, read its file from the skill list below; skip it only when it is not listed.
 - `ponytail` at the ultra level: question every task the brief does not need, and plan the smallest change that fully solves it.
 - `architect` to settle caller usage, types and module shape for any task that crosses a function boundary.
 - `poteto-mode` with its multi-phase plan playbook when the work spans phases or stacked PRs.

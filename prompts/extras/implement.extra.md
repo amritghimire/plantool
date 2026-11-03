@@ -1,4 +1,4 @@
-Use these skills when they are installed; skip any that are not:
+Use these skills. When one is not installed, read its file from the skill list below; skip it only when it is not listed.
 - `poteto-mode` with the playbook that matches the task: feature, bug fix, refactoring, perf, hillclimb, visual parity, authoring a skill, or eval.
 - `ponytail` for the smallest complete change that follows the codebase's patterns.
 - `tdd` for bug fixes with a cheap local test: write the failing test first.

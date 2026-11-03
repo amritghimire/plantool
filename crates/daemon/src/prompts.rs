@@ -290,7 +290,7 @@ pub fn install_extras(
     use anyhow::Context;
     let client = reqwest::blocking::Client::builder()
         .user_agent(format!("plantool/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(120))
         .build()?;
     // A private plantool repository only serves raw files to a signed-in GitHub user.
     let token = crate::config::github_token();
