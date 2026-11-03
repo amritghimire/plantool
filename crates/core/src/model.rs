@@ -399,6 +399,7 @@ pub enum Provider {
     Copilot,
     Ollama,
     Opencode,
+    T3,
 }
 
 impl Provider {
@@ -409,6 +410,7 @@ impl Provider {
             Provider::Copilot => "copilot",
             Provider::Ollama => "ollama",
             Provider::Opencode => "opencode",
+            Provider::T3 => "t3",
         }
     }
 
@@ -419,6 +421,7 @@ impl Provider {
             "copilot" => Some(Provider::Copilot),
             "ollama" => Some(Provider::Ollama),
             "opencode" => Some(Provider::Opencode),
+            "t3" => Some(Provider::T3),
             _ => None,
         }
     }

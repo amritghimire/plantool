@@ -3,6 +3,7 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod opencode;
+pub mod t3;
 
 use plantool_core::{PermissionMode, Provider};
 use serde::{Deserialize, Serialize};
@@ -136,6 +137,7 @@ pub async fn run_provider(
         Provider::Codex => codex::run(opts, input, sink).await,
         Provider::Copilot => copilot::run(opts, input, sink).await,
         Provider::Ollama => opencode::run(opts, input, sink).await,
+        Provider::T3 => t3::run(opts, input, sink).await,
         Provider::Opencode => anyhow::bail!("the opencode provider is not available in this build yet; run opencode in your terminal with `plantool skill`"),
     }
 }
@@ -164,6 +166,7 @@ pub fn executable_for(provider: Provider) -> Option<PathBuf> {
         Provider::Copilot => "PLANTOOL_COPILOT_PATH",
         Provider::Ollama => "PLANTOOL_OPENCODE_PATH",
         Provider::Opencode => "PLANTOOL_OPENCODE_PATH",
+        Provider::T3 => "PLANTOOL_T3_PATH",
     };
     if let Some(p) = std::env::var_os(var) {
         return Some(PathBuf::from(p));
@@ -174,6 +177,11 @@ pub fn executable_for(provider: Provider) -> Option<PathBuf> {
         provider.as_str()
     })
     .ok()
+    .or_else(|| {
+        // The T3 Code installer puts its launcher here without touching PATH.
+        let home = std::env::var_os("HOME").filter(|_| provider == Provider::T3)?;
+        Some(PathBuf::from(home).join(".t3/bin/t3")).filter(|p| p.is_file())
+    })
 }
 
 fn probe_version(exe: &std::path::Path) -> Result<String, String> {
@@ -213,6 +221,7 @@ fn probe_auth(provider: Provider, executable: &std::path::Path) -> Result<bool, 
     let args: &[&str] = match provider {
         Provider::Claude => &["auth", "status", "--json"],
         Provider::Codex => &["login", "status"],
+        Provider::T3 => &["thread", "list", "--json"],
         Provider::Copilot => {
             if ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
                 .iter()
@@ -268,7 +277,12 @@ pub fn discover() -> Vec<ProviderInfo> {
         (Provider::Copilot, "copilot"),
         (Provider::Ollama, "ollama"),
         (Provider::Opencode, "opencode"),
+        (Provider::T3, "t3"),
     ] {
+        // T3 is an opt-in integration: hide it instead of listing it as missing.
+        if p == Provider::T3 && executable_for(p).is_none() {
+            continue;
+        }
         let models = match p {
             Provider::Claude => vec![
                 ModelOption {
@@ -288,7 +302,21 @@ pub fn discover() -> Vec<ProviderInfo> {
                     label: "Haiku 4.5".into(),
                 },
             ],
-            Provider::Ollama => Vec::new(),
+            Provider::T3 => [
+                (t3::DEFAULT_MODEL, "Claude Opus 5.5"),
+                ("claudeAgent:claude-sonnet-5-5", "Claude Sonnet 5.5"),
+                ("claudeAgent:claude-fable-5-1", "Claude Fable 5.1"),
+                ("claudeAgent:claude-haiku-5-5", "Claude Haiku 5.5"),
+                ("codex:gpt-6.1-sol", "Codex GPT-6.1 Sol"),
+                ("codex:gpt-6.1-terra", "Codex GPT-6.1 Terra"),
+                ("codex:gpt-6-luna", "Codex GPT-6 Luna"),
+            ]
+            .into_iter()
+            .map(|(id, label)| ModelOption {
+                id: id.into(),
+                label: label.into(),
+            })
+            .collect(),
             _ => Vec::new(),
         };
         if p == Provider::Ollama {
@@ -363,6 +391,11 @@ pub fn discover() -> Vec<ProviderInfo> {
             if let Some(executable) = executable_for(p) {
                 match probe_auth(p, &executable) {
                     Ok(true) => {}
+                    Ok(false) if p == Provider::T3 => {
+                        info.available = false;
+                        info.error =
+                            Some("T3 Code is not running. Open T3 Code, then Re-check.".into());
+                    }
                     Ok(false) => {
                         info.available = false;
                         info.error = Some(format!(
