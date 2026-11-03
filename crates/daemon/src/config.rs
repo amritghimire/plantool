@@ -19,6 +19,22 @@ pub fn default_home() -> PathBuf {
     base.join(".plantool")
 }
 
+/// The GitHub sign-in to use for the private plantool repository, if any.
+pub fn github_token() -> Option<String> {
+    ["GH_TOKEN", "GITHUB_TOKEN"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .or_else(|| {
+            std::process::Command::new("gh")
+                .args(["auth", "token"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|t| !t.is_empty())
+        })
+}
+
 pub fn default_port() -> u16 {
     std::env::var("PLANTOOL_PORT")
         .ok()

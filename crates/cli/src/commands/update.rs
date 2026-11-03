@@ -38,12 +38,20 @@ struct Release {
 #[derive(serde::Deserialize)]
 struct Asset {
     name: String,
-    browser_download_url: String,
+    url: String,
     size: u64,
 }
 
+// A private repository needs the GitHub sign-in for the release API and its assets.
 fn http() -> reqwest::blocking::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Some(token) = plantool_daemon::config::github_token() {
+        if let Ok(value) = format!("Bearer {token}").parse() {
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+        }
+    }
     reqwest::blocking::Client::builder()
+        .default_headers(headers)
         .user_agent(format!("plantool/{}", crate::VERSION))
         .timeout(std::time::Duration::from_secs(120))
         .build()
@@ -72,7 +80,8 @@ pub fn run(a: Args) -> anyhow::Result<()> {
                         "https://api.github.com/repos/{REPOSITORY}/releases?per_page=1"
                     ))
                     .send()?
-                    .error_for_status()?
+                    .error_for_status()
+                    .context("listing releases on GitHub; for a private repository, sign in with `gh auth login` or set GH_TOKEN")?
                     .json()?;
                 if list.is_empty() {
                     bail!("{REPOSITORY} has no releases yet");
@@ -110,17 +119,8 @@ pub fn run(a: Args) -> anyhow::Result<()> {
         .find(|x| x.name == "SHA256SUMS.txt")
         .context("release has no SHA256SUMS.txt")?;
     println!("downloading {archive_name} ({} bytes)", asset.size);
-    let bytes = client
-        .get(&asset.browser_download_url)
-        .send()?
-        .error_for_status()?
-        .bytes()?
-        .to_vec();
-    let sums_text = client
-        .get(&sums.browser_download_url)
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let bytes = download(&client, asset)?.bytes()?.to_vec();
+    let sums_text = download(&client, sums)?.text()?;
     let expected = sums_text
         .lines()
         .find_map(|l| {
@@ -154,6 +154,19 @@ pub fn run(a: Args) -> anyhow::Result<()> {
     println!("installed {}", String::from_utf8_lossy(&out.stdout).trim());
     println!("restart the daemon with `plantool daemon stop` to pick up the new version");
     Ok(())
+}
+
+// The browser link of a private release asset needs a web session; the API link takes the token.
+fn download(
+    client: &reqwest::blocking::Client,
+    asset: &Asset,
+) -> anyhow::Result<reqwest::blocking::Response> {
+    client
+        .get(&asset.url)
+        .header(reqwest::header::ACCEPT, "application/octet-stream")
+        .send()?
+        .error_for_status()
+        .with_context(|| format!("downloading {}", asset.name))
 }
 
 fn extract_binary(archive: &[u8], exe: &Path) -> anyhow::Result<PathBuf> {
