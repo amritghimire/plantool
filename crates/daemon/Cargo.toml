@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 base64 = "0.22"
 flate2 = "1"
+tar = "0.4"
 plantool-core = { path = "../core" }
 serde.workspace = true
 serde_json.workspace = true

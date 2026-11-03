@@ -123,15 +123,151 @@ fn extra_path(home: &Path, stage: &str) -> std::path::PathBuf {
 }
 
 fn with_extra(home: &Path, stage: &str, prompt: String) -> String {
-    match std::fs::read_to_string(extra_path(home, stage)) {
+    let path = extra_path(home, stage);
+    match std::fs::read_to_string(&path) {
         Ok(extra) if !extra.trim().is_empty() => {
-            format!(
-                "{prompt}\n\nStanding instructions from the user:\n{}",
+            let user_home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            let skills = user_home
+                .map(|h| skill_files(&h, &home.join("skills"), &extra))
+                .unwrap_or_default();
+            let mut out = format!(
+                "{prompt}\n\nStanding instructions from `{}`:\n{}",
+                path.display(),
                 extra.trim()
-            )
+            );
+            if !skills.is_empty() {
+                out.push_str("\n\nSkill files on this machine. When you cannot load one of these skills directly, read its file and follow it:");
+                for (name, file) in skills {
+                    out.push_str(&format!("\n- {name}: {}", file.display()));
+                }
+            }
+            out
         }
         _ => prompt,
     }
+}
+
+/// The installed SKILL.md for every `backticked` skill name in the hints, in order of first mention.
+fn skill_files(
+    user_home: &Path,
+    downloaded: &Path,
+    hints: &str,
+) -> Vec<(String, std::path::PathBuf)> {
+    let mut roots = vec![
+        user_home.join(".claude/skills"),
+        user_home.join(".agents/skills"),
+        user_home.join(".codex/skills"),
+    ];
+    // Claude Code plugins live at plugins/cache/<marketplace>/<plugin>/<version>/skills.
+    let dirs = |p: &Path| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(p)
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for marketplace in dirs(&user_home.join(".claude/plugins/cache")) {
+        for plugin in dirs(&marketplace) {
+            let mut versions = dirs(&plugin);
+            versions.sort_by_key(|v| std::fs::metadata(v).and_then(|m| m.modified()).ok());
+            if let Some(latest) = versions.pop() {
+                roots.push(latest.join("skills"));
+            }
+        }
+    }
+    // Skills the user installed win over the copies plantool downloaded.
+    roots.push(downloaded.to_path_buf());
+    let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for name in skill_names(hints) {
+        if let Some(file) = roots
+            .iter()
+            .map(|root| root.join(&name).join("SKILL.md"))
+            .find(|f| f.is_file())
+        {
+            found.push((name, file));
+        }
+    }
+    found
+}
+
+/// Every `backticked` name in the hints that looks like a skill, in order of first mention.
+fn skill_names(hints: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in hints.split('`').skip(1).step_by(2) {
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if valid && !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+#[derive(serde::Deserialize)]
+struct SkillSource {
+    repo: String,
+    path: String,
+    #[serde(default = "default_ref", rename = "ref")]
+    git_ref: String,
+}
+
+fn default_ref() -> String {
+    "main".into()
+}
+
+/// Copy `<top>/<path>/<name>/…` for each wanted skill out of a GitHub tarball into `dest/<name>/`.
+fn extract_skills(
+    archive: impl std::io::Read,
+    path: &str,
+    wanted: &[String],
+    dest: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let prefix: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    let mut done: Vec<String> = Vec::new();
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let entry_path = entry.path()?.into_owned();
+        let parts: Vec<&str> = match entry_path
+            .components()
+            .map(|c| match c {
+                std::path::Component::Normal(p) => p.to_str(),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(parts) => parts,
+            None => continue,
+        };
+        // parts: [top, ..prefix, name, ..file]
+        if parts.len() < prefix.len() + 3 || parts[1..=prefix.len()] != prefix[..] {
+            continue;
+        }
+        let name = parts[prefix.len() + 1];
+        if !wanted.iter().any(|w| w == name) {
+            continue;
+        }
+        if !done.iter().any(|d| d == name) {
+            let _ = std::fs::remove_dir_all(dest.join(name));
+            done.push(name.to_string());
+        }
+        let out = parts[prefix.len() + 1..]
+            .iter()
+            .fold(dest.to_path_buf(), |p, part| p.join(part));
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        entry.unpack(&out)?;
+    }
+    Ok(done)
 }
 
 pub fn extras_status(home: &Path) -> serde_json::Value {
@@ -174,7 +310,58 @@ pub fn install_extras(
             })?;
         files.push((stage, text));
     }
-    write_extras(home, &files, force)
+    let sources_url = format!("https://raw.githubusercontent.com/{EXTRAS_REPOSITORY}/{git_ref}/prompts/extras/sources.json");
+    let mut request = client.get(&sources_url);
+    if let Some(token) = &token {
+        request = request.bearer_auth(token);
+    }
+    let sources: Vec<SkillSource> = request
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.json())
+        .with_context(|| format!("could not download {sources_url}"))?;
+    let mut result = write_extras(home, &files, force)?;
+
+    // Fetch the skills the hints name, from the repositories that publish them, so agents
+    // without those skills installed can still read and follow them.
+    let mut wanted = Vec::new();
+    for stage in EXTRA_STAGES {
+        let text = std::fs::read_to_string(extra_path(home, stage)).unwrap_or_default();
+        for name in skill_names(&text) {
+            if !wanted.contains(&name) {
+                wanted.push(name);
+            }
+        }
+    }
+    let dest = home.join("skills");
+    let archives = reqwest::blocking::Client::builder()
+        .user_agent(format!("plantool/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+    let mut skills: Vec<String> = Vec::new();
+    for source in sources {
+        let missing: Vec<String> = wanted
+            .iter()
+            .filter(|w| !skills.contains(w))
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            break;
+        }
+        let url = format!(
+            "https://codeload.github.com/{}/tar.gz/{}",
+            source.repo, source.git_ref
+        );
+        let response = archives
+            .get(&url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .with_context(|| format!("could not download skills from {url}"))?;
+        skills.extend(extract_skills(response, &source.path, &missing, &dest)?);
+    }
+    result["skills_dir"] = serde_json::json!(dest);
+    result["skills"] = serde_json::json!(skills);
+    Ok(result)
 }
 
 // Download everything before writing anything, so a failed download leaves no half-installed set.
@@ -535,10 +722,7 @@ mod tests {
         ];
         write_extras(home.path(), &files, false).unwrap();
         let p = render(home.path(), "plan", &session(None), Path::new("/d"), None);
-        assert!(
-            p.contains("Standing instructions from the user:\nUse ponytail."),
-            "{p}"
-        );
+        assert!(p.contains("plan.extra.md`:\nUse ponytail."), "{p}");
         assert!(
             p.find("Use ponytail.") < p.find("Current session context:"),
             "{p}"
@@ -565,6 +749,75 @@ mod tests {
             std::fs::read_to_string(home.path().join("prompts/plan.extra.md")).unwrap(),
             "Use ponytail."
         );
+    }
+
+    #[test]
+    fn skill_files_point_at_installed_skills_only() {
+        let home = tempfile::tempdir().unwrap();
+        let mk = |rel: &str| {
+            let dir = home.path().join(rel);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), "x").unwrap();
+        };
+        mk(".claude/skills/ponytail");
+        mk(".claude/plugins/cache/market/pstack/0.1.0/skills/tdd");
+        mk("downloaded/ponytail");
+        mk("downloaded/why");
+        let hints = "- `tdd` first\n- `ponytail` and `ponytail` again, `why`\n- `missing`, `~/.plantool`, `shortcut:`";
+        let found = skill_files(home.path(), &home.path().join("downloaded"), hints);
+        let names: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["tdd", "ponytail", "why"]);
+        assert!(found[0].1.ends_with("pstack/0.1.0/skills/tdd/SKILL.md"));
+        assert!(
+            found[1].1.ends_with(".claude/skills/ponytail/SKILL.md"),
+            "installed copy wins"
+        );
+        assert!(found[2].1.ends_with("downloaded/why/SKILL.md"));
+    }
+
+    #[test]
+    fn extracts_only_wanted_skills_from_a_github_tarball() {
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        for (path, body) in [
+            ("plugins-main/pstack/skills/tdd/SKILL.md", "tdd"),
+            (
+                "plugins-main/pstack/skills/poteto-mode/playbooks/feature.md",
+                "feature",
+            ),
+            ("plugins-main/pstack/skills/other/SKILL.md", "no"),
+            ("plugins-main/other/skills/tdd/SKILL.md", "wrong place"),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, body.as_bytes())
+                .unwrap();
+        }
+        let archive = builder.into_inner().unwrap().finish().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dest.path().join("tdd")).unwrap();
+        std::fs::write(dest.path().join("tdd/stale.md"), "old").unwrap();
+        let wanted = vec!["tdd".to_string(), "poteto-mode".to_string()];
+        let done = extract_skills(&archive[..], "pstack/skills", &wanted, dest.path()).unwrap();
+        assert_eq!(done, ["tdd", "poteto-mode"]);
+        assert_eq!(
+            std::fs::read_to_string(dest.path().join("tdd/SKILL.md")).unwrap(),
+            "tdd"
+        );
+        assert!(
+            !dest.path().join("tdd/stale.md").exists(),
+            "a refreshed skill drops old files"
+        );
+        assert!(dest
+            .path()
+            .join("poteto-mode/playbooks/feature.md")
+            .is_file());
+        assert!(!dest.path().join("other").exists());
     }
 
     #[test]
