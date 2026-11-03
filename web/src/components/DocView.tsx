@@ -12,6 +12,7 @@ import { CopyButton } from "./CopyButton";
 import { Mermaid } from "./Markdown";
 import { RefStack } from "./RefNumeral";
 import { referenceNumerals } from "../lib/comments";
+import { fileLinkComponents } from "./FilesTab";
 
 export type ViewMode = "rendered" | "slides" | "source";
 
@@ -29,6 +30,8 @@ interface Props {
   onStartRun?: () => void;
   numerals?: Map<string, number>;
   onToggleTask?: (line: number, checked: boolean) => Promise<void>;
+  sessionKey?: string;
+  onOpenFile?: (path: string) => void;
 }
 
 interface Mark {
@@ -284,6 +287,7 @@ export function DocView(p: Props) {
   };
 
   const components: Components = {
+    ...(p.sessionKey && p.onOpenFile ? fileLinkComponents(p.sessionKey, p.onOpenFile) : {}),
     h1: heading("h1"),
     h2: heading("h2"),
     h3: heading("h3"),

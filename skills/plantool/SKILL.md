@@ -60,6 +60,15 @@ plantool session brief --session <ref>                               # what the 
 plantool session prompt --session <ref> --stage plan                 # the prompt for a stage
 ```
 
+## Files and images
+
+The session folder is the directory that holds the plan (`dirname` of `doc path --kind plan`).
+Save screenshots, diagrams, logs or extra notes there, in a subfolder such as `screens/` or
+`notes/`, never in the repo. Link them from research or the plan with a relative path:
+`![Login page after the fix](screens/login.png)` or `[full benchmark log](notes/bench.txt)`.
+Images render inline, and the human opens any file from the **Files** tab. Use plain names
+without spaces, and give each image alt text that says what it shows.
+
 ## Anchoring
 
 A comment points at a line of a document. Prefer `--match "<exact line text>"` over `--line <n>`:

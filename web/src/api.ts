@@ -1,6 +1,14 @@
+import type { SessionFile } from "./lib/files";
+import { fileUrl } from "./lib/files";
 import type { ChangeScope, ChangesResponse, Comment, DocKind, DocResponse, FileDiff, NavTarget, RepoInfo, Run, Session, SessionView, Stage, WorktreeDirSetting } from "./types";
 
 export type PromptStage = "research" | "plan" | "implement" | "review" | "resume" | "critique" | "assist" | "draft-pr" | "next";
+
+export interface PromptExtras {
+  dir: string;
+  source: string;
+  files: { stage: string; installed: boolean }[];
+}
 
 export function token(): string {
   const t = window.__PLANTOOL_TOKEN__ ?? "";
@@ -53,6 +61,8 @@ export const api = {
   contextProposal: (key: string, id: string, dismiss: boolean) => request<{ view: SessionView }>("POST", `/api/sessions/${key}/proposals`, { id, dismiss }),
   diffToolSetting: () => request<{ value: string | null; difftool: string | null }>("GET", "/api/settings/difftool"),
   setDiffToolSetting: (value: string) => request("POST", "/api/settings/difftool", { value }),
+  promptExtras: () => request<PromptExtras>("GET", "/api/settings/prompt-extras"),
+  installPromptExtras: (force: boolean) => request<{ dir: string; installed: string[]; kept: string[] }>("POST", "/api/settings/prompt-extras", { force }),
   sessions: () => request<SessionView[]>("GET", "/api/sessions"),
   session: (key: string) => request<SessionView>("GET", `/api/sessions/${key}`),
   repos: () => request<{ repos: RepoInfo[] }>("GET", "/api/repos"),
@@ -73,6 +83,12 @@ export const api = {
   planRevisions: (key: string) => request<{ current: DocResponse | null; approved: DocResponse | null; viewed: DocResponse | null; change: string | null; pending: boolean }>("GET", `/api/sessions/${key}/docs/plan/revisions`),
   markViewed: (key: string, kind: DocKind, sha: string) => request("POST", `/api/sessions/${key}/docs/${kind}/viewed`, { sha }),
   setTask: (key: string, line: number, checked: boolean, sha: string) => request<{ sha: string | null }>("POST", `/api/sessions/${key}/docs/plan/checkbox`, { line, checked, sha }),
+  files: (key: string) => request<{ dir: string; files: SessionFile[] }>("GET", `/api/sessions/${key}/files`),
+  fileText: async (key: string, path: string) => {
+    const res = await fetch(fileUrl(key, path));
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    return res.text();
+  },
   docPath: (key: string, kind: DocKind) => request<{ kind: DocKind; path: string; exists: boolean }>("GET", `/api/sessions/${key}/docs/${kind}/path`),
   comments: (key: string) => request<{ seq: number; comments: Comment[] }>("GET", `/api/sessions/${key}/comments`),
   addComment: (key: string, c: { doc: DocKind; line?: number; match?: string; body: string; parent?: string; type?: import("./types").CommentType; scope?: import("./types").AnchorScope; code?: import("./types").CodeAnchor }) =>

@@ -27,6 +27,7 @@ import type {
   Stage,
 } from "../types";
 import { ChangesTab } from "./ChangesTab";
+import { FilesTab } from "./FilesTab";
 import { DocView, type ViewMode } from "./DocView";
 import type { RunLine } from "./RunPanel";
 import { StartRunDialog, type RunStage } from "./StartRunDialog";
@@ -138,17 +139,19 @@ export function SessionPage() {
       );
   }, []);
 
-  const setTab = (t: string) => {
+  const setTab = (t: string, file?: string) => {
     setTabState(t);
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.set("tab", t);
+        if (file) next.set("file", file);
         return next;
       },
       { replace: true },
     );
   };
+  const openFile = (path: string) => setTab("files", path);
 
   const drawer = drawerFrom(params.get("drawer"));
   const drawerRef = useRef<DrawerId | null>(drawer);
@@ -760,7 +763,7 @@ export function SessionPage() {
       <main className="canvas" id="session-content">
         <div className="canvas-head" ref={observeHead}>
           <nav className="canvas-tabs" aria-label="Session documents">
-            {(["research", "plan", "changes"] as const).map((t) => (
+            {(["research", "plan", "changes", "files"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -768,7 +771,7 @@ export function SessionPage() {
                 aria-current={tab === t ? "page" : undefined}
                 onClick={() => setTab(t)}
               >
-                {t === "research" ? "Research" : t === "plan" ? "Plan" : "Changes"}
+                {t === "research" ? "Research" : t === "plan" ? "Plan" : t === "files" ? "Files" : "Changes"}
               </button>
             ))}
           </nav>
@@ -878,8 +881,16 @@ export function SessionPage() {
                     : undefined
                 }
                 numerals={numerals}
+                sessionKey={key}
+                onOpenFile={openFile}
               />
             </>
+          ) : tab === "files" ? (
+            <FilesTab
+              sessionKey={key}
+              selected={params.get("file")}
+              onSelect={openFile}
+            />
           ) : (
             <ChangesTab
               key={`${key}:${view.session.worktree ?? view.session.repo.root}:${view.session.base}:${view.session.difftool ?? "auto"}`}

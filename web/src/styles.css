@@ -3872,3 +3872,105 @@ summary:active {
 .modal.shortcuts-help {
   width: min(440px, calc(100% - 32px));
 }
+
+.files-tab {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+}
+.files-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  max-height: 75dvh;
+  overflow: auto;
+  position: sticky;
+  top: var(--s-4);
+}
+.files-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.files-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--s-2);
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.files-item span {
+  overflow-wrap: anywhere;
+}
+.files-item:hover {
+  background: var(--sheet-2);
+}
+.files-item.active {
+  background: var(--human-wash);
+  color: var(--ink);
+}
+.files-empty p,
+.files-hint {
+  font-size: var(--fs-ui);
+  color: var(--ink-2);
+}
+.file-viewer {
+  min-width: 0;
+}
+.file-viewer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--rule);
+}
+.file-viewer-head > span,
+.file-viewer-head > a {
+  white-space: nowrap;
+}
+.file-viewer-head code {
+  font-family: var(--font-code);
+  font-size: var(--fs-ui-sm);
+  overflow-wrap: anywhere;
+}
+.file-image,
+.doc img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+}
+.file-text {
+  font-family: var(--font-code);
+  font-size: var(--fs-ui-sm);
+  background: var(--sheet-2);
+  padding: var(--s-4);
+  overflow: auto;
+  max-height: 75dvh;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 768px) {
+  .files-tab {
+    grid-template-columns: 1fr;
+  }
+  .files-list {
+    position: static;
+    max-height: 40dvh;
+  }
+  .files-item {
+    min-height: 44px;
+  }
+}
