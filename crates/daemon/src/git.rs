@@ -679,31 +679,52 @@ pub fn snapshot_commit(cwd: &Path, index: &Path) -> Result<String, GitError> {
                 tree = String::from_utf8_lossy(&output.stdout).trim().into();
             }
         }
-        let output = Command::new("git")
-            .current_dir(cwd)
-            .env("GIT_AUTHOR_NAME", "plantool")
-            .env("GIT_AUTHOR_EMAIL", "plantool@localhost")
-            .env("GIT_COMMITTER_NAME", "plantool")
-            .env("GIT_COMMITTER_EMAIL", "plantool@localhost")
-            .args([
-                "commit-tree",
-                &tree,
-                "-p",
-                "HEAD",
-                "-m",
-                "plantool snapshot",
-            ])
-            .output()?;
-        if !output.status.success() {
-            return Err(GitError::Failed {
-                args: format!("commit-tree {tree}"),
-                stderr: String::from_utf8_lossy(&output.stderr).into(),
-            });
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().into())
+        commit_tree(cwd, &tree)
     })();
     let _ = std::fs::remove_file(index);
     result
+}
+
+fn commit_tree(cwd: &Path, tree: &str) -> Result<String, GitError> {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .env("GIT_AUTHOR_NAME", "plantool")
+        .env("GIT_AUTHOR_EMAIL", "plantool@localhost")
+        .env("GIT_COMMITTER_NAME", "plantool")
+        .env("GIT_COMMITTER_EMAIL", "plantool@localhost")
+        .args(["commit-tree", tree, "-p", "HEAD", "-m", "plantool snapshot"])
+        .output()?;
+    if !output.status.success() {
+        return Err(GitError::Failed {
+            args: format!("commit-tree {tree}"),
+            stderr: String::from_utf8_lossy(&output.stderr).into(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
+}
+
+/// A base that resolves to a commit. Runs recorded before 0.1.6 stored the milestone base
+/// as a bare tree, which external diff tools reject, so wrap such a tree in a commit.
+pub fn commit_base(cwd: &Path, base: &str) -> Result<String, GitError> {
+    let peel = |kind: &str| {
+        git(
+            cwd,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("{base}^{{{kind}}}"),
+            ],
+        )
+    };
+    match peel("commit") {
+        Ok(_) => Ok(base.to_string()),
+        Err(commit_err) => match peel("tree") {
+            Ok(tree) => commit_tree(cwd, &tree),
+            Err(_) => Err(commit_err),
+        },
+    }
 }
 
 pub fn context_precheck(
@@ -1212,6 +1233,26 @@ mod tests {
             head
         );
         assert_eq!(head_sha(&root).unwrap(), head, "HEAD must not move");
+    }
+
+    #[test]
+    fn commit_base_wraps_a_bare_tree_and_keeps_a_commit() {
+        let (_tmp, root) = hook_repo("exit 0");
+        let head = head_sha(&root).unwrap();
+        assert_eq!(commit_base(&root, &head).unwrap(), head);
+        assert_eq!(commit_base(&root, "HEAD").unwrap(), "HEAD");
+        let tree = git(&root, &["write-tree"]).unwrap();
+        let wrapped = commit_base(&root, &tree).unwrap();
+        assert_ne!(wrapped, tree);
+        assert_eq!(
+            git(&root, &["rev-parse", &format!("{wrapped}^{{tree}}")]).unwrap(),
+            tree
+        );
+        assert_eq!(
+            git(&root, &["rev-parse", &format!("{wrapped}^")]).unwrap(),
+            head
+        );
+        assert!(commit_base(&root, "0000000000000000000000000000000000000000").is_err());
     }
 
     #[test]
