@@ -28,6 +28,64 @@ fn implementation_run(run: &Run) -> bool {
         || (run.task.is_none() && run.stage == Stage::Implementing)
 }
 
+/// Whether the plan says the milestone is done: every task of the named phase is ticked,
+/// or, with no phase, every task in the plan.
+pub fn milestone_complete(plan: &str, key: Option<&str>) -> bool {
+    match key {
+        Some(key) => plantool_core::markdown::phases(plan)
+            .iter()
+            .find(|p| p.name == key)
+            .is_some_and(|p| p.tasks.iter().all(|t| t.checked)),
+        None => {
+            let tasks = plantool_core::markdown::checkboxes(plan);
+            !tasks.is_empty() && tasks.iter().all(|t| t.checked)
+        }
+    }
+}
+
+/// Mark the run's milestone as waiting for the owner, open the change review, and watch it
+/// for comments. Returns the updated run, which is also persisted.
+async fn offer_milestone_review(
+    manager: Arc<RunManager>,
+    session: Arc<LiveSession>,
+    mut run: Run,
+) -> Run {
+    if let Some(key) = &run.milestone_key {
+        let _ = session.milestone_status(key, "review", &run);
+    }
+    run.milestone_pending = true;
+    let existing = run.milestone_review.clone();
+    let base = run.milestone_base.clone().unwrap_or_else(|| "HEAD".into());
+    let review_session = session.session();
+    let plan = session.doc_path(plantool_core::DocKind::Plan);
+    let opened = tokio::task::spawn_blocking(move || {
+        crate::changes::open_review(&review_session, &base, Some(plan), existing.as_ref())
+    })
+    .await;
+    match opened {
+        Ok(Ok((review, _))) => {
+            let new_review =
+                run.milestone_review.as_ref().and_then(review_ref) != review_ref(&review);
+            run.milestone_review = Some(review.clone());
+            session.announce_review(review.clone());
+            if new_review {
+                if let Some(reference) = review_ref(&review) {
+                    tokio::spawn(watch_review(
+                        manager,
+                        session.clone(),
+                        run.id.clone(),
+                        reference.to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(Err(e)) => tracing::warn!("milestone review {}: {e}", run.id),
+        Err(e) => tracing::warn!("milestone review task {}: {e}", run.id),
+    }
+    let _ = session.upsert_run(run.clone(), |r| LiveEvent::RunUpdated { run: r });
+    run
+}
+
 pub fn next_milestone_context(run: &Run) -> Run {
     let mut next = run.clone();
     next.milestone_key = None;
@@ -44,6 +102,35 @@ impl RunManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains_key(id)
+    }
+
+    /// Offer the milestone review when the build is paused and the plan says the milestone is
+    /// done. Agents tick tasks after their turn ends and owners tick from the browser, so the
+    /// turn-end check alone misses those.
+    pub async fn settle_paused_milestone(self: &Arc<Self>, session: &Arc<LiveSession>) {
+        if session.stage() != Stage::Implementing {
+            return;
+        }
+        let Some(run) = session
+            .runs()
+            .into_iter()
+            .filter(|r| r.task.as_deref() == Some("implement"))
+            .max_by(|a, b| a.started_at.cmp(&b.started_at))
+        else {
+            return;
+        };
+        let step = run.implementation_mode == ImplementationMode::StepByStep
+            || run.milestone_key.is_some();
+        let paused = matches!(run.status, RunStatus::Idle | RunStatus::Stopped);
+        if !step || !paused || run.milestone_pending {
+            return;
+        }
+        let complete = session
+            .doc(plantool_core::DocKind::Plan)
+            .is_some_and(|p| milestone_complete(&p.content, run.milestone_key.as_deref()));
+        if complete {
+            offer_milestone_review(self.clone(), session.clone(), run).await;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -307,12 +394,7 @@ impl RunManager {
                         if let Some(key) = &current.milestone_key {
                             let complete = consumer_session
                                 .doc(plantool_core::DocKind::Plan)
-                                .is_some_and(|p| {
-                                    plantool_core::markdown::phases(&p.content)
-                                        .iter()
-                                        .find(|p| &p.name == key)
-                                        .is_some_and(|p| p.tasks.iter().all(|t| t.checked))
-                                });
+                                .is_some_and(|p| milestone_complete(&p.content, Some(key)));
                             if !complete {
                                 continue;
                             }
@@ -328,48 +410,13 @@ impl RunManager {
                                 let _ = consumer_manager.send(&consumer_id, RunInput::Stop).await;
                                 continue;
                             }
-                            let _ = consumer_session.milestone_status(key, "review", &current);
                         }
-                        current.milestone_pending = true;
-                        let existing = current.milestone_review.clone();
-                        let base = current
-                            .milestone_base
-                            .clone()
-                            .unwrap_or_else(|| "HEAD".into());
-                        let review_session = consumer_session.session();
-                        let plan = consumer_session.doc_path(plantool_core::DocKind::Plan);
-                        let opened = tokio::task::spawn_blocking(move || {
-                            crate::changes::open_review(
-                                &review_session,
-                                &base,
-                                Some(plan),
-                                existing.as_ref(),
-                            )
-                        })
+                        current = offer_milestone_review(
+                            consumer_manager.clone(),
+                            consumer_session.clone(),
+                            current,
+                        )
                         .await;
-                        match opened {
-                            Ok(Ok((review, _))) => {
-                                let new_review =
-                                    current.milestone_review.as_ref().and_then(review_ref)
-                                        != review_ref(&review);
-                                current.milestone_review = Some(review.clone());
-                                consumer_session.announce_review(review.clone());
-                                if new_review {
-                                    if let Some(reference) = review_ref(&review) {
-                                        tokio::spawn(watch_review(
-                                            consumer_manager.clone(),
-                                            consumer_session.clone(),
-                                            consumer_id.clone(),
-                                            reference.to_string(),
-                                        ));
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => tracing::warn!("milestone review {consumer_id}: {e}"),
-                            Err(e) => tracing::warn!("milestone review task {consumer_id}: {e}"),
-                        }
-                        let _ = consumer_session
-                            .upsert_run(current.clone(), |r| LiveEvent::RunUpdated { run: r });
                     }
                 }
             }

@@ -2246,19 +2246,216 @@ async fn owner_ticks_a_plan_task_from_the_browser() {
     let sha = live.doc(DocKind::Plan).unwrap().sha;
     let url = format!("/api/sessions/{key}/docs/plan/checkbox");
 
-    let (status, _) = call(&h.app, "POST", &url, Some(json!({"line":3,"checked":true,"sha":sha})), false, "127.0.0.1").await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "agents cannot tick from the browser endpoint");
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":3,"checked":true,"sha":sha})),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "agents cannot tick from the browser endpoint"
+    );
 
-    let (status, body) = call(&h.app, "POST", &url, Some(json!({"line":3,"checked":true,"sha":sha})), true, "127.0.0.1").await;
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":3,"checked":true,"sha":sha})),
+        true,
+        "127.0.0.1",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Plan\n### Phase 1\n- [x] First\n- [x] Second\n");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# Plan\n### Phase 1\n- [x] First\n- [x] Second\n"
+    );
     let new_sha = live.doc(DocKind::Plan).unwrap().sha;
     assert_eq!(body["sha"], json!(new_sha));
-    assert!(!live.state().plan_revision_pending, "ticking is progress, not a scope change");
+    assert!(
+        !live.state().plan_revision_pending,
+        "ticking is progress, not a scope change"
+    );
 
-    let (status, _) = call(&h.app, "POST", &url, Some(json!({"line":4,"checked":false,"sha":sha})), true, "127.0.0.1").await;
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":4,"checked":false,"sha":sha})),
+        true,
+        "127.0.0.1",
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT, "a stale sha is refused");
 
-    let (status, _) = call(&h.app, "POST", &url, Some(json!({"line":1,"checked":true,"sha":new_sha})), true, "127.0.0.1").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "non-task lines are refused");
+    let (status, _) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":1,"checked":true,"sha":new_sha})),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "non-task lines are refused"
+    );
+}
+
+#[tokio::test]
+async fn ticking_the_last_task_of_a_paused_phase_offers_the_milestone() {
+    use plantool_core::DocKind;
+    let h = harness();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({"slug":"paused","repo":h.repo})),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    let plan = live.doc_path(DocKind::Plan);
+    std::fs::write(
+        &plan,
+        "# Plan\n\n## Tasks\n### Phase 1: First\n- [ ] One\n- [ ] Two\n### Phase 2: Second\n- [ ] Three\n",
+    )
+    .unwrap();
+    live.capture_doc(DocKind::Plan).unwrap();
+    live.set_stage(plantool_core::Stage::Approved, plantool_core::Actor::Human)
+        .unwrap();
+    live.set_stage(
+        plantool_core::Stage::Implementing,
+        plantool_core::Actor::Agent,
+    )
+    .unwrap();
+    live.apply_context(&plantool_daemon::routes::where_context::Update {
+        difftool: Some("built-in".into()),
+        pause_rule: Some(plantool_core::PauseRule::EveryMilestone),
+        ..Default::default()
+    })
+    .unwrap();
+    let run = plantool_core::Run {
+        idle_stopped: false,
+        milestone_key: Some("Phase 1: First".into()),
+        plan_sha: None,
+        id: "paused-run".into(),
+        provider: plantool_core::Provider::Claude,
+        provider_session_id: None,
+        stage: plantool_core::Stage::Implementing,
+        implementation_mode: plantool_core::ImplementationMode::StepByStep,
+        milestone_pending: false,
+        milestone_review: None,
+        milestone_base: None,
+        milestones_approved: 0,
+        milestone_commit: None,
+        implementation_base: None,
+        task: Some("implement".into()),
+        cwd: h.repo.clone(),
+        status: plantool_core::RunStatus::Stopped,
+        model: None,
+        permission_mode: Default::default(),
+        started_at: plantool_core::now(),
+        ended_at: Some(plantool_core::now()),
+        error: None,
+        seq: 0,
+    };
+    live.upsert_run(run, |r| plantool_daemon::events::LiveEvent::RunStarted {
+        run: r,
+    })
+    .unwrap();
+    live.milestone_status(
+        "Phase 1: First",
+        "building",
+        &live.run("paused-run").unwrap(),
+    )
+    .unwrap();
+    let url = format!("/api/sessions/{key}/docs/plan/checkbox");
+
+    let sha = live.doc(DocKind::Plan).unwrap().sha;
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":5,"checked":true,"sha":sha})),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !live.run("paused-run").unwrap().milestone_pending,
+        "one task of the phase is still open"
+    );
+
+    let sha = live.doc(DocKind::Plan).unwrap().sha;
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":6,"checked":true,"sha":sha})),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let run = live.run("paused-run").unwrap();
+    assert!(
+        run.milestone_pending,
+        "the phase is complete and the run is stopped, so the owner gets the milestone offer"
+    );
+    assert_eq!(live.state().milestones[0].status, "review");
+    assert_eq!(
+        live.state().milestones[1].status,
+        "pending",
+        "the next phase is untouched"
+    );
+
+    let (status, body) = call(
+        &h.app,
+        "POST",
+        &url,
+        Some(json!({"line":6,"checked":true,"sha":live.doc(DocKind::Plan).unwrap().sha})),
+        true,
+        "127.0.0.1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        live.run("paused-run").unwrap().milestone_pending,
+        "re-ticking an already ticked task changes nothing"
+    );
+}
+
+#[tokio::test]
+async fn plan_without_phases_offers_the_milestone_only_when_every_task_is_ticked() {
+    assert!(!plantool_daemon::runs::milestone_complete(
+        "- [x] a\n- [ ] b\n",
+        None
+    ));
+    assert!(plantool_daemon::runs::milestone_complete(
+        "- [x] a\n- [x] b\n",
+        None
+    ));
+    assert!(!plantool_daemon::runs::milestone_complete(
+        "# nothing\n",
+        None
+    ));
+    assert!(plantool_daemon::runs::milestone_complete(
+        "### Phase 1: A\n- [x] a\n### Phase 2: B\n- [ ] b\n",
+        Some("Phase 1: A")
+    ));
+    assert!(!plantool_daemon::runs::milestone_complete(
+        "### Phase 1: A\n- [x] a\n",
+        Some("Phase 9: Z")
+    ));
 }
