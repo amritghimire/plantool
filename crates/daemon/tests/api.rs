@@ -2459,3 +2459,79 @@ async fn plan_without_phases_offers_the_milestone_only_when_every_task_is_ticked
         Some("Phase 9: Z")
     ));
 }
+
+#[tokio::test]
+async fn a_stopped_run_whose_phase_is_already_done_is_offered_on_settle() {
+    use plantool_core::DocKind;
+    let h = harness();
+    let (_, created) = call(
+        &h.app,
+        "POST",
+        "/api/sessions",
+        Some(json!({"slug":"restart","repo":h.repo})),
+        false,
+        "127.0.0.1",
+    )
+    .await;
+    let key = created["session"]["key"].as_str().unwrap();
+    let live = h.state.registry.get_key(key).unwrap();
+    std::fs::write(
+        live.doc_path(DocKind::Plan),
+        "# Plan\n\n## Tasks\n### Phase 1: First\n- [x] One\n### Phase 2: Second\n- [ ] Two\n",
+    )
+    .unwrap();
+    live.capture_doc(DocKind::Plan).unwrap();
+    live.set_stage(plantool_core::Stage::Approved, plantool_core::Actor::Human)
+        .unwrap();
+    live.set_stage(
+        plantool_core::Stage::Implementing,
+        plantool_core::Actor::Agent,
+    )
+    .unwrap();
+    live.apply_context(&plantool_daemon::routes::where_context::Update {
+        difftool: Some("built-in".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let run = plantool_core::Run {
+        idle_stopped: false,
+        milestone_key: Some("Phase 1: First".into()),
+        plan_sha: None,
+        id: "orphaned".into(),
+        provider: plantool_core::Provider::Claude,
+        provider_session_id: None,
+        stage: plantool_core::Stage::Implementing,
+        implementation_mode: plantool_core::ImplementationMode::StepByStep,
+        milestone_pending: false,
+        milestone_review: None,
+        milestone_base: None,
+        milestones_approved: 0,
+        milestone_commit: None,
+        implementation_base: None,
+        task: Some("implement".into()),
+        cwd: h.repo.clone(),
+        status: plantool_core::RunStatus::Stopped,
+        model: None,
+        permission_mode: Default::default(),
+        started_at: plantool_core::now(),
+        ended_at: Some(plantool_core::now()),
+        error: None,
+        seq: 0,
+    };
+    live.upsert_run(run, |r| plantool_daemon::events::LiveEvent::RunStarted {
+        run: r,
+    })
+    .unwrap();
+
+    h.state.runs.settle_paused_milestone(&live).await;
+    assert!(
+        live.run("orphaned").unwrap().milestone_pending,
+        "the daemon settles stopped runs on startup"
+    );
+
+    h.state.runs.settle_paused_milestone(&live).await;
+    assert!(
+        live.run("orphaned").unwrap().milestone_pending,
+        "a second settle is a no-op"
+    );
+}
