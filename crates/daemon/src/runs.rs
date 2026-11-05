@@ -16,6 +16,7 @@ struct Handle {
 #[derive(Default)]
 pub struct RunManager {
     handles: Mutex<HashMap<String, Handle>>,
+    offering: Mutex<std::collections::HashSet<String>>,
 }
 
 fn short_id() -> String {
@@ -48,12 +49,19 @@ pub fn milestone_complete(plan: &str, key: Option<&str>) -> bool {
 async fn offer_milestone_review(
     manager: Arc<RunManager>,
     session: Arc<LiveSession>,
-    mut run: Run,
+    run: Run,
 ) -> Run {
+    let first = manager
+        .offering
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(run.id.clone());
+    if !first {
+        return run;
+    }
     if let Some(key) = &run.milestone_key {
         let _ = session.milestone_status(key, "review", &run);
     }
-    run.milestone_pending = true;
     let existing = run.milestone_review.clone();
     let base = run.milestone_base.clone().unwrap_or_else(|| "HEAD".into());
     let review_session = session.session();
@@ -62,28 +70,35 @@ async fn offer_milestone_review(
         crate::changes::open_review(&review_session, &base, Some(plan), existing.as_ref())
     })
     .await;
+    let mut latest = session.run(&run.id).unwrap_or(run);
+    latest.milestone_pending = true;
     match opened {
         Ok(Ok((review, _))) => {
             let new_review =
-                run.milestone_review.as_ref().and_then(review_ref) != review_ref(&review);
-            run.milestone_review = Some(review.clone());
+                latest.milestone_review.as_ref().and_then(review_ref) != review_ref(&review);
+            latest.milestone_review = Some(review.clone());
             session.announce_review(review.clone());
             if new_review {
                 if let Some(reference) = review_ref(&review) {
                     tokio::spawn(watch_review(
-                        manager,
+                        manager.clone(),
                         session.clone(),
-                        run.id.clone(),
+                        latest.id.clone(),
                         reference.to_string(),
                     ));
                 }
             }
         }
-        Ok(Err(e)) => tracing::warn!("milestone review {}: {e}", run.id),
-        Err(e) => tracing::warn!("milestone review task {}: {e}", run.id),
+        Ok(Err(e)) => tracing::warn!("milestone review {}: {e}", latest.id),
+        Err(e) => tracing::warn!("milestone review task {}: {e}", latest.id),
     }
-    let _ = session.upsert_run(run.clone(), |r| LiveEvent::RunUpdated { run: r });
-    run
+    let _ = session.upsert_run(latest.clone(), |r| LiveEvent::RunUpdated { run: r });
+    manager
+        .offering
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&latest.id);
+    latest
 }
 
 pub fn next_milestone_context(run: &Run) -> Run {

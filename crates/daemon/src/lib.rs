@@ -44,6 +44,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let runs = Arc::new(runs::RunManager::default());
     for s in registry.all() {
         runs.mark_orphans(&s);
+        runs.settle_paused_milestone(&s).await;
     }
     let state = AppState {
         registry: registry.clone(),
