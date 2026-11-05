@@ -700,7 +700,7 @@ impl LiveSession {
             milestone.run_id = Some(run.id.clone());
             milestone.base = run.milestone_base.clone();
             milestone.head = if status == "completed" || status == "review" {
-                git::snapshot_tree(
+                git::snapshot_commit(
                     &run.cwd,
                     &self.store.dir.join(format!(".index-{}", short_id())),
                 )
