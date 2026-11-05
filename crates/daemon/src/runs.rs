@@ -59,6 +59,17 @@ async fn offer_milestone_review(
     if !first {
         return run;
     }
+    let release = |id: &str| {
+        manager
+            .offering
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+    };
+    let Some(run) = session.run(&run.id) else {
+        release(&run.id);
+        return run;
+    };
     if let Some(key) = &run.milestone_key {
         let _ = session.milestone_status(key, "review", &run);
     }
@@ -70,7 +81,10 @@ async fn offer_milestone_review(
         crate::changes::open_review(&review_session, &base, Some(plan), existing.as_ref())
     })
     .await;
-    let mut latest = session.run(&run.id).unwrap_or(run);
+    let Some(mut latest) = session.run(&run.id) else {
+        release(&run.id);
+        return run;
+    };
     latest.milestone_pending = true;
     match opened {
         Ok(Ok((review, _))) => {
@@ -93,11 +107,7 @@ async fn offer_milestone_review(
         Err(e) => tracing::warn!("milestone review task {}: {e}", latest.id),
     }
     let _ = session.upsert_run(latest.clone(), |r| LiveEvent::RunUpdated { run: r });
-    manager
-        .offering
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&latest.id);
+    release(&latest.id);
     latest
 }
 
