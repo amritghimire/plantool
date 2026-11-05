@@ -218,7 +218,7 @@ pub fn open_review(
             if base == "HEAD" {
                 cmd.arg("--uncommitted");
             } else {
-                cmd.arg(base);
+                cmd.arg(git::commit_base(&cwd, base)?);
             }
             cmd.arg("--no-open");
             if let Some(p) = plan_path.filter(|p| p.is_file()) {
