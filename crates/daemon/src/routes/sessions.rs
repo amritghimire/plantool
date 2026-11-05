@@ -453,7 +453,9 @@ async fn set_checkbox(
         .ok_or_else(|| bad_request(format!("line {} is not a task", body.line)))?;
     crate::store::write_atomic(&s.doc_path(DocKind::Plan), next.as_bytes())
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    s.capture_doc(DocKind::Plan)?;
+    if s.capture_doc(DocKind::Plan)?.is_some() {
+        state.runs.settle_paused_milestone(&s).await;
+    }
     let sha = s.doc(DocKind::Plan).map(|d| d.sha);
     Ok(Json(json!({ "sha": sha })))
 }
@@ -535,7 +537,10 @@ pub fn routes() -> Router<AppState> {
             "/sessions/{repo}/{slug}/docs/plan/revisions",
             get(revisions),
         )
-        .route("/sessions/{repo}/{slug}/docs/plan/checkbox", post(set_checkbox))
+        .route(
+            "/sessions/{repo}/{slug}/docs/plan/checkbox",
+            post(set_checkbox),
+        )
         .route("/sessions/{repo}/{slug}/docs/{kind}/viewed", post(viewed))
         .route(
             "/sessions/{repo}/{slug}/plan/propose-revision",

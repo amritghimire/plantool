@@ -70,7 +70,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         }
     });
 
-    let _watcher = watcher::start(registry.clone(), config.home.clone());
+    let _watcher = watcher::start(registry.clone(), config.home.clone(), state.runs.clone());
 
     let app = routes::router(state.clone());
     let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
