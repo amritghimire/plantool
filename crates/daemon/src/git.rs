@@ -653,8 +653,12 @@ pub fn diff_numstat(cwd: &Path, base: &str) -> Result<Vec<FileStat>, GitError> {
     Ok(stats)
 }
 
-pub fn snapshot_tree(cwd: &Path, index: &Path) -> Result<String, GitError> {
+/// Snapshot the working tree, untracked files included, as a dangling commit on top of
+/// HEAD. A commit rather than a bare tree because external diff tools resolve the base
+/// with `rev-parse <base>^{commit}`.
+pub fn snapshot_commit(cwd: &Path, index: &Path) -> Result<String, GitError> {
     let result = (|| {
+        let mut tree = String::new();
         for args in [
             vec!["read-tree", "HEAD"],
             vec!["add", "-A"],
@@ -672,10 +676,31 @@ pub fn snapshot_tree(cwd: &Path, index: &Path) -> Result<String, GitError> {
                 });
             }
             if args[0] == "write-tree" {
-                return Ok(String::from_utf8_lossy(&output.stdout).trim().into());
+                tree = String::from_utf8_lossy(&output.stdout).trim().into();
             }
         }
-        unreachable!()
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .env("GIT_AUTHOR_NAME", "plantool")
+            .env("GIT_AUTHOR_EMAIL", "plantool@localhost")
+            .env("GIT_COMMITTER_NAME", "plantool")
+            .env("GIT_COMMITTER_EMAIL", "plantool@localhost")
+            .args([
+                "commit-tree",
+                &tree,
+                "-p",
+                "HEAD",
+                "-m",
+                "plantool snapshot",
+            ])
+            .output()?;
+        if !output.status.success() {
+            return Err(GitError::Failed {
+                args: format!("commit-tree {tree}"),
+                stderr: String::from_utf8_lossy(&output.stderr).into(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().into())
     })();
     let _ = std::fs::remove_file(index);
     result
@@ -1158,13 +1183,35 @@ mod tests {
         let before = git(&root, &["diff", "--cached"]).unwrap();
         std::fs::write(root.join("unstaged.txt"), "unstaged\n").unwrap();
         let index = root.join(".git").join("plantool-test-index");
-        let tree = snapshot_tree(&root, &index).unwrap();
+        let snapshot = snapshot_commit(&root, &index).unwrap();
         assert_eq!(git(&root, &["diff", "--cached"]).unwrap(), before);
         assert_eq!(
-            git(&root, &["show", &format!("{tree}:unstaged.txt")]).unwrap(),
+            git(&root, &["show", &format!("{snapshot}:unstaged.txt")]).unwrap(),
             "unstaged"
         );
         assert!(!index.exists());
+    }
+
+    #[test]
+    fn snapshot_is_a_commit_on_top_of_head() {
+        let (_tmp, root) = hook_repo("exit 0");
+        let head = head_sha(&root).unwrap();
+        let index = root.join(".git").join("plantool-test-index");
+        let snapshot = snapshot_commit(&root, &index).unwrap();
+        assert_eq!(
+            git(
+                &root,
+                &["rev-parse", "--verify", &format!("{snapshot}^{{commit}}")]
+            )
+            .unwrap(),
+            snapshot,
+            "difftool resolves the base with rev-parse <base>^{{commit}}"
+        );
+        assert_eq!(
+            git(&root, &["rev-parse", &format!("{snapshot}^")]).unwrap(),
+            head
+        );
+        assert_eq!(head_sha(&root).unwrap(), head, "HEAD must not move");
     }
 
     #[test]

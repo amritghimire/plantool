@@ -119,7 +119,7 @@ impl RunManager {
             prompt
         };
         let head = if stage_name == "implement" {
-            Some(crate::git::snapshot_tree(
+            Some(crate::git::snapshot_commit(
                 sess.cwd(),
                 &session.store.dir.join(format!(".index-{}", short_id())),
             )?)
