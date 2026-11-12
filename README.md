@@ -136,11 +136,21 @@ plantool session stage --session <ref> --set planning
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `PLANTOOL_HOME` | sessions, prompts and daemon state | `~/.plantool` |
-| `PLANTOOL_PORT` | daemon port (loopback only) | `41200` |
+| `PLANTOOL_PORT` | daemon port | `41200` |
+| `PLANTOOL_BIND` | extra IP to listen on besides loopback, or `auto` for this machine's Meshnet or Tailscale address | loopback only |
+| `PLANTOOL_ALLOWED_HOSTS` | comma-separated host names the browser may use besides loopback and `PLANTOOL_BIND`; a leading dot (`.example.lan`) allows every name under it | none |
 | `PLANTOOL_AUTHOR` | author name on agent CLI comments | `agent` |
 | `PLANTOOL_PROVIDER` | default hosted-run provider | `claude` |
 | `PLANTOOL_DIFFTOOL_PATH`, `PLANTOOL_CLAUDE_PATH`, `PLANTOOL_CODEX_PATH` | explicit executables | found on `PATH` |
 | `PLANTOOL_LOG` | daemon log filter | `info` |
+
+To open plantool from another machine on a private network, start the daemon with
+`PLANTOOL_BIND=auto` (or a specific IP) and open `http://<that IP>:41200` there. `auto` picks
+the address in `100.64.0.0/10`, the range Nord Meshnet and Tailscale use, and logs which one it
+chose; the daemon checks once at startup, so restart it if the mesh comes up later. With a
+Meshnet or Tailscale address, the device names under `.nord` and `.ts.net` work too. The daemon has
+no login, so bind only to a private network you trust. `0.0.0.0` listens on every network,
+including public Wi-Fi.
 
 Hosted-run prompts can be overridden per stage in `~/.plantool/prompts/{research,plan,implement}.md`.
 

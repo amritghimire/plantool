@@ -122,6 +122,9 @@ pub fn router(state: AppState) -> Router {
         .route("/shutdown", post(shutdown))
         .fallback(spa)
         .layer(DefaultBodyLimit::max(crate::security::MAX_BODY_BYTES))
-        .layer(axum::middleware::from_fn(crate::security::guard))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::security::guard,
+        ))
         .with_state(state)
 }

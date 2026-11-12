@@ -40,6 +40,8 @@ fn harness() -> Harness {
         port: 0,
         token: "tok".into(),
         version: "test".into(),
+        bind: None,
+        allowed_hosts: Vec::new(),
     });
     let registry = Arc::new(Registry::load(home).unwrap());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);

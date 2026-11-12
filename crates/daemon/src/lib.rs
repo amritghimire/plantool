@@ -74,8 +74,28 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let _watcher = watcher::start(registry.clone(), config.home.clone(), state.runs.clone());
 
     let app = routes::router(state.clone());
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
+    let wildcard = config.bind.filter(|ip| ip.is_unspecified());
+    let addr = SocketAddr::new(
+        wildcard.unwrap_or(std::net::Ipv4Addr::LOCALHOST.into()),
+        config.port,
+    );
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|error| anyhow::anyhow!("Could not start plantool on {addr}: {error}. Run `plantool daemon status` to check the existing daemon, or choose a free port with PLANTOOL_PORT."))?;
+    let extra_listener = match config.bind.filter(|ip| !ip.is_unspecified()) {
+        Some(ip) => {
+            let extra_addr = SocketAddr::new(ip, config.port);
+            let extra_listener =
+                tokio::net::TcpListener::bind(extra_addr)
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "Could not listen on PLANTOOL_BIND address {extra_addr}: {error}"
+                        )
+                    })?;
+            tracing::info!("plantool daemon also listening on http://{extra_addr}");
+            Some(extra_listener)
+        }
+        None => None,
+    };
     store::write_daemon_info(
         &config.home,
         &store::DaemonInfo {
@@ -86,6 +106,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         },
     )?;
     tracing::info!("plantool daemon listening on http://{addr}");
+    let extra = extra_listener.map(|extra_listener| {
+        let extra_app = app.clone();
+        tokio::spawn(async move {
+            let _ = axum::serve(extra_listener, extra_app).await;
+        })
+    });
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = shutdown_rx.recv().await;
@@ -93,6 +119,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         })
         .await?;
     idle_sweep.abort();
+    if let Some(extra) = extra {
+        extra.abort();
+    }
     let _ = store::remove_daemon_info(&config.home);
     Ok(())
 }
