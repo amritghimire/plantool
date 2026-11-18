@@ -236,8 +236,13 @@ fn probe_auth(provider: Provider, executable: &std::path::Path) -> Result<bool, 
     let mut child = std::process::Command::new(executable)
         .args(args)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        // Unread output past the pipe buffer blocks the child; `t3 thread list` can be ~100 KB.
+        .stdout(if provider == Provider::Claude {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -245,6 +250,12 @@ fn probe_auth(provider: Provider, executable: &std::path::Path) -> Result<bool, 
         match child.try_wait() {
             Ok(Some(status)) => {
                 let output = child.wait_with_output().map_err(|e| e.to_string())?;
+                if provider == Provider::T3 {
+                    // `thread list` is scoped to the cwd's project; the daemon's cwd usually isn't one.
+                    return Ok(status.success()
+                        || String::from_utf8_lossy(&output.stderr)
+                            .contains("No T3 Code project matches"));
+                }
                 if provider == Provider::Claude {
                     let value: serde_json::Value = serde_json::from_slice(&output.stdout)
                         .map_err(|_| "Could not read Claude sign-in status".to_string())?;
