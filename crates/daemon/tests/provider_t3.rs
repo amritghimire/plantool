@@ -21,16 +21,19 @@ if cmd in ('start','send'):
 elif cmd=='show':
  last=open('last').read().strip() if os.path.exists('last') else ''
  busy=os.path.exists('busy')
- print(json.dumps({'thread':{'status':'running' if busy else 'completed','link':'http://t3/th1','activeRunId':'r' if busy else None,'runCount':runs,'pendingRequestCount':0},'messages':[{'role':'assistant','text':'done: '+last}]}))
+ print(json.dumps({'thread':{'status':'running' if busy else 'completed','link':'http://t3/th1','activeRunId':'r' if busy else None,'runCount':runs,'latestRunId':'r%d'%runs,'pendingRequestCount':0},'messages':[{'role':'assistant','text':'old','runId':'r%d'%(runs-1)},{'role':'user','text':last,'runId':'r%d'%runs},{'role':'assistant','text':'reading','runId':'r%d'%runs},{'role':'assistant','text':'done: '+last,'runId':'r%d'%runs}]}))
 "#;
 
-async fn reply(rx: &mut mpsc::Receiver<ProviderEvent>) -> String {
+async fn turn(rx: &mut mpsc::Receiver<ProviderEvent>) -> Vec<String> {
     tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let mut said = Vec::new();
         while let Some(event) = rx.recv().await {
-            if let ProviderEvent::Message { role, content, .. } = event {
-                if role == "assistant" {
-                    return content;
+            match event {
+                ProviderEvent::Message { role, content, .. } if role == "assistant" => {
+                    said.push(content)
                 }
+                ProviderEvent::TurnCompleted { .. } => return said,
+                _ => {}
             }
         }
         panic!("provider stopped before replying");
@@ -66,12 +69,15 @@ async fn starts_a_thread_then_sends_follow_ups_to_it() {
         rx_input,
         sink,
     ));
-    assert_eq!(reply(&mut events).await, "done: build it");
+    assert_eq!(turn(&mut events).await, ["reading", "done: build it"]);
     input
         .send(RunInput::Text("fix the comment".into()))
         .await
         .unwrap();
-    assert_eq!(reply(&mut events).await, "done: fix the comment");
+    assert_eq!(
+        turn(&mut events).await,
+        ["reading", "done: fix the comment"]
+    );
     input.send(RunInput::Stop).await.unwrap();
     task.await.unwrap().unwrap();
     let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
@@ -94,7 +100,7 @@ async fn resumed_run_messages_the_same_thread() {
         rx_input,
         sink,
     ));
-    assert_eq!(reply(&mut events).await, "done: build it");
+    assert_eq!(turn(&mut events).await, ["reading", "done: build it"]);
     input.send(RunInput::Stop).await.unwrap();
     task.await.unwrap().unwrap();
     let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();

@@ -17,6 +17,7 @@ struct Thread {
     status: String,
     link: Option<String>,
     active_run_id: Option<String>,
+    latest_run_id: Option<String>,
     #[serde(default)]
     run_count: usize,
     #[serde(default)]
@@ -24,9 +25,11 @@ struct Thread {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Message {
     role: String,
     text: String,
+    run_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -63,10 +66,46 @@ async fn t3(exe: &Path, args: &[&str], stdin: Option<&str>) -> anyhow::Result<St
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+// Emits this turn's assistant messages that are new or changed since the last poll.
+async fn relay(
+    sink: &EventSink,
+    turn: usize,
+    before: usize,
+    shown: &Shown,
+    sent: &mut Vec<String>,
+) {
+    if shown.thread.run_count <= before {
+        return;
+    }
+    let texts = shown
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant" && m.run_id == shown.thread.latest_run_id);
+    for (i, text) in texts.map(|m| &m.text).enumerate() {
+        if sent.get(i) == Some(text) {
+            continue;
+        }
+        emit(
+            sink,
+            ProviderEvent::Message {
+                id: format!("t3-{turn}-{i}"),
+                role: "assistant".into(),
+                content: text.clone(),
+            },
+        )
+        .await;
+        if i < sent.len() {
+            sent[i] = text.clone();
+        } else {
+            sent.push(text.clone());
+        }
+    }
+}
+
 async fn show(exe: &Path, thread: &str) -> anyhow::Result<Shown> {
     let out = t3(
         exe,
-        &["thread", "show", thread, "--messages", "1", "--json"],
+        &["thread", "show", thread, "--messages", "500", "--json"],
         None,
     )
     .await?;
@@ -194,6 +233,7 @@ pub async fn run(
         let (id, before) = id;
         let mut announced = false;
         let mut waiting = false;
+        let mut sent = Vec::new();
         let shown = loop {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(2)) => {
@@ -206,6 +246,7 @@ pub async fn run(
                         emit(&sink, ProviderEvent::Status { label: "Waiting for your answer in T3 Code".into(), detail: shown.thread.link.clone() }).await;
                     }
                     waiting = shown.thread.pending_request_count > 0;
+                    relay(&sink, turn, before, &shown, &mut sent).await;
                     if shown.thread.active_run_id.is_none() && shown.thread.run_count > before {
                         break shown;
                     }
@@ -220,22 +261,6 @@ pub async fn run(
                 }
             }
         };
-        let reply = shown
-            .messages
-            .into_iter()
-            .rev()
-            .find(|m| m.role == "assistant")
-            .map(|m| m.text)
-            .unwrap_or_default();
-        emit(
-            &sink,
-            ProviderEvent::Message {
-                id: format!("t3-{turn}"),
-                role: "assistant".into(),
-                content: reply,
-            },
-        )
-        .await;
         let ok = shown.thread.status == "completed";
         emit(
             &sink,
